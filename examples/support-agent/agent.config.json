@@ -1,0 +1,9 @@
+{
+  "name": "support-agent",
+  "workspaceRoot": "./workspace",
+  "providerId": "openai",
+  "modelId": "gpt-4.1-mini",
+  "runtimeProfile": "core-memory",
+  "allowedTools": ["file.read", "file.write", "memory.read", "memory.write"],
+  "approvalMode": "ask-first"
+}

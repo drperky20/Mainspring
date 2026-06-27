@@ -1,0 +1,23 @@
+services:
+  mainspring-runtime:
+    build:
+      context: ..
+      dockerfile: docker/runtime.Dockerfile
+    environment:
+      MAINSPRING_RUNTIME_ROOT: /runtime
+      MAINSPRING_SESSIONS_ROOT: /sessions
+      MAINSPRING_WORKSPACE_ROOT: /workspaces/default
+      MAINSPRING_POLL_INTERVAL_MS: "1000"
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - mainspring-runtime:/runtime
+      - mainspring-sessions:/sessions
+      - mainspring-workspaces:/workspaces
+      - mainspring-artifacts:/artifacts
+
+volumes:
+  mainspring-runtime:
+  mainspring-sessions:
+  mainspring-workspaces:
+  mainspring-artifacts:

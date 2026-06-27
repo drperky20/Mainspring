@@ -1,0 +1,125 @@
+{
+  "name": "mainspring",
+  "version": "0.1.0",
+  "description": "Open-source runtime and control-plane foundation for controlled, replayable, policy-bound agent work.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "packageManager": "pnpm@9.15.4",
+  "homepage": "https://github.com/mainspring-oss/mainspring#readme",
+  "bugs": {
+    "url": "https://github.com/mainspring-oss/mainspring/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mainspring-oss/mainspring.git"
+  },
+  "keywords": [
+    "agents",
+    "agent-runtime",
+    "agent-business",
+    "control-plane",
+    "event-journal",
+    "local-first",
+    "policy",
+    "run-trace",
+    "tool-calling",
+    "workspace-runtime"
+  ],
+  "files": [
+    "dist",
+    "docker",
+    "examples",
+    "assets/brand",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "CHANGELOG.md",
+    "RELEASE.md"
+  ],
+  "bin": {
+    "mainspring-runtime": "dist/runner/main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "import": "./dist/contracts/index.js"
+    },
+    "./gateway": {
+      "types": "./dist/gateway/index.d.ts",
+      "import": "./dist/gateway/index.js"
+    },
+    "./gateway/server": {
+      "types": "./dist/gateway/server/index.d.ts",
+      "import": "./dist/gateway/server/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "import": "./dist/protocol/index.js"
+    },
+    "./protocol/node": {
+      "types": "./dist/protocol/node.d.ts",
+      "import": "./dist/protocol/node.js"
+    },
+    "./control": {
+      "types": "./dist/control/index.d.ts",
+      "import": "./dist/control/index.js"
+    }
+  },
+  "imports": {
+    "#protocol": {
+      "types": "./src/protocol/index.ts",
+      "default": "./dist/protocol/index.js"
+    },
+    "#protocol/node": {
+      "types": "./src/protocol/node.ts",
+      "default": "./dist/protocol/node.js"
+    },
+    "#control": {
+      "types": "./src/control/index.ts",
+      "default": "./dist/control/index.js"
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "pnpm run clean && pnpm exec tsc",
+    "start": "node dist/runner/main.js",
+    "console:dev": "pnpm --filter @mainspring/console dev",
+    "console:build": "pnpm --filter @mainspring/console build",
+    "console:preview": "pnpm --filter @mainspring/console preview",
+    "console:typecheck": "pnpm --filter @mainspring/console typecheck",
+    "gateway:dev": "pnpm build && node dist/gateway/server/dev.js",
+    "typecheck": "pnpm exec tsc --noEmit",
+    "test": "pnpm exec vitest run src apps/console/src --passWithNoTests",
+    "doctor": "node scripts/doctor.mjs",
+    "security:mainspring": "node scripts/check-mainspring-security.mjs",
+    "openrouter:e2e": "pnpm build && node scripts/openrouter-e2e.mjs",
+    "verify": "pnpm doctor && pnpm typecheck && pnpm test && pnpm build && pnpm run security:mainspring && pnpm console:typecheck && pnpm console:build"
+  },
+  "dependencies": {
+    "better-sqlite3": "12.10.0",
+    "ws": "^8.21.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "20",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "agency-client-operator",
+  "workspaceRoot": "./workspace",
+  "providerId": "openrouter",
+  "modelId": "anthropic/claude-sonnet-4",
+  "runtimeProfile": "core-browser-memory",
+  "allowedTools": ["file.read", "file.write", "web.search", "web.fetch", "memory.read", "memory.write"],
+  "approvalMode": "balanced"
+}

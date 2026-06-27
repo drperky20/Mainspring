@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.next/
+.turbo/
+coverage/
+test-results/
+playwright-report/
+.mainspring/
+.env
+.env.*
+!.env.example
+!.env.local.example
+*.log
+*.tsbuildinfo
+.DS_Store
+.vercel/
+.pnpm-store/

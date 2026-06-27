@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 240" role="img" aria-labelledby="title desc">
+  <title id="title">Mainspring logo</title>
+  <desc id="desc">Mainspring logo with mark, wordmark, and tagline.</desc>
+  <rect width="900" height="240" rx="28" fill="#F3EBDC"/>
+  <g transform="translate(28 28)">
+    <rect width="184" height="184" rx="26" fill="#F8F3E8" stroke="#171513" stroke-width="4"/>
+    <circle cx="92" cy="92" r="58" fill="none" stroke="#171513" stroke-width="8"/>
+    <circle cx="92" cy="92" r="14" fill="#9D7A32"/>
+    <path d="M48 92c13-27 33-41 46-41 16 0 25 12 25 24 0 12-9 21-22 21-9 0-17-4-22-11 7 22 25 37 44 37 13 0 23-5 33-13" fill="none" stroke="#225C53" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M55 140h74" stroke="#171513" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  <text x="250" y="106" fill="#171513" font-family="Georgia, 'Times New Roman', serif" font-size="78">Mainspring</text>
+  <text x="252" y="150" fill="#225C53" font-family="Arial, Helvetica, sans-serif" font-size="24">The open-source operating system for agent businesses.</text>
+  <path d="M252 174h590" stroke="#9D7A32" stroke-width="4" stroke-linecap="round"/>
+</svg>

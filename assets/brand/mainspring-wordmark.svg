@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 140" role="img" aria-labelledby="title desc">
+  <title id="title">Mainspring wordmark</title>
+  <desc id="desc">Mainspring wordmark with mechanical control line.</desc>
+  <rect width="720" height="140" rx="20" fill="#F3EBDC"/>
+  <text x="44" y="84" fill="#171513" font-family="Georgia, 'Times New Roman', serif" font-size="58" letter-spacing="0">Mainspring</text>
+  <path d="M452 72h220" stroke="#225C53" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="500" cy="72" r="10" fill="#9D7A32"/>
+  <circle cx="602" cy="72" r="10" fill="#9D7A32"/>
+</svg>

@@ -1,0 +1,9 @@
+{
+  "name": "local-first-agent",
+  "workspaceRoot": "./workspace",
+  "providerId": "openrouter",
+  "modelId": "openrouter/free",
+  "runtimeProfile": "core-memory",
+  "allowedTools": ["file.read", "memory.read", "memory.write"],
+  "approvalMode": "balanced"
+}

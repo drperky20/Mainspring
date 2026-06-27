@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Mainspring Open Graph card</title>
+  <desc id="desc">Open Graph card for Mainspring.</desc>
+  <rect width="1200" height="630" fill="#171513"/>
+  <rect x="44" y="44" width="1112" height="542" rx="26" fill="#F3EBDC"/>
+  <circle cx="168" cy="190" r="78" fill="none" stroke="#171513" stroke-width="10"/>
+  <circle cx="168" cy="190" r="17" fill="#9D7A32"/>
+  <path d="M110 190c18-34 42-52 57-52 19 0 31 15 31 31 0 15-11 26-26 26-11 0-20-5-26-13 9 28 30 45 53 45 16 0 29-6 40-16" fill="none" stroke="#225C53" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="302" y="208" fill="#171513" font-family="Georgia, 'Times New Roman', serif" font-size="92">Mainspring</text>
+  <text x="302" y="274" fill="#225C53" font-family="Arial, Helvetica, sans-serif" font-size="34">The open-source operating system for agent businesses.</text>
+  <text x="110" y="392" fill="#171513" font-family="Arial, Helvetica, sans-serif" font-size="30">Turn raw model output into controlled, replayable, policy-bound, inspectable, cost-aware, sellable agent work.</text>
+  <path d="M110 448h920" stroke="#9D7A32" stroke-width="6" stroke-linecap="round"/>
+  <text x="110" y="512" fill="#171513" font-family="Arial, Helvetica, sans-serif" font-size="24">Runtime kernel. Event journal. Policy guard. Approval receipts. Local gateway dev mode.</text>
+</svg>

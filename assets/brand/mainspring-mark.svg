@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Mainspring mark</title>
+  <desc id="desc">Mechanical spring-inspired monogram for Mainspring.</desc>
+  <rect width="256" height="256" rx="32" fill="#F3EBDC"/>
+  <circle cx="128" cy="128" r="82" fill="none" stroke="#171513" stroke-width="10"/>
+  <circle cx="128" cy="128" r="18" fill="#9D7A32"/>
+  <path d="M66 128c18-38 46-57 62-57 21 0 35 17 35 34 0 17-12 29-29 29-12 0-23-6-30-16 10 31 33 49 58 49 18 0 32-7 44-18" fill="none" stroke="#225C53" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M76 192h104" stroke="#171513" stroke-width="8" stroke-linecap="round"/>
+</svg>

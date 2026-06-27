@@ -1,0 +1,8 @@
+name: Security report
+description: Public placeholder for security-sensitive reports
+title: "[Security] "
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: Please do not post sensitive exploit details publicly. Use the private reporting path described in SECURITY.md whenever possible.

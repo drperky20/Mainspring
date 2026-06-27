@@ -1,0 +1,9 @@
+{
+  "name": "coding-agent",
+  "workspaceRoot": "./workspace",
+  "providerId": "openai",
+  "modelId": "gpt-4.1-mini",
+  "runtimeProfile": "core-browser-memory",
+  "allowedTools": ["file.read", "file.write", "shell.exec", "memory.read", "memory.write"],
+  "approvalMode": "balanced"
+}
