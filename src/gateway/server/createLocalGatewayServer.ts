@@ -36,6 +36,7 @@ import {
   CreateAgentRequestSchema,
   CreateBudgetRequestSchema,
   CreateClientRequestSchema,
+  CreateCronGrantRequestSchema,
   CreateCronScheduleRequestSchema,
   CreateDeploymentTargetRequestSchema,
   CreateProviderProfileRequestSchema,
@@ -54,6 +55,7 @@ import {
   type CreateAgentRequest,
   type CreateBudgetRequest,
   type CreateClientRequest,
+  type CreateCronGrantRequest,
   type CreateCronScheduleRequest,
   type CreateDeploymentTargetRequest,
   type CreateProviderProfileRequest,
@@ -686,6 +688,33 @@ export class LocalGatewayHttpServer {
         return
       }
 
+      if (request.method === 'GET' && path.startsWith('/cron/') && path.endsWith('/grant')) {
+        const scheduleId = decodeURIComponent(path.slice('/cron/'.length, -'/grant'.length))
+        this.writeJson(
+          response,
+          200,
+          sanitizeGatewayResponse({ cronGrant: this.previewCronGrant(scheduleId) }),
+        )
+        return
+      }
+
+      if (request.method === 'POST' && path.startsWith('/cron/') && path.endsWith('/grant')) {
+        const scheduleId = decodeURIComponent(path.slice('/cron/'.length, -'/grant'.length))
+        const body = await this.readJson(request)
+        const parsed = CreateCronGrantRequestSchema.parse(body)
+        const preview = this.createCronGrant(scheduleId, parsed)
+        const schedule = this.options.gateway.cron.list().find((record) => record.scheduleId === scheduleId)
+        this.writeJson(
+          response,
+          201,
+          sanitizeGatewayResponse({
+            cronGrant: preview,
+            ...(schedule ? { cronSchedule: consoleCronSchedule(schedule) } : {}),
+          }),
+        )
+        return
+      }
+
       if (request.method === 'DELETE' && path.startsWith('/cron/')) {
         const scheduleId = decodeURIComponent(path.slice('/cron/'.length))
         this.writeJson(response, 200, sanitizeGatewayResponse(this.deleteCronSchedule(scheduleId)))
@@ -937,6 +966,26 @@ export class LocalGatewayHttpServer {
 
   private runCronNow(scheduleId: string) {
     return this.options.gateway.cron.runNow(scheduleId)
+  }
+
+  private previewCronGrant(scheduleId: string) {
+    if (!this.options.gateway.runLog.available()) {
+      throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
+    }
+    return this.options.gateway.cron.grantPreview(scheduleId)
+  }
+
+  private createCronGrant(scheduleId: string, input: CreateCronGrantRequest) {
+    if (!this.options.gateway.runLog.available()) {
+      throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
+    }
+    return this.options.gateway.cron.createGrant({
+      scheduleId,
+      expiresAt: input.expiresAt,
+      expiresInMs: input.expiresInMs,
+      maxExecutionCount: input.maxExecutionCount,
+      actor: input.actor,
+    })
   }
 
   private planDeployment(targetId: string, input: DeploymentPlanRequest) {

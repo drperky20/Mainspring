@@ -17,7 +17,7 @@ Deployment plans can run `npm pack` and prepare `ssh` / `scp` command previews f
 - It does not run arbitrary marketplace scripts.
 - It does not install remote marketplace code.
 - It does not provide paid marketplace distribution.
-- It does not provide a polished operator UI for creating scoped cron grants yet.
+- It does not provide dedicated in-app visual controls for scoped cron grants yet; the local gateway API/client can preview and create scoped grants.
 - It does not make unsupported deployment target kinds executable; unsupported target kinds fail closed.
 - It does not bypass the runtime policy, mailbox, approval, and tool execution path.
 

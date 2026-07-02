@@ -308,6 +308,57 @@ export interface LocalGatewayClient {
   }): Promise<{ cronSchedule: NonNullable<ConsoleGatewaySnapshot['cronSchedules']>[number] }>
   deleteCronSchedule(input: { scheduleId: string }): Promise<{ scheduleId: string; deleted: true }>
   runCronNow(input: { scheduleId: string }): Promise<{ run: { runId: string; sessionId: string } }>
+  cronGrant(input: { scheduleId: string }): Promise<{
+    cronGrant: {
+      scheduleId: string
+      sessionId: string
+      agentId: string
+      workspaceId?: string
+      cronMode: string
+      headless: true
+      grantRequired: boolean
+      grantPresent: boolean
+      scheduleKey: string
+      allowedTools: string[]
+      decision: {
+        decisionId: string
+        state: string
+        reasons: string[]
+        permissionCategories: string[]
+        inputHash: string
+        manifestHash: string
+        policyHash: string
+        metadata?: unknown
+      }
+      grant?: {
+        grantId: string
+        mode: string
+        promptHash: string
+        scheduleHash: string
+        allowedTools: string[]
+        expiresAt: string
+        maxExecutionCount: number
+        executionCount: number
+        createdAt: string
+      }
+      lastDecision?: {
+        decisionId: string
+        state: string
+        decidedAt: string
+        reasons: string[]
+      }
+    }
+  }>
+  createCronGrant(input: {
+    scheduleId: string
+    expiresAt?: string
+    expiresInMs?: number
+    maxExecutionCount?: number
+    actor?: string
+  }): Promise<{
+    cronGrant: Awaited<ReturnType<LocalGatewayClient['cronGrant']>>['cronGrant']
+    cronSchedule?: NonNullable<ConsoleGatewaySnapshot['cronSchedules']>[number]
+  }>
   createBudget(input: {
     scopeType: 'client' | 'workspace' | 'agent'
     scopeId: string
@@ -528,6 +579,16 @@ export function createLocalGatewayClient(
       requestJson(fetchImpl, `${normalizedBaseUrl}/cron/${encodeURIComponent(scheduleId)}/run-now`, {
         method: 'POST',
         headers: authHeaders(),
+      }),
+    cronGrant: ({ scheduleId }) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/cron/${encodeURIComponent(scheduleId)}/grant`, {
+        headers: authHeaders(),
+      }),
+    createCronGrant: ({ scheduleId, ...input }) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/cron/${encodeURIComponent(scheduleId)}/grant`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(input),
       }),
     createBudget: (input) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/budgets`, {

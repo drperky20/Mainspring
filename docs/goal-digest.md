@@ -7932,3 +7932,36 @@ Verification in this slice:
 Next recommended milestone:
 
 - Add operator-facing cron grant review/create surfaces for gateway/API/console cron schedules.
+
+## 2026-07-02 Cron Grant API And Client Slice
+
+Goal:
+
+- Give operators a real public path to preview and create scoped RunLog cron grants for gateway cron schedules without manually editing schedule metadata.
+
+Changes:
+
+- Added `LocalGateway.cron.grantPreview(scheduleId)` and `LocalGateway.cron.createGrant(...)`.
+- Factored gateway cron schedule-to-RunLog policy derivation so preview, grant creation, and run dispatch use the same agent id, schedule key, prompt hash, workspace id, and allowed-tool scope.
+- Added HTTP routes:
+  - `GET /cron/:scheduleId/grant` previews the current cron policy decision.
+  - `POST /cron/:scheduleId/grant` creates an expiring scoped grant derived server-side from the current schedule.
+- Extended sanitized cron schedule DTOs with grant id, mode, expiry, execution counters, allowed tools, and last decision state.
+- Added typed console client methods `cronGrant()` and `createCronGrant()` for the new routes.
+- Added gateway, HTTP, and console-client regressions proving side-effecting cron denies before grant, allows after grant, increments grant execution count after run-now, and does not return raw secret-bearing prompts.
+- Updated current-state, migration, backlog, local-gateway, automation, security truth, and red-team docs to mark API/client grant surfaces complete while leaving dedicated visual console controls pending.
+
+What this proves:
+
+- Operators no longer need to hand-edit cron metadata to create a scoped RunLog grant.
+- Grant hashes are derived from the same schedule context used by execution.
+- The browser-facing response surface exposes hashes and previews, not raw prompt/secret/path material.
+
+Verification in this slice:
+
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run src/gateway/LocalGateway.test.ts src/gateway/server/createLocalGatewayServer.test.ts apps/console/src/localGatewayClient.test.ts`: passed, 3 files / 52 tests.
+
+Next recommended milestone:
+
+- Add dedicated visual console controls for cron grant review/create, or move examples/README quickstarts from `createMainspring` to `createRunLogMainspring` where compatibility is not required.

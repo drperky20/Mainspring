@@ -3365,6 +3365,99 @@ describe('LocalMainspringGateway', () => {
     }
   })
 
+  it('creates scoped RunLog cron grants for side-effecting gateway schedules', async () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths('mainspring-gateway-cron-runlog-grant-')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'grant ok' } }]),
+    })
+    const gateway = createLocalMainspringGateway({
+      runtime: mainspring,
+      runLog,
+      appState,
+    })
+
+    try {
+      const session = mainspring.sessions.create({
+        sessionId: 'cron-runlog-grant-session',
+        workspace: { root: workspaceRoot },
+      })
+      const schedule = gateway.cron.create({
+        sessionId: session.record.sessionId,
+        label: 'Grant headless schedule',
+        prompt: 'Run a granted file-capable schedule.',
+        cronExpr: '0 * * * *',
+        allowedTools: ['file.write'],
+      })
+
+      const before = gateway.cron.grantPreview(schedule.scheduleId)
+      expect(before).toMatchObject({
+        scheduleId: schedule.scheduleId,
+        grantRequired: true,
+        grantPresent: false,
+        scheduleKey: '0 * * * *|local',
+        decision: expect.objectContaining({ state: 'deny' }),
+      })
+
+      const granted = gateway.cron.createGrant({
+        scheduleId: schedule.scheduleId,
+        maxExecutionCount: 1,
+        expiresInMs: 60_000,
+        actor: 'test-operator',
+      })
+
+      expect(granted).toMatchObject({
+        scheduleId: schedule.scheduleId,
+        grantRequired: true,
+        grantPresent: true,
+        decision: expect.objectContaining({ state: 'allow' }),
+        grant: expect.objectContaining({
+          maxExecutionCount: 1,
+          executionCount: 0,
+          allowedTools: ['file.write'],
+        }),
+      })
+      const run = gateway.cron.runNow(schedule.scheduleId)
+      expect(run.status).toBe('queued')
+      await runLog.drainUntilIdle()
+      const completed = runLog.store.getRun(run.runId)
+      expect(completed?.status).toBe('completed')
+      expect(runLog.store.listEvents({ runId: run.runId }).map((event) => event.type)).toEqual(
+        expect.arrayContaining(['cron.due', 'policy.decision.recorded', 'input.received', 'run.completed']),
+      )
+      expect(appState.cronSchedules.get(schedule.scheduleId)?.metadata).toMatchObject({
+        cronMode: 'allowlist',
+        cronGrant: expect.objectContaining({
+          grantId: granted.grant?.grantId,
+          executionCount: 1,
+          maxExecutionCount: 1,
+        }),
+        lastDecision: expect.objectContaining({ state: 'allow' }),
+      })
+      expect(appState.auditEvents.list({ category: 'cron' })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            action: 'schedule.grant.created',
+            targetId: schedule.scheduleId,
+            metadata: expect.objectContaining({ grantId: granted.grant?.grantId }),
+          }),
+        ]),
+      )
+    } finally {
+      runLog.close()
+      appState.close()
+    }
+  })
+
   it('installs a trusted local template into a real client/workspace/agent set', () => {
     const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
       'mainspring-gateway-marketplace-install-',

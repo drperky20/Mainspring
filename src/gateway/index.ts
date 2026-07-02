@@ -106,6 +106,8 @@ export type {
   LocalGatewayBudgetStatus,
   LocalGatewayCellStatus,
   LocalGatewayCronScheduleDraftInput,
+  LocalGatewayCreateCronGrantInput,
+  LocalGatewayCronGrantPreview,
   LocalGatewayCronStatus,
   LocalGatewayEventListInput,
   LocalGatewayPricingCatalogStatus,

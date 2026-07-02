@@ -31,9 +31,11 @@ import {
 } from '../usage/ModelPricing.js'
 import { summarizeUsageLedger, type UsageLedgerSummary } from '../usage/UsageLedger.js'
 import {
+  createRunLogCronGrant,
   cronMetadataWithDecision,
   decideRunLogCron,
   decisionRecordForRun,
+  type RunLogCronGrant,
   type RunLogCronJob,
   type RunLogCronPolicyMetadata,
 } from '../capabilities/cron/RunLogCron.js'
@@ -329,6 +331,51 @@ export interface LocalGatewayCronStatus {
   pollIntervalMs: number
   lastTickAt?: string
   lastError?: string
+}
+
+export interface LocalGatewayCronGrantPreview {
+  scheduleId: string
+  sessionId: string
+  agentId: string
+  workspaceId?: string
+  cronMode: string
+  headless: true
+  grantRequired: boolean
+  grantPresent: boolean
+  scheduleKey: string
+  allowedTools: string[]
+  decision: Pick<
+    DecisionRecord,
+    | 'decisionId'
+    | 'state'
+    | 'reasons'
+    | 'permissionCategories'
+    | 'inputHash'
+    | 'manifestHash'
+    | 'policyHash'
+    | 'metadata'
+  >
+  grant?: Pick<
+    RunLogCronGrant,
+    | 'grantId'
+    | 'mode'
+    | 'promptHash'
+    | 'scheduleHash'
+    | 'allowedTools'
+    | 'expiresAt'
+    | 'maxExecutionCount'
+    | 'executionCount'
+    | 'createdAt'
+  >
+  lastDecision?: RunLogCronPolicyMetadata['lastDecision']
+}
+
+export interface LocalGatewayCreateCronGrantInput {
+  scheduleId: string
+  expiresAt?: string
+  expiresInMs?: number
+  maxExecutionCount?: number
+  actor?: string
 }
 
 export interface InstallLocalMarketplaceTemplateInput {
@@ -951,6 +998,10 @@ export class LocalMainspringGateway {
     },
     runNow: (scheduleId: string): RunRecord | RunLogRunRecord =>
       this.runCronScheduleNow(scheduleId, 'manual'),
+    grantPreview: (scheduleId: string): LocalGatewayCronGrantPreview =>
+      this.previewCronGrant(scheduleId),
+    createGrant: (input: LocalGatewayCreateCronGrantInput): LocalGatewayCronGrantPreview =>
+      this.createCronGrant(input),
     status: (): LocalGatewayCronStatus => ({
       enabled: this.cronEnabled,
       running: this.cronTimer !== null,
@@ -2988,15 +3039,93 @@ export class LocalMainspringGateway {
     return run
   }
 
-  private runRunLogCronSchedule(
+  private previewCronGrant(scheduleId: string, now = this.now()): LocalGatewayCronGrantPreview {
+    const schedule = this.requireCronSchedule(scheduleId)
+    const context = this.buildRunLogCronContext(schedule, now)
+    const decision = decideRunLogCron({
+      job: context.job,
+      agent: context.agent,
+      now,
+    })
+    return this.cronGrantPreviewFromDecision({
+      schedule,
+      context,
+      decision,
+    })
+  }
+
+  private createCronGrant(input: LocalGatewayCreateCronGrantInput): LocalGatewayCronGrantPreview {
+    const schedule = this.requireCronSchedule(input.scheduleId)
+    const now = this.now()
+    const context = this.buildRunLogCronContext(schedule, now)
+    const grant = createRunLogCronGrant({
+      agentId: context.agentId,
+      input: schedule.prompt,
+      intervalMs: gatewayCronPolicyIntervalMs(),
+      sessionId: schedule.sessionId,
+      workspaceId: context.resolvedInput.workspaceId,
+      allowedTools: context.resolvedInput.allowedTools ?? [],
+      scheduleKey: context.scheduleKey,
+      expiresAt: input.expiresAt,
+      expiresInMs: input.expiresInMs,
+      maxExecutionCount: input.maxExecutionCount,
+      createdAt: now.toISOString(),
+    })
+    const metadata: Record<string, unknown> & RunLogCronPolicyMetadata = {
+      ...context.metadata,
+      cronMode: 'allowlist',
+      cronGrant: grant,
+    }
+    const updatedSchedule = this.requireAppState().cronSchedules.update({
+      scheduleId: schedule.scheduleId,
+      metadata,
+    })
+    this.requireAppState().auditEvents.create({
+      category: 'cron',
+      action: 'schedule.grant.created',
+      actor: input.actor ?? 'local-gateway',
+      targetType: 'schedule',
+      targetId: schedule.scheduleId,
+      sessionId: schedule.sessionId,
+      metadata: {
+        grantId: grant.grantId,
+        expiresAt: grant.expiresAt,
+        maxExecutionCount: grant.maxExecutionCount,
+        scheduleKey: context.scheduleKey,
+      },
+    })
+    const nextContext = this.buildRunLogCronContext(updatedSchedule, now)
+    const decision = decideRunLogCron({
+      job: nextContext.job,
+      agent: nextContext.agent,
+      now,
+    })
+    return this.cronGrantPreviewFromDecision({
+      schedule: updatedSchedule,
+      context: nextContext,
+      decision,
+    })
+  }
+
+  private requireCronSchedule(scheduleId: string): LocalGatewayCronScheduleRecord {
+    const schedule = this.requireAppState().cronSchedules.get(scheduleId)
+    if (!schedule) throw new Error(`Unknown cron schedule: ${scheduleId}`)
+    return schedule
+  }
+
+  private buildRunLogCronContext(
     schedule: LocalGatewayCronScheduleRecord,
-    trigger: 'manual' | 'scheduler',
     now: Date,
-    nextRunAt?: string,
-  ): RunLogRunRecord {
+  ): {
+    runtime: RunLogMainspring
+    resolvedInput: LocalGatewayStartRunInput
+    agentId: string
+    agent: AgentSpec
+    metadata: Record<string, unknown> & RunLogCronPolicyMetadata
+    job: RunLogCronJob
+    scheduleKey: string
+  } {
     const runtime = this.requireRunLogRuntime()
-    const session = this.runtime.storage.stateStore.getSession(schedule.sessionId)
-    if (!session) throw new Error(`Unknown session: ${schedule.sessionId}`)
     const resolvedInput = this.resolveAppStateRunInput({
       sessionId: schedule.sessionId,
       input: schedule.prompt,
@@ -3008,19 +3137,18 @@ export class LocalMainspringGateway {
       ...(schedule.computerId ? { computerId: schedule.computerId } : {}),
       ...(schedule.runtimeProfile ? { runtimeProfile: schedule.runtimeProfile } : {}),
     })
-    const budgetEvaluations = this.assertRunBudgetAllowed(resolvedInput, session)
     const agentId = resolvedInput.agentId ?? runtime.defaultAgentId
     this.ensureRunLogAgent(resolvedInput, agentId)
     const agent = runtime.store.getAgent(agentId)
     if (!agent) throw new Error(`Unknown RunLog cron agent: ${agentId}`)
+    const scheduleKey = gatewayCronScheduleKey({
+      cronExpr: schedule.cronExpr,
+      timezone: schedule.timezone,
+    })
     const metadata: Record<string, unknown> & RunLogCronPolicyMetadata = {
       ...(schedule.metadata ?? {}),
       headless: true,
-      trigger,
-      cronScheduleKey: gatewayCronScheduleKey({
-        cronExpr: schedule.cronExpr,
-        timezone: schedule.timezone,
-      }),
+      cronScheduleKey: scheduleKey,
     }
     const job: RunLogCronJob = {
       cronId: schedule.scheduleId,
@@ -3034,13 +3162,88 @@ export class LocalMainspringGateway {
       allowedTools: resolvedInput.allowedTools ?? [],
       metadata,
     }
-    const decision = decideRunLogCron({ job, agent, now })
+    return { runtime, resolvedInput, agentId, agent, metadata, job, scheduleKey }
+  }
+
+  private cronGrantPreviewFromDecision(input: {
+    schedule: LocalGatewayCronScheduleRecord
+    context: ReturnType<LocalMainspringGateway['buildRunLogCronContext']>
+    decision: DecisionRecord
+  }): LocalGatewayCronGrantPreview {
+    const grant = input.context.metadata.cronGrant
+    const grantRequired =
+      input.decision.permissionCategories.includes('side-effecting')
+      || input.decision.reasons.some((reason) => reason.includes('grant'))
+    return {
+      scheduleId: input.schedule.scheduleId,
+      sessionId: input.schedule.sessionId,
+      agentId: input.context.agentId,
+      ...(input.context.resolvedInput.workspaceId
+        ? { workspaceId: input.context.resolvedInput.workspaceId }
+        : {}),
+      cronMode:
+        input.context.metadata.cronMode
+        ?? (grantRequired ? 'deny' : 'allowlist'),
+      headless: true,
+      grantRequired,
+      grantPresent: Boolean(grant),
+      scheduleKey: input.context.scheduleKey,
+      allowedTools: [...(input.context.resolvedInput.allowedTools ?? [])],
+      decision: {
+        decisionId: input.decision.decisionId,
+        state: input.decision.state,
+        reasons: input.decision.reasons,
+        permissionCategories: input.decision.permissionCategories,
+        inputHash: input.decision.inputHash,
+        manifestHash: input.decision.manifestHash,
+        policyHash: input.decision.policyHash,
+        ...(input.decision.metadata ? { metadata: input.decision.metadata } : {}),
+      },
+      ...(grant
+        ? {
+            grant: {
+              grantId: grant.grantId,
+              mode: grant.mode,
+              promptHash: grant.promptHash,
+              scheduleHash: grant.scheduleHash,
+              allowedTools: [...grant.allowedTools],
+              expiresAt: grant.expiresAt,
+              maxExecutionCount: grant.maxExecutionCount,
+              executionCount: grant.executionCount,
+              createdAt: grant.createdAt,
+            },
+          }
+        : {}),
+      ...(input.context.metadata.lastDecision
+        ? { lastDecision: input.context.metadata.lastDecision }
+        : {}),
+    }
+  }
+
+  private runRunLogCronSchedule(
+    schedule: LocalGatewayCronScheduleRecord,
+    trigger: 'manual' | 'scheduler',
+    now: Date,
+    nextRunAt?: string,
+  ): RunLogRunRecord {
+    const session = this.runtime.storage.stateStore.getSession(schedule.sessionId)
+    if (!session) throw new Error(`Unknown session: ${schedule.sessionId}`)
+    const context = this.buildRunLogCronContext(schedule, now)
+    const runtime = context.runtime
+    const resolvedInput = context.resolvedInput
+    const budgetEvaluations = this.assertRunBudgetAllowed(resolvedInput, session)
+    const metadata: Record<string, unknown> & RunLogCronPolicyMetadata = {
+      ...context.metadata,
+      trigger,
+    }
+    const job: RunLogCronJob = { ...context.job, metadata }
+    const decision = decideRunLogCron({ job, agent: context.agent, now })
     const workspaceRoot = resolvedInput.workspaceId
       ? this.appState?.workspaces.get(resolvedInput.workspaceId)?.root
       : session.workspaceRoot
     const run = runtime.store.createRun(
       {
-        agentId,
+        agentId: context.agentId,
         input: resolvedInput.input,
         sessionId: resolvedInput.sessionId,
         workspaceId: resolvedInput.workspaceId,
@@ -3055,14 +3258,14 @@ export class LocalMainspringGateway {
           scheduleId: schedule.scheduleId,
           trigger,
           headless: true,
-          cronMode: metadata.cronMode ?? (agent.tools?.length ? 'deny' : 'allowlist'),
+          cronMode: metadata.cronMode ?? (context.agent.tools?.length ? 'deny' : 'allowlist'),
           cronDecisionId: decision.decisionId,
           ...(schedule.providerProfileId ? { providerProfileId: schedule.providerProfileId } : {}),
           ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
           ...(resolvedInput.runtimeProfile ? { runtimeProfile: resolvedInput.runtimeProfile } : {}),
         },
       },
-      agent,
+      context.agent,
     )
     const runDecision = decisionRecordForRun(decision, run.runId, run.sessionId)
     runtime.store.appendEvent({

@@ -2203,6 +2203,117 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('exposes sanitized RunLog cron grant preview and creation endpoints', async () => {
+    const root = makeTempRoot('mainspring-gateway-cron-grant-route-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'legacy idle' } }]),
+      pollIntervalMs: 10,
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'session_cron_grant_gateway',
+      workspace: { root: workspaceRoot },
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'cron grant route ok' } }]),
+      approvalReceiptKey: 'gateway-cron-grant-route-test-key',
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    const started = await server.start()
+    try {
+      const schedule = appState.cronSchedules.create({
+        scheduleId: 'schedule_cron_grant_route',
+        sessionId: session.record.sessionId,
+        label: 'Grant route',
+        prompt: 'Cron grant prompt secretRef=env:OPENROUTER_API_KEY workspaceRoot=E:/hidden',
+        cronExpr: '0 * * * *',
+        allowedTools: ['file.write'],
+        enabled: true,
+      })
+
+      const before = await fetch(
+        `${started.url}/cron/${encodeURIComponent(schedule.scheduleId)}/grant`,
+      ).then((response) => response.json())
+
+      expect(before).toMatchObject({
+        cronGrant: {
+          scheduleId: schedule.scheduleId,
+          grantRequired: true,
+          grantPresent: false,
+          decision: expect.objectContaining({ state: 'deny' }),
+        },
+      })
+      expect(JSON.stringify(before)).not.toContain('Cron grant prompt')
+      expect(JSON.stringify(before)).not.toContain('OPENROUTER_API_KEY')
+      expect(JSON.stringify(before)).not.toContain('workspaceRoot')
+
+      const created = await fetch(`${started.url}/cron/${encodeURIComponent(schedule.scheduleId)}/grant`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          expiresInMs: 60_000,
+          maxExecutionCount: 1,
+          actor: 'route-test-operator',
+        }),
+      }).then((response) => response.json())
+
+      expect(created).toMatchObject({
+        cronGrant: {
+          scheduleId: schedule.scheduleId,
+          grantRequired: true,
+          grantPresent: true,
+          decision: expect.objectContaining({ state: 'allow' }),
+          grant: expect.objectContaining({
+            maxExecutionCount: 1,
+            executionCount: 0,
+            allowedTools: ['file.write'],
+          }),
+        },
+        cronSchedule: {
+          scheduleId: schedule.scheduleId,
+          promptPreview: expect.stringContaining('[redacted]'),
+          cronGrant: expect.objectContaining({
+            maxExecutionCount: 1,
+            executionCount: 0,
+            allowedTools: ['file.write'],
+          }),
+        },
+      })
+      expect(JSON.stringify(created)).not.toContain(
+        'Cron grant prompt secretRef=env:OPENROUTER_API_KEY workspaceRoot=E:/hidden',
+      )
+      expect(JSON.stringify(created)).not.toContain('OPENROUTER_API_KEY')
+      expect(JSON.stringify(created)).not.toContain('E:/hidden')
+
+      const runNow = await fetch(`${started.url}/cron/${encodeURIComponent(schedule.scheduleId)}/run-now`, {
+        method: 'POST',
+      }).then((response) => response.json())
+      expect(runNow.run.status).toBe('queued')
+      await runLog.drainUntilIdle()
+      expect(runLog.store.getRun(runNow.run.runId)?.status).toBe('completed')
+      expect(appState.cronSchedules.get(schedule.scheduleId)?.metadata).toMatchObject({
+        cronGrant: expect.objectContaining({
+          grantId: created.cronGrant.grant.grantId,
+          executionCount: 1,
+        }),
+        lastDecision: expect.objectContaining({ state: 'allow' }),
+      })
+    } finally {
+      await server.stop()
+      runLog.close()
+      appState.close()
+    }
+  })
+
   it('routes deployment target create/update/plan/execute through the gateway deployment lane', async () => {
     const createInputs: unknown[] = []
     const updateInputs: unknown[] = []

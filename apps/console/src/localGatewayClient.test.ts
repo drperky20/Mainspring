@@ -630,6 +630,80 @@ describe('createLocalGatewayClient', () => {
           status: 202,
         })
       }
+      if (url.endsWith('/cron/schedule_1/grant')) {
+        expect(init?.headers).toMatchObject({ authorization: 'Bearer hosted_token_1' })
+        if (init?.method === 'POST') {
+          expect(JSON.parse(String(init.body))).toMatchObject({
+            expiresInMs: 60000,
+            maxExecutionCount: 1,
+            actor: 'console-operator',
+          })
+        }
+        return new Response(
+          JSON.stringify({
+            cronGrant: {
+              scheduleId: 'schedule_1',
+              sessionId: 'session_1',
+              agentId: 'agent_default',
+              cronMode: 'allowlist',
+              headless: true,
+              grantRequired: true,
+              grantPresent: init?.method === 'POST',
+              scheduleKey: '0 9 * * 1|local',
+              allowedTools: ['file.write'],
+              decision: {
+                decisionId: 'dr_cron_1',
+                state: init?.method === 'POST' ? 'allow' : 'deny',
+                reasons: init?.method === 'POST' ? [] : ['headless cron grant is missing'],
+                permissionCategories: ['cron', 'headless', 'side-effecting'],
+                inputHash: 'prompt_hash',
+                manifestHash: 'manifest_hash',
+                policyHash: 'policy_hash',
+              },
+              ...(init?.method === 'POST'
+                ? {
+                    grant: {
+                      grantId: 'cron_grant_1',
+                      mode: 'allowlist',
+                      promptHash: 'prompt_hash',
+                      scheduleHash: 'schedule_hash',
+                      allowedTools: ['file.write'],
+                      expiresAt: '2026-06-27T00:10:00.000Z',
+                      maxExecutionCount: 1,
+                      executionCount: 0,
+                      createdAt: '2026-06-27T00:09:00.000Z',
+                    },
+                  }
+                : {}),
+            },
+            ...(init?.method === 'POST'
+              ? {
+                  cronSchedule: {
+                    scheduleId: 'schedule_1',
+                    sessionId: 'session_1',
+                    label: 'Daily report',
+                    promptPreview: 'Build the morning report.',
+                    cronExpr: '0 9 * * 1',
+                    timezone: 'local',
+                    allowedTools: ['file.write'],
+                    enabled: true,
+                    cronGrant: {
+                      mode: 'allowlist',
+                      grantId: 'cron_grant_1',
+                      expiresAt: '2026-06-27T00:10:00.000Z',
+                      executionCount: 0,
+                      maxExecutionCount: 1,
+                      allowedTools: ['file.write'],
+                    },
+                    createdAt: '2026-06-27T00:07:00.000Z',
+                    updatedAt: '2026-06-27T00:09:00.000Z',
+                  },
+                }
+              : {}),
+          }),
+          { status: init?.method === 'POST' ? 201 : 200 },
+        )
+      }
       if (url.endsWith('/clients')) {
         expect(init?.method).toBe('POST')
         expect(init?.headers).toMatchObject({ authorization: 'Bearer hosted_token_1' })
@@ -1120,6 +1194,33 @@ describe('createLocalGatewayClient', () => {
     })
     await expect(client.runCronNow({ scheduleId: 'schedule_1' })).resolves.toMatchObject({
       run: { runId: 'run_2', sessionId: 'session_1' },
+    })
+    await expect(client.cronGrant({ scheduleId: 'schedule_1' })).resolves.toMatchObject({
+      cronGrant: {
+        scheduleId: 'schedule_1',
+        grantRequired: true,
+        grantPresent: false,
+        decision: { state: 'deny' },
+      },
+    })
+    await expect(
+      client.createCronGrant({
+        scheduleId: 'schedule_1',
+        expiresInMs: 60_000,
+        maxExecutionCount: 1,
+        actor: 'console-operator',
+      }),
+    ).resolves.toMatchObject({
+      cronGrant: {
+        scheduleId: 'schedule_1',
+        grantPresent: true,
+        decision: { state: 'allow' },
+        grant: { grantId: 'cron_grant_1', maxExecutionCount: 1 },
+      },
+      cronSchedule: {
+        scheduleId: 'schedule_1',
+        cronGrant: { grantId: 'cron_grant_1' },
+      },
     })
     await expect(client.deleteCronSchedule({ scheduleId: 'schedule_1' })).resolves.toEqual({
       scheduleId: 'schedule_1',

@@ -248,6 +248,16 @@ export const UpdateCronScheduleRequestSchema = z
     { message: 'At least one cron schedule field must be provided.' },
   )
 
+export const CreateCronGrantRequestSchema = z.object({
+  expiresAt: OptionalTrimmedString,
+  expiresInMs: z.number().int().positive().optional(),
+  maxExecutionCount: z.number().int().positive().optional(),
+  actor: OptionalTrimmedString,
+}).refine(
+  (value) => value.expiresAt === undefined || Number.isFinite(Date.parse(value.expiresAt)),
+  { message: 'Cron grant expiration must be a valid timestamp.' },
+)
+
 export const UpdateBudgetRequestSchema = z
   .object({
     label: OptionalTrimmedString,
@@ -275,6 +285,7 @@ export type CreateProviderProfileRequest = z.infer<typeof CreateProviderProfileR
 export type UpdateProviderProfileRequest = z.infer<typeof UpdateProviderProfileRequestSchema>
 export type CreateCronScheduleRequest = z.infer<typeof CreateCronScheduleRequestSchema>
 export type UpdateCronScheduleRequest = z.infer<typeof UpdateCronScheduleRequestSchema>
+export type CreateCronGrantRequest = z.infer<typeof CreateCronGrantRequestSchema>
 export type CreateBudgetRequest = z.infer<typeof CreateBudgetRequestSchema>
 export type UpdateBudgetRequest = z.infer<typeof UpdateBudgetRequestSchema>
 export type CreateDeploymentTargetRequest = z.infer<typeof CreateDeploymentTargetRequestSchema>

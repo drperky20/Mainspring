@@ -1,6 +1,7 @@
 import { sanitizeRuntimeResponse } from '#protocol'
 import type { RunEvent, RuntimeHealth } from '../contracts/runtime.js'
 import type { RunRecord } from '../contracts/runtime.js'
+import type { RunLogCronPolicyMetadata } from '../capabilities/cron/RunLogCron.js'
 import type { RunRecord as RunLogRunRecord } from '../core/types.js'
 import { listStoredMemoryEntries } from '../memory/MemoryStore.js'
 import { redactBrowserUnsafeGatewayText } from './browserSafety.js'
@@ -396,6 +397,20 @@ export interface ConsoleGatewayCronSchedule {
   lastRunAt?: string
   nextRunAt?: string
   lastError?: string
+  cronGrant?: {
+    mode?: string
+    grantId?: string
+    expiresAt?: string
+    executionCount?: number
+    maxExecutionCount?: number
+    allowedTools: string[]
+    lastDecision?: {
+      decisionId: string
+      state: string
+      decidedAt: string
+      reasons: string[]
+    }
+  }
   createdAt: string
   updatedAt: string
 }
@@ -1279,6 +1294,7 @@ function consoleBackendSummary(metadata: unknown): ConsoleGatewayBackendSummary 
 
 export function consoleCronSchedule(record: LocalGatewayCronScheduleRecord): ConsoleGatewayCronSchedule {
   const prompt = browserSafePreviewText(record.prompt)
+  const cronGrant = consoleCronGrant(record.metadata)
   return {
     scheduleId: record.scheduleId,
     sessionId: record.sessionId,
@@ -1296,8 +1312,40 @@ export function consoleCronSchedule(record: LocalGatewayCronScheduleRecord): Con
     ...(record.lastRunAt ? { lastRunAt: record.lastRunAt } : {}),
     ...(record.nextRunAt ? { nextRunAt: record.nextRunAt } : {}),
     ...(record.lastError ? { lastError: browserSafePreviewText(record.lastError) } : {}),
+    ...(cronGrant ? { cronGrant } : {}),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+  }
+}
+
+function consoleCronGrant(
+  metadata: LocalGatewayCronScheduleRecord['metadata'],
+): ConsoleGatewayCronSchedule['cronGrant'] | undefined {
+  const cronMetadata = metadata as RunLogCronPolicyMetadata | undefined
+  const grant = cronMetadata?.cronGrant
+  const lastDecision = cronMetadata?.lastDecision
+  if (!grant && !lastDecision && !cronMetadata?.cronMode) return undefined
+  return {
+    ...(cronMetadata?.cronMode ? { mode: browserSafePreviewText(cronMetadata.cronMode) } : {}),
+    ...(grant
+      ? {
+          grantId: browserSafePreviewText(grant.grantId),
+          expiresAt: grant.expiresAt,
+          executionCount: grant.executionCount,
+          maxExecutionCount: grant.maxExecutionCount,
+          allowedTools: grant.allowedTools.map(browserSafePreviewText),
+        }
+      : { allowedTools: [] }),
+    ...(lastDecision
+      ? {
+          lastDecision: {
+            decisionId: browserSafePreviewText(lastDecision.decisionId),
+            state: browserSafePreviewText(lastDecision.state),
+            decidedAt: lastDecision.decidedAt,
+            reasons: lastDecision.reasons.map(browserSafePreviewText),
+          },
+        }
+      : {}),
   }
 }
 
