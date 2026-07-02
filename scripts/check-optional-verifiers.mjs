@@ -53,6 +53,9 @@ function checkOpenRouterMissingKeyDiagnostic() {
   if (payload.status !== 'prerequisites_blocked') {
     failures.push(`openrouter:e2e missing-key status expected prerequisites_blocked, got ${String(payload.status)}`)
   }
+  if (payload.runtimePath !== 'runlog') {
+    failures.push(`openrouter:e2e missing-key payload expected runtimePath runlog, got ${String(payload.runtimePath)}`)
+  }
   if (payload.keyPresent !== false) {
     failures.push('openrouter:e2e missing-key payload must report keyPresent false')
   }

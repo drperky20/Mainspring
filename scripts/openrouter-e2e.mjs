@@ -36,7 +36,8 @@ function printPrerequisiteBlocked() {
     JSON.stringify(
       {
         status: 'prerequisites_blocked',
-        message: 'OPENROUTER_API_KEY is required for the live OpenRouter verifier.',
+        runtimePath: 'runlog',
+        message: 'OPENROUTER_API_KEY is required for the live RunLog OpenRouter verifier.',
         requiredEnv: ['OPENROUTER_API_KEY'],
         envFileChecked: '.env.local',
         keyPresent: false,
@@ -53,13 +54,18 @@ function fail(payload) {
   process.exit(1)
 }
 
-function createTempRuntimeRoot() {
-  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-openrouter-e2e-'))
-  const sessionsRoot = path.join(runtimeRoot, 'sessions')
+function createTempRunLogRoot() {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-runlog-openrouter-e2e-'))
   const workspaceRoot = path.join(runtimeRoot, 'workspace')
-  fs.mkdirSync(sessionsRoot, { recursive: true })
+  const runLogRoot = path.join(runtimeRoot, 'runlog')
   fs.mkdirSync(workspaceRoot, { recursive: true })
-  return { runtimeRoot, sessionsRoot, workspaceRoot }
+  fs.mkdirSync(runLogRoot, { recursive: true })
+  return {
+    runtimeRoot,
+    workspaceRoot,
+    runLogRoot,
+    dbPath: path.join(runLogRoot, 'runlog.sqlite'),
+  }
 }
 
 function withTimeout(promise, label) {
@@ -72,16 +78,28 @@ function withTimeout(promise, label) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout))
 }
 
-async function collectRunEvents(run) {
-  const events = []
-  for await (const event of run.events()) {
-    events.push(event)
-  }
-  return events
-}
-
 function eventTypes(events) {
   return events.map((event) => event.type)
+}
+
+function assertNoKeyEcho(input) {
+  const serialized = JSON.stringify(input.events)
+  if (serialized.includes(input.keyValue)) {
+    fail({
+      status: 'OPENROUTER_E2E_FAIL',
+      runtimePath: 'runlog',
+      reason: 'runlog_events_leaked_key_value',
+      keyEchoed: true,
+    })
+  }
+  if (serialized.includes('OPENROUTER_API_KEY')) {
+    fail({
+      status: 'OPENROUTER_E2E_FAIL',
+      runtimePath: 'runlog',
+      reason: 'runlog_events_leaked_key_env_marker',
+      keyEchoed: false,
+    })
+  }
 }
 
 if (process.env.MAINSPRING_OPENROUTER_E2E_SKIP_ENV_FILE !== '1') {
@@ -93,78 +111,78 @@ if (!process.env.OPENROUTER_API_KEY?.trim()) {
   process.exit(1)
 }
 
-process.env.MAINSPRING_PROVIDER = 'openrouter'
 process.env.MAINSPRING_MODEL = process.env.MAINSPRING_MODEL?.trim() || defaultModel
-process.env.MAINSPRING_CREDENTIAL_REF = 'env:OPENROUTER_API_KEY'
 
-const { runtimeRoot, sessionsRoot, workspaceRoot } = createTempRuntimeRoot()
+const { runtimeRoot, workspaceRoot, runLogRoot, dbPath } = createTempRunLogRoot()
 const {
-  PROVIDER_INIT_LOG_MESSAGE,
-  createMainspring,
+  OpenRouterProvider,
+  createRunLogMainspring,
 } = await import('../dist/index.js')
-const mainspring = createMainspring({
-  sessionsRoot,
+
+const mainspring = createRunLogMainspring({
+  rootPath: runLogRoot,
+  dbPath,
   workspaceRoot,
-  pollIntervalMs: 25,
+  defaultProviderId: 'openrouter',
+  providers: {
+    openrouter: new OpenRouterProvider({
+      credentialRef: 'env:OPENROUTER_API_KEY',
+      modelId: process.env.MAINSPRING_MODEL,
+      options: { requestTimeoutMs: timeoutMs },
+    }),
+  },
+  agent: {
+    agentId: 'agent_openrouter_e2e',
+    instructions: `You are a live provider verifier. Your entire response must be exactly ${expected}.`,
+    providerId: 'openrouter',
+    modelId: process.env.MAINSPRING_MODEL,
+    workspacePolicy: 'lazy',
+    capabilities: ['provider'],
+  },
   tools: [],
+  workerId: 'openrouter-runlog-e2e',
 })
 
 try {
-  await mainspring.start()
-  const session = mainspring.sessions.create({
-    sessionId: 'openrouter-e2e',
-    workspace: { root: workspaceRoot },
-    metadata: { verifier: 'openrouter:e2e' },
-  })
-  const run = session.runs.start({
+  const run = mainspring.runs.start({
+    sessionId: 'openrouter-runlog-e2e',
+    workspaceId: 'openrouter-runlog-e2e-workspace',
+    workspaceRoot,
     input: `Reply exactly ${expected} and nothing else.`,
     systemPrompt: `You are a live provider verifier. Your entire response must be exactly ${expected}.`,
-    allowedTools: [],
     providerId: 'openrouter',
     modelId: process.env.MAINSPRING_MODEL,
-    mode: 'chat',
+    credentialRef: 'env:OPENROUTER_API_KEY',
+    requestedCapabilities: ['provider'],
+    allowedTools: [],
+    metadata: { verifier: 'openrouter:e2e', runtimePath: 'runlog' },
   })
 
-  const events = await withTimeout(collectRunEvents(run), 'OpenRouter runtime run')
+  await withTimeout(run.drainUntilIdle(), 'RunLog OpenRouter run')
+  const projection = run.projection()
+  const events = run.events()
   const types = eventTypes(events)
-  const assistantResult = await run.result()
-  const usage = run.usage()
-  const serializedEvents = JSON.stringify(events)
-  const providerInit = events.find(
-    (event) =>
-      event.type === 'runtime.warning'
-      && event.payload?.message === PROVIDER_INIT_LOG_MESSAGE,
-  )
+  const assistantResult = run.result()
+  const providerInit = projection.events.find((event) => event.type === 'provider.init')
+  const usage = projection.usage[0] ?? null
 
-  if (serializedEvents.includes(process.env.OPENROUTER_API_KEY)) {
-    fail({
-      status: 'OPENROUTER_E2E_FAIL',
-      reason: 'event_journal_leaked_key_value',
-      keyEchoed: true,
-    })
-  }
-
-  if (serializedEvents.includes('OPENROUTER_API_KEY')) {
-    fail({
-      status: 'OPENROUTER_E2E_FAIL',
-      reason: 'event_journal_leaked_key_env_marker',
-      keyEchoed: false,
-    })
-  }
+  assertNoKeyEcho({ events, keyValue: process.env.OPENROUTER_API_KEY })
 
   if (!providerInit) {
     fail({
       status: 'OPENROUTER_E2E_FAIL',
-      reason: 'missing_provider_init_warning',
+      runtimePath: 'runlog',
+      reason: 'missing_provider_init_event',
       eventTypes: types,
       keyEchoed: false,
     })
   }
 
-  if (!types.includes('run.started') || !types.includes('assistant.text.done') || !types.includes('run.completed')) {
+  if (!types.includes('run.created') || !types.includes('provider.init') || !types.includes('run.completed')) {
     fail({
       status: 'OPENROUTER_E2E_FAIL',
-      reason: 'missing_required_runtime_events',
+      runtimePath: 'runlog',
+      reason: 'missing_required_runlog_events',
       eventTypes: types,
       keyEchoed: false,
     })
@@ -173,9 +191,10 @@ try {
   if (run.status() !== 'completed' || assistantResult?.trim() !== expected) {
     fail({
       status: 'OPENROUTER_E2E_FAIL',
+      runtimePath: 'runlog',
       reason: 'unexpected_result',
-      provider: providerInit.payload.payload?.provider ?? 'openrouter',
-      model: providerInit.payload.payload?.modelId ?? process.env.MAINSPRING_MODEL,
+      provider: providerInit.payload?.provider ?? 'openrouter',
+      model: providerInit.payload?.modelId ?? process.env.MAINSPRING_MODEL,
       runStatus: run.status(),
       eventCount: events.length,
       eventTypes: types,
@@ -188,18 +207,23 @@ try {
     JSON.stringify(
       {
         status: 'OPENROUTER_E2E_OK',
-        provider: providerInit.payload.payload?.provider ?? 'openrouter',
-        model: providerInit.payload.payload?.modelId ?? process.env.MAINSPRING_MODEL,
+        runtimePath: 'runlog',
+        provider: providerInit.payload?.provider ?? 'openrouter',
+        model: providerInit.payload?.modelId ?? process.env.MAINSPRING_MODEL,
+        providerTransport: providerInit.payload?.providerTransport ?? null,
+        providerSessionIdPresent: Boolean(providerInit.payload?.providerSessionId),
         runStatus: run.status(),
-        sessionId: session.record.sessionId,
+        sessionId: run.record.sessionId,
         runId: run.record.runId,
         eventCount: events.length,
         eventTypes: types,
-        usagePresent: usage.length > 0,
-        usage: usage[0] ?? null,
+        latestSeq: projection.latestSeq,
+        checkpointKinds: projection.checkpoints.map((checkpoint) => checkpoint.kind ?? 'checkpoint'),
+        usagePresent: projection.usage.length > 0,
+        usage,
         keyEchoed: false,
-        runtimePath:
-          'createMainspring -> per-session SQLite mailbox -> SessionRuntimeSupervisor -> RuntimeKernel -> AgentProvider.query -> events_out',
+        runtimeSpine:
+          'createRunLogMainspring -> RunIntent -> RunLogKernel -> RunLogExecutor -> ProviderRouter -> OpenRouterProvider -> RunLogProjection',
       },
       null,
       2,
@@ -208,12 +232,13 @@ try {
 } catch (error) {
   fail({
     status: 'OPENROUTER_E2E_FAIL',
+    runtimePath: 'runlog',
     reason: 'exception',
     message: error instanceof Error ? error.message : String(error),
     keyEchoed: false,
   })
 } finally {
-  await mainspring.stop().catch(() => {})
+  mainspring.close()
   if (process.env.MAINSPRING_OPENROUTER_E2E_KEEP_TMP !== '1') {
     fs.rmSync(runtimeRoot, { recursive: true, force: true })
   }

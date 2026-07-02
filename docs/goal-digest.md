@@ -8066,7 +8066,7 @@ What this proves:
 Still honest:
 
 - The coding, personal-assistant, support, agency-client, and local-first examples still use the compatibility SDK host.
-- `openrouter:e2e` still uses the compatibility path until live-provider RunLog coverage is equivalent.
+- At this point in the sequence, `openrouter:e2e` still used the compatibility path until live-provider RunLog coverage was equivalent.
 - The provider-run example is provider-only; it does not prove tool approval, workspace mutation, browser, memory, or skill behavior.
 
 Verification in this slice:
@@ -8196,3 +8196,39 @@ Verification in this slice:
 Next recommended milestone:
 
 - Move `openrouter:e2e` to a RunLog-native live-provider path once live-provider projection coverage is equivalent, or add taint labels beyond scan findings for web/email/file-derived memory and skill mutations.
+
+## 2026-07-02 RunLog OpenRouter E2E Slice
+
+Goal:
+
+- Move the optional live OpenRouter E2E verifier from the compatibility mailbox runtime spine onto the canonical RunLog SDK host.
+
+Changes:
+
+- Rewrote `scripts/openrouter-e2e.mjs` to use `createRunLogMainspring`, `OpenRouterProvider`, `RunIntent`, `RunLogKernel`, `RunLogExecutor`, `ProviderRouter`, and `RunLogProjection`.
+- Kept the verifier optional, fail-closed, and machine-readable when `OPENROUTER_API_KEY` or network access is unavailable.
+- Tightened `scripts/check-optional-verifiers.mjs` so the missing-key diagnostic must report `runtimePath: "runlog"`.
+- Updated operations, migration, current-state, and backlog docs so the live-provider proof no longer claims the old mailbox/runtime path is the current verifier lane.
+
+What this proves:
+
+- A real live provider request can run through the RunLog-native SDK host and complete with streamed RunLog events, provider init metadata, checkpoint summary, usage, and final assistant output.
+- The optional verifier checks that RunLog events do not echo either the key value or the `OPENROUTER_API_KEY` marker.
+- The RunLog provider path now has live OpenRouter coverage in addition to no-key examples and approval-gated tool examples.
+
+Still honest:
+
+- `pnpm openrouter:e2e` still requires a real OpenRouter key and network path, so it remains optional and outside `release:check`.
+- This is provider-only live E2E. It does not prove live tool execution, browser leases, memory/skills, subagents, or checkpoint replay.
+- Compatibility examples and legacy embedders still keep `createMainspring`, per-session SQLite mailbox, `SessionRuntimeSupervisor`, and `RuntimeKernel` reachable until those paths are migrated or intentionally retained.
+
+Verification in this slice:
+
+- Missing-key branch: passed by emitting `MAINSPRING_OPENROUTER_E2E_PREREQUISITES_BLOCKED` with `runtimePath: "runlog"`, `keyPresent: false`, and `keyEchoed: false`.
+- `pnpm build`: passed.
+- `pnpm optional-verifiers:check`: passed with `MAINSPRING_OPTIONAL_VERIFIERS_CHECK_OK`.
+- `pnpm openrouter:e2e`: passed live with `status: "OPENROUTER_E2E_OK"`, `runtimePath: "runlog"`, provider `openrouter`, model `openrouter/free`, 13 RunLog events, usage present, and `keyEchoed: false`.
+
+Next recommended milestone:
+
+- Move the remaining compatibility examples that do not require mailbox-only behavior to `createRunLogMainspring`, or add taint labels beyond scan findings for web/email/file-derived memory and skill mutations.

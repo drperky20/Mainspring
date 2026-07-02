@@ -20,6 +20,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `src/sdk/RunLogMainspring.ts` exports `createRunLogMainspring`.
   - New SDK code can create `RunIntent` records, drain through `RunLogKernel`, inspect `RunLogProjection`, and approve/deny pending RunLog approval requests.
   - `src/sdk/RunLogMainspring.test.ts` proves provider-only runs and approved tool resume through the public handle.
+  - `pnpm openrouter:e2e` now uses `createRunLogMainspring` for optional live OpenRouter verification when `OPENROUTER_API_KEY` and network access are available.
 - Explicit RunLog gateway/API lane:
   - `CreateLocalMainspringGatewayOptions.runLog` accepts a `RunLogMainspring` host.
   - When that host is configured, the default HTTP `POST /runs/start` route creates a RunLog-backed run through `RunIntent` and returns the compact compatibility run dispatch DTO.
@@ -75,6 +76,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Prototype Or Migration Surfaces
 
 - The old mailbox/runtime path is still present and still important for existing `createMainspring` SDK/gateway behavior.
+- Some compatibility examples still exercise the old mailbox/runtime path during migration.
 - The default gateway `/runs/start` route is RunLog-backed in the local dev server and in gateways configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways constructed without a RunLog host remain mailbox-compatible for migration tests and older embedders.
 - Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
 - Desktop packaging is experimental and Windows-focused.
