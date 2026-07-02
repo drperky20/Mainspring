@@ -10,7 +10,11 @@ import {
 } from './appDashboardBootstrap'
 import { type DashboardViewModel } from './dashboardViewModel'
 import type { ConsoleGatewaySnapshot } from 'mainspring/gateway'
-import { createLocalGatewayClient, type LocalGatewayClient } from './localGatewayClient'
+import {
+  createLocalGatewayClient,
+  type GatewayProvenanceReview,
+  type LocalGatewayClient,
+} from './localGatewayClient'
 import {
   formatGatewaySessionOptionLabel,
   listGatewaySessionsForClient,
@@ -110,6 +114,46 @@ type GatewayPricingCatalogStatus = NonNullable<ConsoleGatewaySnapshot['pricingCa
 type GatewayUsageStatus = NonNullable<ConsoleGatewaySnapshot['usageStatus']>
 type GatewayCronSchedule = NonNullable<ConsoleGatewaySnapshot['cronSchedules']>[number]
 type GatewayCronGrantPreview = Awaited<ReturnType<LocalGatewayClient['cronGrant']>>['cronGrant']
+
+export function ProvenanceReviewSummary({
+  reviews,
+}: {
+  reviews: GatewayProvenanceReview[]
+}) {
+  if (reviews.length === 0) return null
+  const pendingCount = reviews.filter((review) => review.status === 'pending').length
+  const approvedCount = reviews.filter((review) => review.status === 'approved').length
+  const first = reviews[0]
+  const mutationSummary =
+    first.mutation.kind === 'memory'
+      ? `${first.mutation.scope} memory: ${first.mutation.textPreview}`
+      : first.mutation.kind === 'skill'
+        ? `${first.mutation.action} skill ${first.mutation.manifest.name} (${first.mutation.manifest.permissionSummary})`
+        : first.mutation.summary
+  return (
+    <div className="preview-block provenance-review-summary">
+      <h2>Provenance reviews</h2>
+      <KeyValue
+        label="Queue"
+        value={`${reviews.length} staged mutation${reviews.length === 1 ? '' : 's'}`}
+        action={`${pendingCount} pending, ${approvedCount} approved`}
+      />
+      <KeyValue label="Selected" value={first.reviewId} action={first.status} />
+      <KeyValue label="Mutation" value={mutationSummary} action={first.kind} />
+      <KeyValue label="Source" value={first.source} action={first.actor ?? 'runtime'} />
+      <KeyValue label="Scan" value={first.scan.status} action={`${first.scan.findings.length} finding${first.scan.findings.length === 1 ? '' : 's'}`} />
+      {first.scan.findings.length > 0 ? (
+        <small className="gateway-action-hint">
+          Findings: {first.scan.findings.map((finding) => `${finding.ruleId}:${finding.severity}`).join(', ')}.
+        </small>
+      ) : (
+        <small className="gateway-action-hint">
+          Review payload is the sanitized gateway projection; workspace roots and raw mutation files stay server-side.
+        </small>
+      )}
+    </div>
+  )
+}
 
 function budgetToolPolicyLabel(mode: GatewayBudgetEvaluation['costSensitiveTools']['mode']): string {
   if (mode === 'approval') return 'Cost-sensitive tools require budget review'
@@ -454,6 +498,7 @@ export function App() {
   const [gatewayMarketplaceTemplates, setGatewayMarketplaceTemplates] = useState<
     Awaited<ReturnType<LocalGatewayClient['marketplaceTemplates']>>['templates']
   >([])
+  const [gatewayProvenanceReviews, setGatewayProvenanceReviews] = useState<GatewayProvenanceReview[]>([])
   const [selectedGatewayMarketplaceTemplateId, setSelectedGatewayMarketplaceTemplateId] =
     useState<string>()
   const [gatewayMarketplaceWorkspaceRoot, setGatewayMarketplaceWorkspaceRoot] = useState('')
@@ -764,6 +809,12 @@ export function App() {
     gatewayMarketplaceTemplates.find(
       (template) => template.templateId === selectedGatewayMarketplaceTemplateId,
     ) ?? gatewayMarketplaceTemplates[0]
+  const gatewaySelectedPendingProvenanceReview = gatewayProvenanceReviews.find(
+    (review) => review.status === 'pending',
+  )
+  const gatewaySelectedApprovedProvenanceReview = gatewayProvenanceReviews.find(
+    (review) => review.status === 'approved',
+  )
   const gatewaySelectedBudgetEvaluation =
     gatewaySelectedBudget ? gatewayBudgetEvaluationsById.get(gatewaySelectedBudget.budgetId) : undefined
   const gatewayRunBudgetWarnings = gatewayRelevantBudgets
@@ -787,6 +838,9 @@ export function App() {
   useEffect(() => {
     setGatewayCronGrantPreview(undefined)
   }, [gatewaySelectedCronSchedule?.scheduleId, gatewaySelectedCronSchedule?.updatedAt])
+  useEffect(() => {
+    setGatewayProvenanceReviews([])
+  }, [gatewaySelectedWorkspace?.workspaceId])
   useEffect(() => {
     if (!gatewaySelectedBudget) return
     setSelectedGatewayBudgetId(gatewaySelectedBudget.budgetId)
@@ -1687,6 +1741,70 @@ export function App() {
     }
   }
 
+  async function loadLocalGatewayProvenanceReviews() {
+    if (!gatewayClient || !gatewaySelectedWorkspace?.workspaceId) return
+    setGatewayBusy(true)
+    try {
+      const response = await gatewayClient.provenanceReviews({
+        workspaceId: gatewaySelectedWorkspace.workspaceId,
+      })
+      setGatewayProvenanceReviews(response.provenanceReviews)
+      setGatewayError('')
+      setNotice('Provenance review queue loaded through local gateway dev mode.')
+    } catch (error) {
+      setGatewayError(error instanceof Error ? error.message : 'Failed to load provenance reviews.')
+    } finally {
+      setGatewayBusy(false)
+    }
+  }
+
+  async function decideLocalGatewayProvenanceReview(decision: 'approved' | 'rejected') {
+    if (!gatewayClient || !gatewaySelectedWorkspace?.workspaceId || !gatewaySelectedPendingProvenanceReview) return
+    setGatewayBusy(true)
+    try {
+      const response = await gatewayClient.decideProvenanceReview({
+        workspaceId: gatewaySelectedWorkspace.workspaceId,
+        reviewId: gatewaySelectedPendingProvenanceReview.reviewId,
+        decision,
+        reviewer: gatewayAuthUser?.username ?? 'console-operator',
+      })
+      setGatewayProvenanceReviews((reviews) =>
+        reviews.map((review) =>
+          review.reviewId === response.provenanceReview.reviewId ? response.provenanceReview : review,
+        ),
+      )
+      setGatewayError('')
+      setNotice(`Provenance review ${decision} through local gateway dev mode.`)
+    } catch (error) {
+      setGatewayError(error instanceof Error ? error.message : 'Failed to decide provenance review.')
+    } finally {
+      setGatewayBusy(false)
+    }
+  }
+
+  async function applyLocalGatewayProvenanceReview() {
+    if (!gatewayClient || !gatewaySelectedWorkspace?.workspaceId || !gatewaySelectedApprovedProvenanceReview) return
+    setGatewayBusy(true)
+    try {
+      await gatewayClient.applyProvenanceReview({
+        workspaceId: gatewaySelectedWorkspace.workspaceId,
+        reviewId: gatewaySelectedApprovedProvenanceReview.reviewId,
+        reviewer: gatewayAuthUser?.username ?? 'console-operator',
+      })
+      const response = await gatewayClient.provenanceReviews({
+        workspaceId: gatewaySelectedWorkspace.workspaceId,
+      })
+      setGatewayProvenanceReviews(response.provenanceReviews)
+      await refreshGatewaySnapshot()
+      setGatewayError('')
+      setNotice('Approved provenance review applied through local gateway dev mode.')
+    } catch (error) {
+      setGatewayError(error instanceof Error ? error.message : 'Failed to apply provenance review.')
+    } finally {
+      setGatewayBusy(false)
+    }
+  }
+
   async function deleteLocalGatewayCronSchedule() {
     if (!gatewayClient || !gatewaySelectedCronSchedule) return
     setGatewayBusy(true)
@@ -2444,6 +2562,7 @@ export function App() {
                     schedule={gatewaySelectedCronSchedule}
                     preview={gatewayCronGrantPreview}
                   />
+                  <ProvenanceReviewSummary reviews={gatewayProvenanceReviews} />
                   <button
                     className="ghost-button"
                     onClick={() => {
@@ -2534,6 +2653,34 @@ export function App() {
                     disabled={gatewayBusy || !gatewaySelectedCronSchedule}
                   >
                     Create scoped cron grant
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => void loadLocalGatewayProvenanceReviews()}
+                    disabled={gatewayBusy || !gatewaySelectedWorkspace}
+                  >
+                    Review provenance
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => void decideLocalGatewayProvenanceReview('approved')}
+                    disabled={gatewayBusy || !gatewaySelectedPendingProvenanceReview}
+                  >
+                    Approve provenance
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => void decideLocalGatewayProvenanceReview('rejected')}
+                    disabled={gatewayBusy || !gatewaySelectedPendingProvenanceReview}
+                  >
+                    Reject provenance
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => void applyLocalGatewayProvenanceReview()}
+                    disabled={gatewayBusy || !gatewaySelectedApprovedProvenanceReview}
+                  >
+                    Apply provenance
                   </button>
                   <button
                     className="ghost-button"

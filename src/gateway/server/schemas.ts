@@ -258,6 +258,18 @@ export const CreateCronGrantRequestSchema = z.object({
   { message: 'Cron grant expiration must be a valid timestamp.' },
 )
 
+export const ProvenanceReviewDecisionRequestSchema = z.object({
+  workspaceId: z.string().trim().min(1),
+  decision: z.enum(['approved', 'rejected']),
+  reviewer: OptionalTrimmedString,
+  reason: OptionalTrimmedString,
+})
+
+export const ApplyProvenanceReviewRequestSchema = z.object({
+  workspaceId: z.string().trim().min(1),
+  reviewer: OptionalTrimmedString,
+})
+
 export const UpdateBudgetRequestSchema = z
   .object({
     label: OptionalTrimmedString,
@@ -286,6 +298,8 @@ export type UpdateProviderProfileRequest = z.infer<typeof UpdateProviderProfileR
 export type CreateCronScheduleRequest = z.infer<typeof CreateCronScheduleRequestSchema>
 export type UpdateCronScheduleRequest = z.infer<typeof UpdateCronScheduleRequestSchema>
 export type CreateCronGrantRequest = z.infer<typeof CreateCronGrantRequestSchema>
+export type ProvenanceReviewDecisionRequest = z.infer<typeof ProvenanceReviewDecisionRequestSchema>
+export type ApplyProvenanceReviewRequest = z.infer<typeof ApplyProvenanceReviewRequestSchema>
 export type CreateBudgetRequest = z.infer<typeof CreateBudgetRequestSchema>
 export type UpdateBudgetRequest = z.infer<typeof UpdateBudgetRequestSchema>
 export type CreateDeploymentTargetRequest = z.infer<typeof CreateDeploymentTargetRequestSchema>

@@ -1277,6 +1277,129 @@ describe('createLocalGatewayClient', () => {
     expect(client.getSessionToken()).toBeUndefined()
   })
 
+  it('fetches provenance review routes with sanitized browser-facing payloads', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ url, init })
+      if (url.endsWith('/provenance-reviews?workspaceId=workspace_1')) {
+        return new Response(
+          JSON.stringify({
+            provenanceReviews: [
+              {
+                reviewId: 'review_1',
+                workspaceId: 'workspace_1',
+                kind: 'memory',
+                status: 'pending',
+                source: 'tool:memory.write',
+                actor: 'agent_1',
+                createdAt: '2026-07-01T00:00:00.000Z',
+                updatedAt: '2026-07-01T00:00:00.000Z',
+                mutation: {
+                  kind: 'memory',
+                  scope: 'workspace',
+                  tags: ['weekly'],
+                  textPreview: 'Remember concise weekly reports.',
+                },
+                scan: {
+                  status: 'pass',
+                  contentHash: 'hash_1',
+                  findings: [],
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/provenance-reviews/review_1/decision')) {
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({
+          workspaceId: 'workspace_1',
+          decision: 'approved',
+          reviewer: 'operator',
+        })
+        return new Response(
+          JSON.stringify({
+            provenanceReview: {
+              reviewId: 'review_1',
+              workspaceId: 'workspace_1',
+              kind: 'memory',
+              status: 'approved',
+              source: 'tool:memory.write',
+              createdAt: '2026-07-01T00:00:00.000Z',
+              updatedAt: '2026-07-01T00:01:00.000Z',
+              mutation: {
+                kind: 'memory',
+                scope: 'workspace',
+                tags: ['weekly'],
+                textPreview: 'Remember concise weekly reports.',
+              },
+              scan: {
+                status: 'pass',
+                contentHash: 'hash_1',
+                findings: [],
+              },
+              decision: {
+                decidedAt: '2026-07-01T00:01:00.000Z',
+                reviewer: 'operator',
+              },
+            },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/provenance-reviews/review_1/apply')) {
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({
+          workspaceId: 'workspace_1',
+          reviewer: 'operator',
+        })
+        return new Response(
+          JSON.stringify({
+            provenanceReviewApply: {
+              kind: 'memory',
+              reviewId: 'review_1',
+              memoryId: 'memory_1',
+              applied: true,
+            },
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(JSON.stringify({ error: `Unexpected route ${url}` }), { status: 404 })
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+
+    const listed = await client.provenanceReviews({ workspaceId: 'workspace_1' })
+    const decided = await client.decideProvenanceReview({
+      workspaceId: 'workspace_1',
+      reviewId: 'review_1',
+      decision: 'approved',
+      reviewer: 'operator',
+    })
+    const applied = await client.applyProvenanceReview({
+      workspaceId: 'workspace_1',
+      reviewId: 'review_1',
+      reviewer: 'operator',
+    })
+
+    expect(listed.provenanceReviews[0]?.mutation).toMatchObject({
+      kind: 'memory',
+      textPreview: 'Remember concise weekly reports.',
+    })
+    expect(decided.provenanceReview.status).toBe('approved')
+    expect(applied.provenanceReviewApply).toMatchObject({
+      kind: 'memory',
+      memoryId: 'memory_1',
+    })
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      '/provenance-reviews',
+      '/provenance-reviews/review_1/decision',
+      '/provenance-reviews/review_1/apply',
+    ])
+  })
+
   it('rejects successful gateway responses that contain browser-unsafe fields or host paths', async () => {
     const fetchImpl = vi.fn(async () =>
       new Response(

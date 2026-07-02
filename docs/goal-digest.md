@@ -8000,3 +8000,43 @@ Verification in this slice:
 Next recommended milestone:
 
 - Add operator-facing provenance review surfaces for staged memory/skill writes, or move examples/README quickstarts from `createMainspring` to `createRunLogMainspring` where compatibility is not required.
+
+## 2026-07-02 Provenance Review Surfaces Slice
+
+Goal:
+
+- Give local operators a real gateway/API/client/console path to review staged memory and skill mutations instead of relying only on exported queue helpers.
+
+Changes:
+
+- Added sanitized `ConsoleGatewayProvenanceReview` DTO projection for staged review records.
+- Added `LocalGateway.provenanceReviews.list/decide/apply` so workspace-local `.mainspring/provenance-review.jsonl` items can be listed, approved, rejected, and applied through the gateway authority path.
+- Added HTTP routes:
+  - `GET /provenance-reviews?workspaceId=...`
+  - `POST /provenance-reviews/:reviewId/decision`
+  - `POST /provenance-reviews/:reviewId/apply`
+- Added typed React console client methods for those routes.
+- Added a `ProvenanceReviewSummary` console component plus dashboard buttons to load reviews, approve/reject the first pending review, and apply the first approved review.
+- Added focused gateway, HTTP, console-client, and SSR rendering tests proving approval/apply behavior and sanitized browser payloads.
+- Updated current-state, local-gateway, migration, backlog, security-truth, and red-team docs.
+
+What this proves:
+
+- Staged memory and skill writes now have an operator-facing local review loop.
+- Browser DTOs expose review ids, mutation summaries, scan status, and finding labels without returning raw workspace roots or queue files.
+- Applying a staged mutation still requires prior approval; rejected items do not apply.
+
+Still honest:
+
+- This is local operator review, not hosted governance or remote marketplace trust.
+- Taint labels beyond deterministic scan findings remain pending.
+- Host execution remains unsafe host execution even when a skill or memory write has been reviewed.
+
+Verification in this slice:
+
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run src/provenance/ProvenanceReview.test.ts src/gateway/LocalGateway.test.ts src/gateway/server/createLocalGatewayServer.test.ts apps/console/src/localGatewayClient.test.ts apps/console/src/App.test.tsx`: passed, 5 files / 77 tests.
+
+Next recommended milestone:
+
+- Move examples and README quickstarts from `createMainspring` to `createRunLogMainspring` where gateway compatibility is not required, or add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the existing sanitized browser DTO boundary.

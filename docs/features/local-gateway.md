@@ -24,6 +24,14 @@ The local dev server created by `pnpm gateway:dev` now configures that RunLog ho
 
 When a gateway has a RunLog host, cron tick and run-now dispatch create ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events. Provider-only cron schedules queue normally; side-effecting schedules fail closed unless their metadata carries a scoped, unexpired cron grant. Operators can call `GET /cron/:scheduleId/grant` to preview the current grant decision and `POST /cron/:scheduleId/grant` to create an expiring scoped grant derived from the current schedule. The React console also exposes review/create controls that display the grant state without raw prompt hashes or secret refs. Gateways without a RunLog host keep the mailbox-compatible cron path for older embedders and migration verifiers.
 
+Staged memory/skill provenance reviews are exposed through local gateway routes:
+
+- `GET /provenance-reviews?workspaceId=...`
+- `POST /provenance-reviews/:reviewId/decision`
+- `POST /provenance-reviews/:reviewId/apply`
+
+These routes read the workspace-local `.mainspring/provenance-review.jsonl` queue, return sanitized browser DTOs, and apply only previously approved staged memory/skill mutations. The React console has matching controls to load the queue, approve/reject a pending item, and apply an approved item. This is local operator review, not remote marketplace trust.
+
 Gateway RunLog routes are local development surfaces. They do not create a hosted worker
 pool, do not change host execution limits, and do not create a multi-tenant control plane.
 
@@ -37,7 +45,7 @@ Hosted browser-access URLs are short-lived local bearer URLs for artifact previe
 - It does not provide enterprise SSO.
 - It does not provide secure desktop identity.
 - It does not execute tools or providers outside the runtime.
-- It does not yet provide provenance review controls for staged memory/skill writes.
+- It does not prove remote skill marketplace trust or third-party reputation.
 - Browser DTO sanitization is not a replacement for gateway-side auth, OS permissions, or artifact access checks.
 - Console response guards are regression tripwires, not the primary security boundary.
 

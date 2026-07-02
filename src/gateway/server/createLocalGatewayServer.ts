@@ -16,6 +16,7 @@ import {
   consoleDeploymentTarget,
   consoleMarketplaceInstall,
   consoleMarketplaceTemplate,
+  consoleProvenanceReview,
   consoleProviderProfile,
   consoleRunEvent,
   consoleRunDispatch,
@@ -34,6 +35,7 @@ import { GatewayHttpError, asGatewayHttpError } from './errors.js'
 import { HostedGatewayAuthManager } from './HostedAuth.js'
 import {
   CreateAgentRequestSchema,
+  ApplyProvenanceReviewRequestSchema,
   CreateBudgetRequestSchema,
   CreateClientRequestSchema,
   CreateCronGrantRequestSchema,
@@ -47,11 +49,13 @@ import {
   ResolveApprovalRequestSchema,
   StartRunRequestSchema,
   UpdateClientRequestSchema,
+  ProvenanceReviewDecisionRequestSchema,
   UpdateDeploymentTargetRequestSchema,
   UpdateAgentRequestSchema,
   UpdateBudgetRequestSchema,
   UpdateCronScheduleRequestSchema,
   UpdateProviderProfileRequestSchema,
+  type ApplyProvenanceReviewRequest,
   type CreateAgentRequest,
   type CreateBudgetRequest,
   type CreateClientRequest,
@@ -65,6 +69,7 @@ import {
   type InstallMarketplaceTemplateRequest,
   type ResolveApprovalRequest,
   type StartRunRequest,
+  type ProvenanceReviewDecisionRequest,
   type UpdateClientRequest,
   type UpdateDeploymentTargetRequest,
   type UpdateAgentRequest,
@@ -380,6 +385,33 @@ export class LocalGatewayHttpServer {
         return
       }
 
+      if (request.method === 'GET' && path === '/provenance-reviews') {
+        const workspaceId = url.searchParams.get('workspaceId')?.trim()
+        const status = url.searchParams.get('status')?.trim()
+        if (!workspaceId) {
+          throw new GatewayHttpError(400, 'workspaceId is required.')
+        }
+        if (
+          status
+          && !['pending', 'approved', 'rejected', 'applied'].includes(status)
+        ) {
+          throw new GatewayHttpError(400, 'Unsupported provenance review status.')
+        }
+        this.writeJson(
+          response,
+          200,
+          sanitizeGatewayResponse({
+            provenanceReviews: this.options.gateway.provenanceReviews
+              .list({
+                workspaceId,
+                ...(status ? { status: status as 'pending' | 'approved' | 'rejected' | 'applied' } : {}),
+              })
+              .map((item) => consoleProvenanceReview({ workspaceId, item })),
+          }),
+        )
+        return
+      }
+
       if (request.method === 'POST' && path === '/deployment-targets') {
         const body = await this.readJson(request)
         const parsed = CreateDeploymentTargetRequestSchema.parse(body)
@@ -427,6 +459,41 @@ export class LocalGatewayHttpServer {
         const parsed = InstallMarketplaceTemplateRequestSchema.parse(body)
         const installed = this.installMarketplaceTemplate(templateId, parsed)
         this.writeJson(response, 201, sanitizeGatewayResponse(consoleMarketplaceInstall(installed)))
+        return
+      }
+
+      if (request.method === 'POST' && path.startsWith('/provenance-reviews/') && path.endsWith('/decision')) {
+        const reviewId = decodeURIComponent(
+          path.slice('/provenance-reviews/'.length, -'/decision'.length),
+        )
+        const body = await this.readJson(request)
+        const parsed = ProvenanceReviewDecisionRequestSchema.parse(body)
+        const item = this.decideProvenanceReview(reviewId, parsed)
+        this.writeJson(
+          response,
+          200,
+          sanitizeGatewayResponse({
+            provenanceReview: consoleProvenanceReview({
+              workspaceId: parsed.workspaceId,
+              item,
+            }),
+          }),
+        )
+        return
+      }
+
+      if (request.method === 'POST' && path.startsWith('/provenance-reviews/') && path.endsWith('/apply')) {
+        const reviewId = decodeURIComponent(
+          path.slice('/provenance-reviews/'.length, -'/apply'.length),
+        )
+        const body = await this.readJson(request)
+        const parsed = ApplyProvenanceReviewRequestSchema.parse(body)
+        const applied = this.applyProvenanceReview(reviewId, parsed)
+        this.writeJson(
+          response,
+          200,
+          sanitizeGatewayResponse({ provenanceReviewApply: applied }),
+        )
         return
       }
 
@@ -890,6 +957,24 @@ export class LocalGatewayHttpServer {
 
   private deleteWorkspace(workspaceId: string) {
     return this.options.gateway.workspaces.delete(workspaceId)
+  }
+
+  private decideProvenanceReview(reviewId: string, input: ProvenanceReviewDecisionRequest) {
+    return this.options.gateway.provenanceReviews.decide({
+      reviewId,
+      workspaceId: input.workspaceId,
+      decision: input.decision,
+      reviewer: input.reviewer,
+      reason: input.reason,
+    })
+  }
+
+  private applyProvenanceReview(reviewId: string, input: ApplyProvenanceReviewRequest) {
+    return this.options.gateway.provenanceReviews.apply({
+      reviewId,
+      workspaceId: input.workspaceId,
+      reviewer: input.reviewer,
+    })
   }
 
   private createAgent(input: CreateAgentRequest) {

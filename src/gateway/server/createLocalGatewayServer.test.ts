@@ -4,6 +4,10 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MockProvider } from '../../providers/MockProvider.js'
 import type { AgentProvider, AgentQuery, QueryInput } from '../../providers/types.js'
+import {
+  scanMemoryMutation,
+  stageProvenanceReview,
+} from '../../provenance/ProvenanceReview.js'
 import { createMainspring } from '../../sdk/Mainspring.js'
 import { createRunLogMainspring } from '../../sdk/RunLogMainspring.js'
 import { executionBackendCapabilities } from '../../tools/ExecutionBackend.js'
@@ -2783,6 +2787,119 @@ describe('LocalGatewayHttpServer', () => {
       controller.abort()
     } finally {
       await server.stop()
+    }
+  })
+
+  it('lists, decides, and applies provenance reviews through sanitized HTTP routes', async () => {
+    const root = makeTempRoot('mainspring-gateway-http-provenance-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    fs.mkdirSync(sessionsRoot, { recursive: true })
+    fs.mkdirSync(workspaceRoot, { recursive: true })
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider(),
+      pollIntervalMs: 10,
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    try {
+      const workspace = appState.workspaces.create({
+        workspaceId: 'workspace_provenance_http',
+        name: 'HTTP Provenance Workspace',
+        root: workspaceRoot,
+      })
+      const memoryText = `Remember concise reports without showing ${workspaceRoot}.`
+      const staged = stageProvenanceReview({
+        workspaceRoot,
+        source: 'tool:memory.write',
+        actor: 'agent_http_memory',
+        runId: 'run_http_memory',
+        mutation: {
+          kind: 'memory',
+          text: memoryText,
+          scope: 'workspace',
+          tags: ['http-review'],
+        },
+        scan: scanMemoryMutation({
+          text: memoryText,
+          scope: 'workspace',
+          tags: ['http-review'],
+        }),
+      })
+      const started = await server.start()
+
+      const listed = await fetch(
+        `${started.url}/provenance-reviews?workspaceId=${encodeURIComponent(workspace.workspaceId)}`,
+      ).then((response) => response.json())
+      expect(listed).toMatchObject({
+        provenanceReviews: [
+          {
+            reviewId: staged.reviewId,
+            workspaceId: workspace.workspaceId,
+            status: 'pending',
+            kind: 'memory',
+            mutation: {
+              kind: 'memory',
+              scope: 'workspace',
+              tags: ['http-review'],
+            },
+          },
+        ],
+      })
+      expect(JSON.stringify(listed)).toContain('textPreview')
+      expect(JSON.stringify(listed)).not.toContain(workspaceRoot)
+      expect(JSON.stringify(listed)).not.toContain('workspaceRoot')
+
+      const approved = await fetch(
+        `${started.url}/provenance-reviews/${encodeURIComponent(staged.reviewId)}/decision`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: workspace.workspaceId,
+            decision: 'approved',
+            reviewer: 'operator',
+          }),
+        },
+      ).then((response) => response.json())
+      expect(approved).toMatchObject({
+        provenanceReview: {
+          reviewId: staged.reviewId,
+          status: 'approved',
+          decision: {
+            reviewer: 'operator',
+          },
+        },
+      })
+
+      const applied = await fetch(
+        `${started.url}/provenance-reviews/${encodeURIComponent(staged.reviewId)}/apply`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: workspace.workspaceId,
+            reviewer: 'operator',
+          }),
+        },
+      ).then((response) => response.json())
+      expect(applied).toMatchObject({
+        provenanceReviewApply: {
+          kind: 'memory',
+          reviewId: staged.reviewId,
+          applied: true,
+        },
+      })
+    } finally {
+      await server.stop()
+      appState.close()
+      await mainspring.stop()
     }
   })
 })

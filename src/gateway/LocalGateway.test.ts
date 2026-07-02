@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { MainspringMailbox } from '../mailbox/SqliteMailbox.js'
 import { EchoProvider } from '../providers/EchoProvider.js'
 import { MockProvider } from '../providers/MockProvider.js'
+import {
+  scanMemoryMutation,
+  stageProvenanceReview,
+} from '../provenance/ProvenanceReview.js'
 import { createMainspring } from '../sdk/Mainspring.js'
 import { createRunLogMainspring } from '../sdk/RunLogMainspring.js'
 import { executionBackendCapabilities } from '../tools/ExecutionBackend.js'
@@ -3534,6 +3538,151 @@ describe('LocalMainspringGateway', () => {
           targetId: 'coding-agent',
         }),
       ])
+    } finally {
+      appState.close()
+    }
+  })
+
+  it('reviews and applies staged provenance mutations through the gateway authority path', () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-provenance-review-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })
+
+    try {
+      const workspace = appState.workspaces.create({
+        workspaceId: 'workspace_provenance',
+        name: 'Provenance Workspace',
+        root: workspaceRoot,
+      })
+      const staged = stageProvenanceReview({
+        workspaceRoot,
+        source: 'tool:memory.write',
+        actor: 'agent_memory',
+        runId: 'run_memory',
+        mutation: {
+          kind: 'memory',
+          text: 'Remember that Northline prefers concise weekly reports.',
+          scope: 'workspace',
+          tags: ['weekly'],
+        },
+        scan: scanMemoryMutation({
+          text: 'Remember that Northline prefers concise weekly reports.',
+          scope: 'workspace',
+          tags: ['weekly'],
+        }),
+      })
+
+      expect(gateway.provenanceReviews.list({ workspaceId: workspace.workspaceId })).toEqual([
+        expect.objectContaining({
+          reviewId: staged.reviewId,
+          status: 'pending',
+          source: 'tool:memory.write',
+        }),
+      ])
+
+      const approved = gateway.provenanceReviews.decide({
+        workspaceId: workspace.workspaceId,
+        reviewId: staged.reviewId,
+        decision: 'approved',
+        reviewer: 'operator',
+      })
+      expect(approved.status).toBe('approved')
+
+      const applied = gateway.provenanceReviews.apply({
+        workspaceId: workspace.workspaceId,
+        reviewId: staged.reviewId,
+        reviewer: 'operator',
+      })
+      expect(applied).toMatchObject({
+        kind: 'memory',
+        reviewId: staged.reviewId,
+        applied: true,
+      })
+      expect(gateway.provenanceReviews.list({ workspaceId: workspace.workspaceId })).toEqual([
+        expect.objectContaining({
+          reviewId: staged.reviewId,
+          status: 'applied',
+        }),
+      ])
+      expect(appState.auditEvents.list({ category: 'provenance' })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            action: 'review.approved',
+            targetType: 'provenance-review',
+            targetId: staged.reviewId,
+          }),
+          expect.objectContaining({
+            action: 'review.applied',
+            targetType: 'provenance-review',
+            targetId: staged.reviewId,
+          }),
+        ]),
+      )
+    } finally {
+      appState.close()
+    }
+  })
+
+  it('does not apply rejected staged provenance mutations', () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-provenance-reject-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })
+
+    try {
+      const workspace = appState.workspaces.create({
+        workspaceId: 'workspace_reject',
+        name: 'Reject Workspace',
+        root: workspaceRoot,
+      })
+      const staged = stageProvenanceReview({
+        workspaceRoot,
+        mutation: {
+          kind: 'memory',
+          text: 'Reject this persistence attempt.',
+          scope: 'workspace',
+          tags: ['reject'],
+        },
+        scan: scanMemoryMutation({
+          text: 'Reject this persistence attempt.',
+          scope: 'workspace',
+          tags: ['reject'],
+        }),
+      })
+
+      gateway.provenanceReviews.decide({
+        workspaceId: workspace.workspaceId,
+        reviewId: staged.reviewId,
+        decision: 'rejected',
+        reviewer: 'operator',
+      })
+
+      expect(() =>
+        gateway.provenanceReviews.apply({
+          workspaceId: workspace.workspaceId,
+          reviewId: staged.reviewId,
+          reviewer: 'operator',
+        }),
+      ).toThrow('Provenance review item must be approved before apply.')
     } finally {
       appState.close()
     }

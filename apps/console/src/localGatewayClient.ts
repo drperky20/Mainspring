@@ -4,6 +4,53 @@ import {
   containsBrowserUnsafeGatewayText,
 } from 'mainspring/gateway/browser-safety'
 
+export type GatewayProvenanceReview = {
+  reviewId: string
+  workspaceId: string
+  kind: 'memory' | 'skill' | 'template'
+  status: string
+  source: string
+  runId?: string
+  agentId?: string
+  actor?: string
+  createdAt: string
+  updatedAt: string
+  mutation:
+    | {
+        kind: 'memory'
+        scope: string
+        tags: string[]
+        textPreview: string
+        sessionId?: string
+      }
+    | {
+        kind: 'skill'
+        action: string
+        manifest: {
+          key: string
+          name: string
+          description: string
+          version: string
+          source: string
+          permissionSummary: string
+        }
+      }
+    | {
+        kind: 'template'
+        summary: string
+      }
+  scan: {
+    status: string
+    contentHash: string
+    findings: Array<{ ruleId: string; severity: string; message: string; evidence?: string }>
+  }
+  decision?: {
+    decidedAt: string
+    reviewer: string
+    reason?: string
+  }
+}
+
 export interface LocalGatewayClient {
   health(): Promise<{
     mode: string
@@ -164,6 +211,26 @@ export interface LocalGatewayClient {
     session?: { sessionId: string; status: string; createdAt: string; updatedAt: string }
     agent: { agentId: string; workspaceId?: string; name: string; version: string; status: string }
     installedFiles: string[]
+  }>
+  provenanceReviews(input: {
+    workspaceId: string
+    status?: 'pending' | 'approved' | 'rejected' | 'applied'
+  }): Promise<{ provenanceReviews: GatewayProvenanceReview[] }>
+  decideProvenanceReview(input: {
+    workspaceId: string
+    reviewId: string
+    decision: 'approved' | 'rejected'
+    reviewer?: string
+    reason?: string
+  }): Promise<{ provenanceReview: GatewayProvenanceReview }>
+  applyProvenanceReview(input: {
+    workspaceId: string
+    reviewId: string
+    reviewer?: string
+  }): Promise<{
+    provenanceReviewApply:
+      | { kind: 'memory'; reviewId: string; memoryId: string; applied: true }
+      | { kind: 'skill'; reviewId: string; skillKey: string; action: 'installed' | 'updated'; applied: true }
   }>
   cells(input?: {
     workspaceId?: string
@@ -491,6 +558,22 @@ export function createLocalGatewayClient(
           body: JSON.stringify(input),
         },
       ),
+    provenanceReviews: (input) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/provenance-reviews${queryString(input)}`, {
+        headers: authHeaders(),
+      }),
+    decideProvenanceReview: ({ reviewId, ...input }) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/provenance-reviews/${encodeURIComponent(reviewId)}/decision`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(input),
+      }),
+    applyProvenanceReview: ({ reviewId, ...input }) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/provenance-reviews/${encodeURIComponent(reviewId)}/apply`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(input),
+      }),
     cells: (input = {}) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/cells${queryString(input)}`, { headers: authHeaders() }),
     cellStatus: () =>

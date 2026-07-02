@@ -8,6 +8,7 @@ import {
   GatewayDashboardQueues,
   GatewayClientDetailPanel,
   PricingCatalogStatusSummary,
+  ProvenanceReviewSummary,
   ProviderProfileForm,
   RunTrace,
   Skills,
@@ -274,6 +275,50 @@ describe('selected client and agent labels', () => {
     expect(markup).not.toContain('input_hash_should_not_render')
     expect(markup).not.toContain('manifest_hash_should_not_render')
     expect(markup).not.toContain('policy_hash_should_not_render')
+  })
+
+  it('renders provenance review state without exposing raw workspace paths', () => {
+    const markup = renderToStaticMarkup(
+      <ProvenanceReviewSummary
+        reviews={[
+          {
+            reviewId: 'review_1',
+            workspaceId: 'workspace_1',
+            kind: 'memory',
+            status: 'pending',
+            source: 'tool:memory.write',
+            actor: 'agent_1',
+            createdAt: '2026-07-01T00:00:00.000Z',
+            updatedAt: '2026-07-01T00:00:00.000Z',
+            mutation: {
+              kind: 'memory',
+              scope: 'workspace',
+              tags: ['weekly'],
+              textPreview: 'Remember concise reports.',
+            },
+            scan: {
+              status: 'review',
+              contentHash: 'content_hash_should_not_render',
+              findings: [
+                {
+                  ruleId: 'prompt-injection-directive',
+                  severity: 'warning',
+                  message: 'Review behavior-changing language.',
+                  evidence: 'C:\\Users\\drper\\hidden-workspace',
+                },
+              ],
+            },
+          },
+        ]}
+      />,
+    )
+
+    expect(markup).toContain('Provenance reviews')
+    expect(markup).toContain('1 staged mutation')
+    expect(markup).toContain('workspace memory: Remember concise reports.')
+    expect(markup).toContain('prompt-injection-directive:warning')
+    expect(markup).not.toContain('content_hash_should_not_render')
+    expect(markup).not.toContain('C:\\Users\\drper\\hidden-workspace')
   })
 
   it('renders the provider-profile editor with secret-ref guidance', () => {

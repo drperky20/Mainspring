@@ -2,6 +2,7 @@ import { sanitizeRuntimeResponse } from '#protocol'
 import type { RunEvent, RuntimeHealth } from '../contracts/runtime.js'
 import type { RunRecord } from '../contracts/runtime.js'
 import type { RunLogCronPolicyMetadata } from '../capabilities/cron/RunLogCron.js'
+import type { ProvenanceReviewItem } from '../provenance/ProvenanceReview.js'
 import type { RunRecord as RunLogRunRecord } from '../core/types.js'
 import { listStoredMemoryEntries } from '../memory/MemoryStore.js'
 import { redactBrowserUnsafeGatewayText } from './browserSafety.js'
@@ -421,6 +422,58 @@ export interface ConsoleGatewayCronRuntimeStatus {
   pollIntervalMs: number
   lastTickAt?: string
   lastError?: string
+}
+
+export interface ConsoleGatewayProvenanceReview {
+  reviewId: string
+  workspaceId: string
+  kind: 'memory' | 'skill' | 'template'
+  status: string
+  source: string
+  runId?: string
+  agentId?: string
+  actor?: string
+  createdAt: string
+  updatedAt: string
+  mutation:
+    | {
+        kind: 'memory'
+        scope: string
+        tags: string[]
+        textPreview: string
+        sessionId?: string
+      }
+    | {
+        kind: 'skill'
+        action: string
+        manifest: {
+          key: string
+          name: string
+          description: string
+          version: string
+          source: string
+          permissionSummary: string
+        }
+      }
+    | {
+        kind: 'template'
+        summary: string
+      }
+  scan: {
+    status: string
+    contentHash: string
+    findings: Array<{
+      ruleId: string
+      severity: string
+      message: string
+      evidence?: string
+    }>
+  }
+  decision?: {
+    decidedAt: string
+    reviewer: string
+    reason?: string
+  }
 }
 
 export interface ConsoleGatewayUsageLedgerEntry {
@@ -1358,6 +1411,85 @@ export function consoleCronRuntimeStatus(
     pollIntervalMs: record.pollIntervalMs,
     ...(record.lastTickAt ? { lastTickAt: record.lastTickAt } : {}),
     ...(record.lastError ? { lastError: browserSafePreviewText(record.lastError) } : {}),
+  }
+}
+
+export function consoleProvenanceReview(input: {
+  workspaceId: string
+  item: ProvenanceReviewItem
+}): ConsoleGatewayProvenanceReview {
+  return {
+    reviewId: browserSafePreviewText(input.item.reviewId),
+    workspaceId: input.workspaceId,
+    kind: input.item.kind,
+    status: browserSafePreviewText(input.item.status),
+    source: browserSafePreviewText(input.item.source),
+    ...(input.item.runId ? { runId: browserSafePreviewText(input.item.runId) } : {}),
+    ...(input.item.agentId ? { agentId: browserSafePreviewText(input.item.agentId) } : {}),
+    ...(input.item.actor ? { actor: browserSafePreviewText(input.item.actor) } : {}),
+    createdAt: input.item.createdAt,
+    updatedAt: input.item.updatedAt,
+    mutation: consoleProvenanceMutation(input.item.mutation),
+    scan: {
+      status: browserSafePreviewText(input.item.scan.status),
+      contentHash: browserSafePreviewText(input.item.scan.contentHash),
+      findings: input.item.scan.findings.map((finding) => ({
+        ruleId: browserSafePreviewText(finding.ruleId),
+        severity: browserSafePreviewText(finding.severity),
+        message: browserSafePreviewText(finding.message),
+        ...(finding.evidence ? { evidence: browserSafePreviewText(finding.evidence) } : {}),
+      })),
+    },
+    ...(input.item.decision
+      ? {
+          decision: {
+            decidedAt: input.item.decision.decidedAt,
+            reviewer: browserSafePreviewText(input.item.decision.reviewer),
+            ...(input.item.decision.reason
+              ? { reason: browserSafePreviewText(input.item.decision.reason) }
+              : {}),
+          },
+        }
+      : {}),
+  }
+}
+
+function consoleProvenanceMutation(
+  mutation: ProvenanceReviewItem['mutation'],
+): ConsoleGatewayProvenanceReview['mutation'] {
+  if (mutation.kind === 'memory') {
+    return {
+      kind: 'memory',
+      scope: browserSafePreviewText(mutation.scope),
+      tags: mutation.tags.map(browserSafePreviewText),
+      textPreview: browserSafePreviewText(mutation.text),
+      ...(mutation.sessionId ? { sessionId: browserSafePreviewText(mutation.sessionId) } : {}),
+    }
+  }
+  if (mutation.kind === 'skill') {
+    const permissions = mutation.manifest.permissions
+    const permissionSummary = [
+      permissions.filesystem ? `fs:${permissions.filesystem}` : undefined,
+      permissions.network ? `net:${permissions.network}` : undefined,
+      permissions.shell ? 'shell' : undefined,
+      permissions.secrets?.length ? `secrets:${permissions.secrets.length}` : undefined,
+    ].filter((value): value is string => Boolean(value)).join(', ') || 'none'
+    return {
+      kind: 'skill',
+      action: browserSafePreviewText(mutation.action),
+      manifest: {
+        key: browserSafePreviewText(mutation.manifest.key),
+        name: browserSafePreviewText(mutation.manifest.name),
+        description: browserSafePreviewText(mutation.manifest.description),
+        version: browserSafePreviewText(mutation.manifest.version),
+        source: browserSafePreviewText(mutation.manifest.source),
+        permissionSummary: browserSafePreviewText(permissionSummary),
+      },
+    }
+  }
+  return {
+    kind: 'template',
+    summary: 'Template review item',
   }
 }
 

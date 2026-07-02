@@ -68,6 +68,13 @@ import {
   skillFlagsFromAllowedTools,
   type LocalMarketplaceTemplateRecord,
 } from './TemplateMarketplace.js'
+import {
+  applyApprovedMemoryReview,
+  applyApprovedSkillReview,
+  createProvenanceReviewQueue,
+  type ProvenanceReviewItem,
+  type ProvenanceReviewStatus,
+} from '../provenance/ProvenanceReview.js'
 export type {
   LocalGatewayDeploymentCommandRunner,
   LocalGatewayDeploymentExecutionResult,
@@ -377,6 +384,29 @@ export interface LocalGatewayCreateCronGrantInput {
   maxExecutionCount?: number
   actor?: string
 }
+
+export interface LocalGatewayProvenanceReviewListInput {
+  workspaceId: string
+  status?: ProvenanceReviewStatus
+}
+
+export interface LocalGatewayProvenanceReviewDecisionInput {
+  workspaceId: string
+  reviewId: string
+  decision: Extract<ProvenanceReviewStatus, 'approved' | 'rejected'>
+  reviewer?: string
+  reason?: string
+}
+
+export interface LocalGatewayProvenanceReviewApplyInput {
+  workspaceId: string
+  reviewId: string
+  reviewer?: string
+}
+
+export type LocalGatewayAppliedProvenanceReview =
+  | { kind: 'memory'; reviewId: string; memoryId: string; applied: true }
+  | { kind: 'skill'; reviewId: string; skillKey: string; action: 'installed' | 'updated'; applied: true }
 
 export interface InstallLocalMarketplaceTemplateInput {
   templateId: string
@@ -1066,6 +1096,15 @@ export class LocalMainspringGateway {
     installTemplate: (
       input: InstallLocalMarketplaceTemplateInput,
     ): InstallLocalMarketplaceTemplateResult => this.installMarketplaceTemplate(input),
+  }
+
+  readonly provenanceReviews = {
+    list: (input: LocalGatewayProvenanceReviewListInput): ProvenanceReviewItem[] =>
+      this.listProvenanceReviews(input),
+    decide: (input: LocalGatewayProvenanceReviewDecisionInput): ProvenanceReviewItem =>
+      this.decideProvenanceReview(input),
+    apply: (input: LocalGatewayProvenanceReviewApplyInput): LocalGatewayAppliedProvenanceReview =>
+      this.applyProvenanceReview(input),
   }
 
   readonly runs = {
@@ -2633,6 +2672,84 @@ export class LocalMainspringGateway {
       },
     })
     return result
+  }
+
+  private listProvenanceReviews(
+    input: LocalGatewayProvenanceReviewListInput,
+  ): ProvenanceReviewItem[] {
+    const workspace = this.requireWorkspace(input.workspaceId)
+    const items = createProvenanceReviewQueue(workspace.root).list()
+    return input.status ? items.filter((item) => item.status === input.status) : items
+  }
+
+  private decideProvenanceReview(
+    input: LocalGatewayProvenanceReviewDecisionInput,
+  ): ProvenanceReviewItem {
+    const workspace = this.requireWorkspace(input.workspaceId)
+    const decided = createProvenanceReviewQueue(workspace.root).decide({
+      reviewId: input.reviewId,
+      decision: input.decision,
+      reviewer: input.reviewer?.trim() || 'operator',
+      ...(input.reason?.trim() ? { reason: input.reason.trim() } : {}),
+    })
+    this.requireAppState().auditEvents.create({
+      category: 'provenance',
+      action: `review.${input.decision}`,
+      actor: input.reviewer?.trim() || 'operator',
+      targetType: 'provenance-review',
+      targetId: input.reviewId,
+      metadata: {
+        workspaceId: input.workspaceId,
+        kind: decided.kind,
+        status: decided.status,
+      },
+    })
+    return decided
+  }
+
+  private applyProvenanceReview(
+    input: LocalGatewayProvenanceReviewApplyInput,
+  ): LocalGatewayAppliedProvenanceReview {
+    const workspace = this.requireWorkspace(input.workspaceId)
+    const queue = createProvenanceReviewQueue(workspace.root)
+    const item = queue.get(input.reviewId)
+    if (!item) throw new Error(`Unknown provenance review item: ${input.reviewId}`)
+    const reviewer = input.reviewer?.trim() || 'operator'
+    const applied = item.mutation.kind === 'memory'
+      ? {
+          kind: 'memory' as const,
+          ...applyApprovedMemoryReview({
+            workspaceRoot: workspace.root,
+            reviewId: input.reviewId,
+            reviewer,
+          }),
+        }
+      : {
+          kind: 'skill' as const,
+          ...applyApprovedSkillReview({
+            workspaceRoot: workspace.root,
+            reviewId: input.reviewId,
+            reviewer,
+          }),
+        }
+    this.requireAppState().auditEvents.create({
+      category: 'provenance',
+      action: 'review.applied',
+      actor: reviewer,
+      targetType: 'provenance-review',
+      targetId: input.reviewId,
+      metadata: {
+        workspaceId: input.workspaceId,
+        kind: applied.kind,
+      },
+    })
+    return applied
+  }
+
+  private requireWorkspace(workspaceId: string): LocalGatewayWorkspaceRecord {
+    const workspace = this.requireAppState().workspaces.get(workspaceId)
+    if (!workspace) throw new Error(`Unknown gateway workspace: ${workspaceId}`)
+    return workspace
   }
 
   private installMarketplaceTemplate(

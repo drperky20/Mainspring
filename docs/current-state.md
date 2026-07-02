@@ -68,6 +68,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - staged review records persist in `.mainspring/provenance-review.jsonl`.
   - `memory.write` and `skills.install` / `skills.update` scan before persistence, block high-risk findings, and stage review findings.
   - approved staged memory and skill writes can be applied through exported review helpers.
+  - the local gateway and React console can list, approve, reject, and apply staged memory/skill review records through sanitized browser DTOs.
   - `pnpm skills:check` scans local example templates and runs inside `pnpm verify` and `pnpm release:check`.
 
 ## Prototype Or Migration Surfaces
@@ -89,7 +90,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Remote skill marketplace trust, signed catalog distribution, and third-party reputation.
 - General checkpoint replay/retry controls beyond the implemented approval-resume continuation.
 - Child-run/subagent helper APIs beyond the parent-run data model.
-- Full provenance review UX for staged memory/skill writes through gateway/console surfaces.
+- Hosted or remote provenance review trust beyond the local staged review queue.
 - Not implemented: hosted multi-tenant auth, real billing, remote marketplace trust, VM isolation, or secure desktop credential vault.
 
 ## Runtime Seams To Preserve During Migration

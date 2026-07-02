@@ -65,7 +65,7 @@ The compatibility path is not a second product architecture. It is the migration
 
 ## Next Canonicalization Slices
 
-1. Add operator-facing provenance review surfaces for staged memory/skill writes.
-2. Move examples and README quickstarts from `createMainspring` to `createRunLogMainspring` where gateway compatibility is not required.
-3. Add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the existing sanitized browser DTO boundary.
+1. Move examples and README quickstarts from `createMainspring` to `createRunLogMainspring` where gateway compatibility is not required.
+2. Add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the existing sanitized browser DTO boundary.
+3. Add taint labels beyond scan findings for web/email/file-derived memory and skill mutations.
 4. Retire mailbox event projection once SDK/gateway/console no longer need it.
