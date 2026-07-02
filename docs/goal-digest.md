@@ -7965,3 +7965,38 @@ Verification in this slice:
 Next recommended milestone:
 
 - Add dedicated visual console controls for cron grant review/create, or move examples/README quickstarts from `createMainspring` to `createRunLogMainspring` where compatibility is not required.
+
+## 2026-07-02 Console Cron Grant Controls Slice
+
+Goal:
+
+- Let operators review and create scoped RunLog cron grants from the React console instead of calling gateway routes manually.
+
+Changes:
+
+- Added a `CronGrantSummary` console component that renders selected schedule grant state, policy decision, allowed tools, expiry, and execution counts.
+- Added local gateway dashboard actions for:
+  - reviewing the current cron grant decision through `GET /cron/:scheduleId/grant`;
+  - creating a short-lived single-execution scoped grant through `POST /cron/:scheduleId/grant`.
+- Kept the UI backed by the existing sanitized gateway client and schedule DTOs; the console does not render raw prompt hashes, schedule hashes, policy hashes, manifest hashes, or secret refs.
+- Added SSR coverage in `apps/console/src/App.test.tsx` for the cron grant summary and sanitized rendering.
+- Updated current-state, migration, backlog, local-gateway, automation, security truth, and red-team docs to mark visual cron grant controls complete.
+
+What this proves:
+
+- Operators using the browser console no longer need to hand-call API routes to review or create scoped cron grants.
+- Cron grant controls reuse the existing RunLog-backed gateway API/client path rather than adding a second console-only grant path.
+- The remaining console/operator UX gap has moved to provenance review surfaces for staged memory/skill writes, not cron grants.
+
+Verification in this slice:
+
+- `pnpm exec vitest run apps/console/src/App.test.tsx apps/console/src/localGatewayClient.test.ts`: passed, 2 files / 18 tests.
+- `pnpm --filter @mainspring/console typecheck`: passed.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 431 tests plus build, security, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end, including gateway systems, compiled `gateway:dev:help`, examples smoke, agentic harness, desktop systems, optional verifiers, package surface, package/npm dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Add operator-facing provenance review surfaces for staged memory/skill writes, or move examples/README quickstarts from `createMainspring` to `createRunLogMainspring` where compatibility is not required.

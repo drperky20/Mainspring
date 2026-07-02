@@ -108,6 +108,8 @@ type GatewayProviderProfileDraft = {
 type GatewayBudgetEvaluation = NonNullable<ConsoleGatewaySnapshot['budgetEvaluations']>[number]
 type GatewayPricingCatalogStatus = NonNullable<ConsoleGatewaySnapshot['pricingCatalog']>
 type GatewayUsageStatus = NonNullable<ConsoleGatewaySnapshot['usageStatus']>
+type GatewayCronSchedule = NonNullable<ConsoleGatewaySnapshot['cronSchedules']>[number]
+type GatewayCronGrantPreview = Awaited<ReturnType<LocalGatewayClient['cronGrant']>>['cronGrant']
 
 function budgetToolPolicyLabel(mode: GatewayBudgetEvaluation['costSensitiveTools']['mode']): string {
   if (mode === 'approval') return 'Cost-sensitive tools require budget review'
@@ -161,6 +163,63 @@ export function UsageStatusSummary({
       {usageStatus.total.summary.entries === 1 ? 'y' : 'ies'}; est $
       {usageStatus.estimatedCostUsd.toFixed(3)}; {usageStatus.unpricedEntries} unpriced.
     </small>
+  )
+}
+
+export function CronGrantSummary({
+  schedule,
+  preview,
+}: {
+  schedule?: GatewayCronSchedule
+  preview?: GatewayCronGrantPreview
+}) {
+  if (!schedule) return null
+  const snapshotGrant = schedule.cronGrant
+  const activeGrant = preview?.grant ?? snapshotGrant
+  const lastDecision = preview?.decision ?? preview?.lastDecision ?? snapshotGrant?.lastDecision
+  const grantRequired = preview?.grantRequired ?? Boolean(snapshotGrant)
+  const grantPresent = preview?.grantPresent ?? Boolean(activeGrant?.grantId)
+  const allowedTools = activeGrant?.allowedTools ?? snapshotGrant?.allowedTools ?? preview?.allowedTools ?? []
+  const decisionState = lastDecision?.state ?? (grantRequired ? 'unknown' : 'not required')
+  const decisionReasons =
+    'reasons' in (lastDecision ?? {})
+      ? (lastDecision as { reasons?: string[] }).reasons ?? []
+      : []
+
+  return (
+    <div className="preview-block cron-grant-summary">
+      <h2>Cron grant</h2>
+      <KeyValue label="Schedule" value={schedule.label} action={schedule.enabled ? 'Enabled' : 'Disabled'} />
+      <KeyValue
+        label="Grant state"
+        value={grantPresent ? 'Scoped grant active' : grantRequired ? 'Grant required' : 'No grant required'}
+        action={snapshotGrant?.mode ?? preview?.cronMode ?? 'policy'}
+      />
+      <KeyValue label="Policy decision" value={decisionState} />
+      <KeyValue
+        label="Allowed tools"
+        value={allowedTools.length > 0 ? allowedTools.join(', ') : 'No side-effecting tools allowed'}
+      />
+      {activeGrant?.expiresAt ? (
+        <KeyValue label="Expires" value={formatDetailTimestamp(activeGrant.expiresAt)} />
+      ) : null}
+      {typeof activeGrant?.executionCount === 'number'
+        && typeof activeGrant?.maxExecutionCount === 'number' ? (
+          <KeyValue
+            label="Executions"
+            value={`${activeGrant.executionCount}/${activeGrant.maxExecutionCount}`}
+          />
+        ) : null}
+      {decisionReasons.length > 0 ? (
+        <small className="gateway-action-hint">
+          Last decision: {decisionReasons.join(', ')}.
+        </small>
+      ) : (
+        <small className="gateway-action-hint">
+          Review uses the gateway projection and never displays raw prompt hashes or secret refs.
+        </small>
+      )}
+    </div>
   )
 }
 
@@ -374,6 +433,7 @@ export function App() {
   const [gatewayCronLabel, setGatewayCronLabel] = useState('Daily report')
   const [gatewayCronExpr, setGatewayCronExpr] = useState('0 9 * * 1')
   const [gatewayCronTimezone, setGatewayCronTimezone] = useState<'local' | 'utc'>('local')
+  const [gatewayCronGrantPreview, setGatewayCronGrantPreview] = useState<GatewayCronGrantPreview>()
   const [gatewayBudgetScopeType, setGatewayBudgetScopeType] = useState<'client' | 'workspace' | 'agent'>('workspace')
   const [gatewayBudgetLabel, setGatewayBudgetLabel] = useState('Workspace budget')
   const [gatewayBudgetMaxUsd, setGatewayBudgetMaxUsd] = useState('25')
@@ -724,6 +784,9 @@ export function App() {
     gatewaySelectedCronSchedule?.scheduleId,
     gatewaySelectedCronSchedule?.updatedAt,
   ])
+  useEffect(() => {
+    setGatewayCronGrantPreview(undefined)
+  }, [gatewaySelectedCronSchedule?.scheduleId, gatewaySelectedCronSchedule?.updatedAt])
   useEffect(() => {
     if (!gatewaySelectedBudget) return
     setSelectedGatewayBudgetId(gatewaySelectedBudget.budgetId)
@@ -1586,6 +1649,44 @@ export function App() {
     }
   }
 
+  async function reviewLocalGatewayCronGrant() {
+    if (!gatewayClient || !gatewaySelectedCronSchedule) return
+    setGatewayBusy(true)
+    try {
+      const response = await gatewayClient.cronGrant({
+        scheduleId: gatewaySelectedCronSchedule.scheduleId,
+      })
+      setGatewayCronGrantPreview(response.cronGrant)
+      setGatewayError('')
+      setNotice('Cron grant reviewed through local gateway dev mode.')
+    } catch (error) {
+      setGatewayError(error instanceof Error ? error.message : 'Failed to review cron grant.')
+    } finally {
+      setGatewayBusy(false)
+    }
+  }
+
+  async function createLocalGatewayCronGrant() {
+    if (!gatewayClient || !gatewaySelectedCronSchedule) return
+    setGatewayBusy(true)
+    try {
+      const response = await gatewayClient.createCronGrant({
+        scheduleId: gatewaySelectedCronSchedule.scheduleId,
+        expiresInMs: 24 * 60 * 60 * 1000,
+        maxExecutionCount: 1,
+        actor: gatewayAuthUser?.username ?? 'console-operator',
+      })
+      setGatewayCronGrantPreview(response.cronGrant)
+      await refreshGatewaySnapshot()
+      setGatewayError('')
+      setNotice('Scoped cron grant created through local gateway dev mode.')
+    } catch (error) {
+      setGatewayError(error instanceof Error ? error.message : 'Failed to create cron grant.')
+    } finally {
+      setGatewayBusy(false)
+    }
+  }
+
   async function deleteLocalGatewayCronSchedule() {
     if (!gatewayClient || !gatewaySelectedCronSchedule) return
     setGatewayBusy(true)
@@ -2339,6 +2440,10 @@ export function App() {
                   <BudgetToolPolicySummary evaluation={gatewaySelectedBudgetEvaluation} />
                   <PricingCatalogStatusSummary pricingCatalog={gatewaySnapshot?.pricingCatalog} />
                   <UsageStatusSummary usageStatus={gatewaySnapshot?.usageStatus} />
+                  <CronGrantSummary
+                    schedule={gatewaySelectedCronSchedule}
+                    preview={gatewayCronGrantPreview}
+                  />
                   <button
                     className="ghost-button"
                     onClick={() => {
@@ -2415,6 +2520,20 @@ export function App() {
                     disabled={gatewayBusy || !gatewaySelectedCronSchedule || !gatewaySelectedClientId}
                   >
                     Run cron now
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => void reviewLocalGatewayCronGrant()}
+                    disabled={gatewayBusy || !gatewaySelectedCronSchedule}
+                  >
+                    Review cron grant
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => void createLocalGatewayCronGrant()}
+                    disabled={gatewayBusy || !gatewaySelectedCronSchedule}
+                  >
+                    Create scoped cron grant
                   </button>
                   <button
                     className="ghost-button"

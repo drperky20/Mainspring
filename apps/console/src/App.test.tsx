@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   AgentSpec,
   BudgetToolPolicySummary,
+  CronGrantSummary,
   Dashboard,
   GatewayDashboardQueues,
   GatewayClientDetailPanel,
@@ -193,6 +194,86 @@ describe('selected client and agent labels', () => {
     expect(markup).toContain('Usage: 3 ledger entries')
     expect(markup).toContain('est $0.125')
     expect(markup).toContain('1 unpriced')
+  })
+
+  it('renders cron grant state without exposing raw grant hashes', () => {
+    const markup = renderToStaticMarkup(
+      <CronGrantSummary
+        schedule={{
+          scheduleId: 'schedule_1',
+          sessionId: 'session_1',
+          workspaceId: 'workspace_1',
+          agentId: 'agent_1',
+          label: 'Weekly digest',
+          promptPreview: 'Summarize weekly status.',
+          cronExpr: '0 9 * * 1',
+          timezone: 'local',
+          allowedTools: ['file.write'],
+          enabled: true,
+          nextRunAt: '2026-07-06T14:00:00.000Z',
+          lastRunAt: '2026-07-01T14:00:00.000Z',
+          createdAt: '2026-07-01T13:00:00.000Z',
+          updatedAt: '2026-07-01T13:30:00.000Z',
+          cronGrant: {
+            mode: 'allowlist',
+            grantId: 'cron_grant_1',
+            expiresAt: '2026-07-02T13:00:00.000Z',
+            executionCount: 0,
+            maxExecutionCount: 1,
+            allowedTools: ['file.write'],
+            lastDecision: {
+              decisionId: 'decision_1',
+              state: 'allow',
+              decidedAt: '2026-07-01T13:30:00.000Z',
+              reasons: [],
+            },
+          },
+        }}
+        preview={{
+          scheduleId: 'schedule_1',
+          sessionId: 'session_1',
+          agentId: 'agent_1',
+          workspaceId: 'workspace_1',
+          cronMode: 'allowlist',
+          headless: true,
+          grantRequired: true,
+          grantPresent: true,
+          scheduleKey: 'schedule-key-redacted',
+          allowedTools: ['file.write'],
+          decision: {
+            decisionId: 'decision_2',
+            state: 'allow',
+            reasons: [],
+            permissionCategories: ['cron', 'headless', 'side-effecting'],
+            inputHash: 'input_hash_should_not_render',
+            manifestHash: 'manifest_hash_should_not_render',
+            policyHash: 'policy_hash_should_not_render',
+          },
+          grant: {
+            grantId: 'cron_grant_1',
+            mode: 'allowlist',
+            promptHash: 'prompt_hash_should_not_render',
+            scheduleHash: 'schedule_hash_should_not_render',
+            allowedTools: ['file.write'],
+            expiresAt: '2026-07-02T13:00:00.000Z',
+            maxExecutionCount: 1,
+            executionCount: 0,
+            createdAt: '2026-07-01T13:30:00.000Z',
+          },
+        }}
+      />,
+    )
+
+    expect(markup).toContain('Cron grant')
+    expect(markup).toContain('Weekly digest')
+    expect(markup).toContain('Scoped grant active')
+    expect(markup).toContain('file.write')
+    expect(markup).toContain('0/1')
+    expect(markup).not.toContain('prompt_hash_should_not_render')
+    expect(markup).not.toContain('schedule_hash_should_not_render')
+    expect(markup).not.toContain('input_hash_should_not_render')
+    expect(markup).not.toContain('manifest_hash_should_not_render')
+    expect(markup).not.toContain('policy_hash_should_not_render')
   })
 
   it('renders the provider-profile editor with secret-ref guidance', () => {
