@@ -35,6 +35,9 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - scoped cron grants bind agent, prompt hash, schedule hash, allowed tools, expiration, and execution count.
   - due cron rows append `policy.decision.recorded` before `run.queued` or `run.failed`.
   - prompt mutation, grant expiry, execution-limit exhaustion, and schedule mismatch fail closed in focused tests.
+- Local-agent security regression coverage now exists in `src/security/agent-security-regression.test.ts` with a companion matrix in `docs/security-redteam-matrix.md`.
+  - The focused corpus covers host shell approval, loader/env-var injection, network-to-shell hard blocks, path traversal, symlink/junction escape, workspace mutation approval, browser/local URL policy, web-fetch SSRF rejection, memory and skill write approval, MCP/tool bridge policy routing, headless cron denial, and cron grant mutation.
+  - The matrix explicitly records partial/deferred classes such as cross-agent spoofing, subagent privilege expansion, malicious remote skill payload review, skill memory poisoning, and browser-adapter private-network enforcement.
 
 ## Prototype Or Migration Surfaces
 
@@ -84,6 +87,7 @@ Focused RunLog verification:
 ```bash
 pnpm exec vitest run src/core/RunLogKernel.test.ts src/package-exports.test.ts
 pnpm exec vitest run src/core src/tools src/policy
+pnpm exec vitest run src/security src/policy src/tools src/core
 pnpm exec tsc --noEmit
 ```
 

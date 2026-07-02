@@ -7331,6 +7331,34 @@ At the start of each continuation:
 
 Do not mark broad product features complete because scaffolds or docs exist. Be explicit about partial work.
 
+## 2026-07-02 Local Agent Security Regression Slice
+
+Added the first permanent local-agent security regression corpus for the RunLog Fabric hardening work.
+
+- Added `src/security/agent-security-regression.test.ts`.
+- Added `docs/security-redteam-matrix.md` as the repo-local mapping from local-agent failure classes to implemented answer, evidence, and remaining work.
+- Covered host shell approval, loader/env-var injection, network-to-shell hard blocks, workspace path traversal, symlink/junction escape, workspace mutation approval, browser/local URL approval, `web.fetch` local/metadata SSRF rejection, memory write approval, skill install approval, MCP/tool bridge routing through policy, headless cron denial, and cron grant mutation.
+- Explicitly left cross-agent/channel spoofing, subagent privilege expansion, malicious remote skill payload review, skill memory poisoning, and browser-adapter private-network enforcement as documented partial/deferred rows.
+- Updated current-state, security, and implementation backlog docs so the corpus is visible in normal repo orientation.
+
+Preserved runtime seams:
+
+`RunLogKernel -> RunLogScheduler -> RunLogExecutor -> ProviderRouter -> ToolRegistry / RuntimePolicyGuard -> ApprovalReceipt -> tools -> SQLite WAL events + checkpoints -> RunLogProjection / hosts`.
+
+Verification for the focused slice:
+
+- `pnpm exec vitest run src/security/agent-security-regression.test.ts`: passed, 1 file / 10 tests.
+- `pnpm exec vitest run src/security src/policy src/tools src/core`: passed, 6 files / 64 tests.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm verify`: passed, including 58 test files / 411 tests, build, security guards, docs check, console browser-safety check, and console build.
+- `pnpm release:check`: passed, including examples smoke, agentic harness check, desktop systems check, optional verifiers, package surface check, dry pack, npm dry pack, and `docker compose -f docker/compose.local.yml config`.
+
+Remaining risk:
+
+- The corpus proves the local boundaries that exist today; it does not implement cross-agent/channel auth, subagent capability inheritance, staged remote skill provenance scanning, or browser-adapter private-network blocking.
+- Host shell execution is still unsafe host process execution, not containment.
+
 ## 2026-07-02 RunLog Cron Headless Policy Slice
 
 Implemented scoped headless policy decisions for canonical RunLog cron rows.
