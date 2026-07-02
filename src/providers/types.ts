@@ -46,6 +46,7 @@ export interface QueryInput {
   effort?: string
   providerId?: string
   credentialRef?: RuntimeSecretRef
+  resolveCredential?: RuntimeSecretResolver
   messages?: ProviderMessage[]
   tools?: ProviderToolDefinition[]
   toolChoice?: ProviderToolChoice
@@ -85,6 +86,7 @@ export type ProviderEvent =
 
 export type RuntimeCredentialRef = RuntimeSecretRef
 export type RuntimeCredentialRefKind = RuntimeSecretRefKind
+export type RuntimeSecretResolver = (ref: RuntimeSecretRef) => string | undefined
 
 export interface RuntimeProviderClient {
   query(input: QueryInput): AgentQuery

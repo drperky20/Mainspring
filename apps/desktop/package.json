@@ -1,0 +1,52 @@
+{
+  "name": "@mainspring/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Experimental Electron shell for the local Mainspring console.",
+  "author": "Mainspring contributors",
+  "desktopName": "mainspring.desktop",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true }); require('node:fs').rmSync('release', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "pnpm run clean && pnpm --filter @mainspring/console build && tsc -p tsconfig.json",
+    "pack": "pnpm run clean && pnpm --filter @mainspring/console build && tsc -p tsconfig.json && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.7.0"
+  },
+  "build": {
+    "appId": "com.mainspring.desktop",
+    "productName": "Mainspring",
+    "executableName": "Mainspring",
+    "icon": "assets/icon.png",
+    "files": [
+      "dist/main.js",
+      "dist/main.js.map",
+      "dist/preload.js",
+      "dist/preload.js.map",
+      "dist/renderer.js",
+      "dist/renderer.js.map",
+      "dist/security.js",
+      "dist/security.js.map",
+      "../console/dist/**/*"
+    ],
+    "directories": {
+      "buildResources": "assets",
+      "output": "release"
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    }
+  }
+}

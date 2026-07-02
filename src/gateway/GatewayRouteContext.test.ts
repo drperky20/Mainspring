@@ -56,6 +56,10 @@ function snapshot(): LocalGatewaySnapshot {
           metadata: { apiKey: 'sk-or-secret' },
         },
       ],
+      approvals: [],
+      artifacts: [],
+      usageLedger: [],
+      auditEvents: [],
     },
     sessions: [
       {

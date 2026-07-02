@@ -1,4 +1,4 @@
-import type { GatewayRunDispatch, MainspringRuntimeProfile } from '#protocol'
+import type { GatewayRunDispatch, MainspringRuntimeProfile, RuntimePolicy } from '#protocol'
 import type {
   MainspringApprovalRecord,
   MainspringSessionRecord,
@@ -6,22 +6,208 @@ import type {
   RunRecord,
   RuntimeHealth,
   StartRunInput,
+  UsageUpdatedRunEventPayload,
 } from '../contracts/runtime.js'
-import { latestProviderInitWarningDetailFromRunEvents } from '../contracts/runtime.js'
+import { latestProviderInitDetailFromRunEvents } from '../contracts/runtime.js'
 import { MainspringMailbox, type InboundMessage } from '../mailbox/SqliteMailbox.js'
 import type { Mainspring } from '../sdk/Mainspring.js'
+import { estimateUsageCost } from '../usage/UsageAccounting.js'
+import {
+  describeModelPricingCatalog,
+  modelPricingCatalogFromEnv,
+  modelPricingCatalogPathFromEnv,
+  modelPricingCatalogSourceLabel,
+  type ModelPricing,
+  type ModelPricingCatalogStatus,
+} from '../usage/ModelPricing.js'
+import { summarizeUsageLedger, type UsageLedgerSummary } from '../usage/UsageLedger.js'
+import {
+  nextCronOccurrence,
+  parseCronExpression,
+  type CronTimezone,
+} from './CronExpression.js'
+import {
+  executeLocalGatewayDeployment,
+  planLocalGatewayDeployment,
+  type LocalGatewayDeploymentCommandRunner,
+  type LocalGatewayDeploymentExecutionResult,
+  type LocalGatewayDeploymentOperation,
+  type LocalGatewayDeploymentPlan,
+} from './DeploymentWizard.js'
+import {
+  inspectExecutionBackends,
+  type ExecutionBackendInventory,
+} from '../tools/ExecutionBackend.js'
+import {
+  HyperCellScheduler,
+  type AcquiredHyperCellRunLease,
+  type HyperCellSchedulerStatus,
+} from './HyperCellScheduler.js'
+import {
+  consoleApprovalMode,
+  installLocalMarketplaceTemplate,
+  listLocalMarketplaceTemplates,
+  skillFlagsFromAllowedTools,
+  type LocalMarketplaceTemplateRecord,
+} from './TemplateMarketplace.js'
+export type {
+  LocalGatewayDeploymentCommandRunner,
+  LocalGatewayDeploymentExecutionResult,
+  LocalGatewayDeploymentOperation,
+  LocalGatewayDeploymentPlan,
+} from './DeploymentWizard.js'
 import type {
+  CreateLocalGatewayCronScheduleInput,
+  CreateLocalGatewayProviderProfileInput,
   LocalGatewayAgentRecord,
+  LocalGatewayApprovalMetadataRecord,
   LocalGatewayAppStateStore,
+  LocalGatewayArtifactRecord,
+  LocalGatewayAuditEventRecord,
+  LocalGatewayBudgetRecord,
+  LocalGatewayBudgetScope,
+  LocalGatewayCellLeaseRecord,
+  LocalGatewayCellRecord,
+  LocalGatewayCellSnapshotRecord,
   LocalGatewayClientRecord,
+  LocalGatewayCronScheduleRecord,
+  LocalGatewayDeploymentRunRecord,
+  LocalGatewayDeploymentTargetRecord,
   LocalGatewayProviderProfileRecord,
   LocalGatewayRunMetadataRecord,
+  LocalGatewayToolCallRecord,
+  UpdateLocalGatewayCronScheduleInput,
+  UpdateLocalGatewayProviderProfileInput,
+  CreateLocalGatewayBudgetInput,
+  UpdateLocalGatewayBudgetInput,
+  LocalGatewayUsageLedgerEntryRecord,
   LocalGatewayWorkspaceRecord,
 } from './AppStateStore.js'
 
 export interface CreateLocalMainspringGatewayOptions {
   runtime: Mainspring
   appState?: LocalGatewayAppStateStore
+  cron?: {
+    enabled?: boolean
+    pollIntervalMs?: number
+    now?: () => Date
+  }
+  deployments?: {
+    repoRoot?: string
+    commandRunner?: LocalGatewayDeploymentCommandRunner
+  }
+  cells?: {
+    inspectBackends?: () => ExecutionBackendInventory
+    now?: () => Date
+    leaseTtlMs?: number
+    maxActiveLeasesPerCell?: number
+  }
+  marketplace?: {
+    repoRoot?: string
+  }
+  pricingCatalog?: readonly ModelPricing[]
+}
+
+export interface CreateLocalGatewayClientWorkspaceInput {
+  name: string
+  workspaceRoot?: string
+  workspaceName?: string
+  contact?: string
+  billingLabel?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface CreateLocalGatewayClientWorkspaceResult {
+  client: LocalGatewayClientRecord
+  workspace?: LocalGatewayWorkspaceRecord
+  session?: LocalGatewaySessionProjection
+}
+
+export interface CreateLocalGatewayWorkspaceSessionInput {
+  clientId: string
+  name: string
+  workspaceRoot: string
+}
+
+export interface CreateLocalGatewayWorkspaceSessionResult {
+  workspace: LocalGatewayWorkspaceRecord
+  session: LocalGatewaySessionProjection
+}
+
+export interface DeleteLocalGatewayWorkspaceResult {
+  workspaceId: string
+  deleted: true
+}
+
+export interface DeleteLocalGatewayClientResult {
+  clientId: string
+  deleted: true
+}
+
+export interface UpdateLocalGatewayClientWorkspaceInput {
+  clientId: string
+  name?: string
+  status?: LocalGatewayClientRecord['status']
+  contact?: string
+  billingLabel?: string
+  workspaceId?: string
+  workspaceName?: string
+  workspaceRoot?: string
+  workspaceStatus?: LocalGatewayWorkspaceRecord['status']
+  metadata?: Record<string, unknown>
+}
+
+export interface UpdateLocalGatewayClientWorkspaceResult {
+  client: LocalGatewayClientRecord
+  workspace?: LocalGatewayWorkspaceRecord
+}
+
+export interface CreateLocalGatewayAgentDraftInput {
+  workspaceId: string
+  name: string
+  version?: string
+  defaultModelId?: string
+  instructions?: string
+  outcome?: string
+  voice?: string
+  approvalMode?: string
+  modelLabel?: string
+  skills?: Record<string, boolean>
+  metadata?: Record<string, unknown>
+}
+
+export interface UpdateLocalGatewayAgentDraftInput {
+  agentId: string
+  name?: string
+  version?: string
+  defaultModelId?: string
+  instructions?: string
+  outcome?: string
+  voice?: string
+  approvalMode?: string
+  modelLabel?: string
+  skills?: Record<string, boolean>
+  metadata?: Record<string, unknown>
+}
+
+export interface CreateLocalGatewayProviderProfileDraftInput {
+  providerId: string
+  label: string
+  secretRef?: string
+  secretValue?: string
+  defaultModelId?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface UpdateLocalGatewayProviderProfileDraftInput {
+  profileId: string
+  providerId?: string
+  label?: string
+  secretRef?: string
+  secretValue?: string
+  defaultModelId?: string
+  status?: LocalGatewayProviderProfileRecord['status']
+  metadata?: Record<string, unknown>
 }
 
 export interface LocalGatewaySessionProjection {
@@ -58,6 +244,7 @@ export interface LocalGatewayRunProjection {
 
 export type LocalGatewayStartRunInput = StartRunInput & {
   sessionId: string
+  allowBudgetWarning?: boolean
 }
 
 export interface LocalGatewayEventListInput {
@@ -79,19 +266,221 @@ export type LocalGatewayAppStateRunInput = LocalGatewayStartRunInput & {
   providerProfileId?: string
 }
 
+export interface LocalGatewayCronScheduleDraftInput {
+  sessionId: string
+  workspaceId?: string
+  agentId?: string
+  providerProfileId?: string
+  computerId?: string
+  label: string
+  prompt: string
+  cronExpr: string
+  timezone?: CronTimezone
+  allowedTools?: string[]
+  runtimeProfile?: MainspringRuntimeProfile
+  enabled?: boolean
+}
+
+export interface UpdateLocalGatewayCronScheduleDraftInput {
+  scheduleId: string
+  sessionId?: string
+  workspaceId?: string
+  agentId?: string
+  providerProfileId?: string
+  computerId?: string
+  label?: string
+  prompt?: string
+  cronExpr?: string
+  timezone?: CronTimezone
+  allowedTools?: string[]
+  runtimeProfile?: MainspringRuntimeProfile
+  enabled?: boolean
+  nextRunAt?: string
+  lastRunAt?: string
+  lastError?: string
+}
+
+export interface LocalGatewayCronStatus {
+  enabled: boolean
+  running: boolean
+  pollIntervalMs: number
+  lastTickAt?: string
+  lastError?: string
+}
+
+export interface InstallLocalMarketplaceTemplateInput {
+  templateId: string
+  workspaceRoot: string
+  clientName?: string
+  workspaceName?: string
+  agentName?: string
+}
+
+export interface InstallLocalMarketplaceTemplateResult {
+  template: LocalMarketplaceTemplateRecord
+  client: LocalGatewayClientRecord
+  workspace?: LocalGatewayWorkspaceRecord
+  session?: LocalGatewaySessionProjection
+  agent: LocalGatewayAgentRecord
+  installedFiles: string[]
+}
+
+export interface LocalGatewayBudgetDraftInput {
+  scopeType: LocalGatewayBudgetScope
+  scopeId: string
+  label: string
+  maxEstimatedCostUsd: number
+  warnAtUsd?: number
+  status?: 'active' | 'archived'
+}
+
+export interface UpdateLocalGatewayBudgetDraftInput {
+  budgetId: string
+  label?: string
+  maxEstimatedCostUsd?: number
+  warnAtUsd?: number
+  status?: 'active' | 'archived'
+}
+
+export interface LocalGatewayBudgetEvaluation {
+  budgetId: string
+  scopeType: LocalGatewayBudgetScope
+  scopeId: string
+  label: string
+  scopeLabel: string
+  status: 'ok' | 'warn' | 'blocked'
+  maxEstimatedCostUsd: number
+  warnAtUsd: number
+  usedEstimatedCostUsd: number
+  remainingEstimatedCostUsd: number
+  usageEntryCount: number
+  pricedUsageEntryCount: number
+  unpricedUsageEntryCount: number
+  estimateCoverage: 'complete' | 'incomplete'
+  costSensitiveTools: {
+    mode: 'allow' | 'approval' | 'block'
+    reason: string
+  }
+}
+
+export interface LocalGatewayBudgetStatus {
+  evaluations: LocalGatewayBudgetEvaluation[]
+  blocked: number
+  warnings: number
+  usageStatus: LocalGatewayUsageStatus
+}
+
+export type LocalGatewayPricingCatalogStatus = ModelPricingCatalogStatus
+
+export interface LocalGatewayUsageRollup {
+  scopeType: 'total' | LocalGatewayBudgetScope
+  scopeId: string
+  scopeLabel: string
+  summary: UsageLedgerSummary
+}
+
+export interface LocalGatewayUsageStatus {
+  total: LocalGatewayUsageRollup
+  clients: LocalGatewayUsageRollup[]
+  workspaces: LocalGatewayUsageRollup[]
+  agents: LocalGatewayUsageRollup[]
+  unpricedEntries: number
+  pricedEntries: number
+  estimatedCostUsd: number
+}
+
+function runtimeBudgetPolicyFromEvaluations(
+  evaluations: readonly LocalGatewayBudgetEvaluation[],
+): RuntimePolicy['budget'] | undefined {
+  if (evaluations.length === 0) return undefined
+  const severity = { blocked: 2, warn: 1, ok: 0 } as const
+  const [selected] = [...evaluations].sort((left, right) => {
+    const severityDelta = severity[right.status] - severity[left.status]
+    if (severityDelta !== 0) return severityDelta
+    return left.remainingEstimatedCostUsd - right.remainingEstimatedCostUsd
+  })
+  if (!selected) return undefined
+  return {
+    status: selected.status,
+    scopeType: selected.scopeType,
+    scopeId: selected.scopeId,
+    budgetId: selected.budgetId,
+    label: selected.label,
+    reason:
+      selected.status === 'blocked'
+        ? `Budget blocked: ${selected.label} (${selected.scopeLabel})`
+        : selected.status === 'warn'
+          ? `Budget warning acknowledged: ${selected.label} (${selected.scopeLabel})`
+          : `Budget ok: ${selected.label} (${selected.scopeLabel})`,
+    estimatedCostUsd: selected.usedEstimatedCostUsd,
+    remainingEstimatedCostUsd: selected.remainingEstimatedCostUsd,
+    requireApproval: false,
+    enforceUsageLimit: true,
+    costSensitiveTools: selected.costSensitiveTools,
+  }
+}
+
+export type LocalGatewayCellStatus = HyperCellSchedulerStatus | {
+  enabled: false
+  leaseTtlMs: number
+  capacityEnforced: false
+  cells: 0
+  leases: {
+    active: 0
+    released: 0
+    expired: 0
+    total: 0
+  }
+  cellStatuses: []
+}
+
+export interface CreateLocalGatewayDeploymentTargetDraftInput {
+  workspaceId?: string
+  label: string
+  kind: LocalGatewayDeploymentTargetRecord['kind']
+  metadata?: Record<string, unknown>
+}
+
+export interface UpdateLocalGatewayDeploymentTargetDraftInput {
+  targetId: string
+  workspaceId?: string
+  label?: string
+  kind?: LocalGatewayDeploymentTargetRecord['kind']
+  status?: LocalGatewayDeploymentTargetRecord['status']
+  metadata?: Record<string, unknown>
+}
+
 export interface LocalGatewaySnapshot {
   generatedAt: string
   health: RuntimeHealth
+  executionBackends: ExecutionBackendInventory
   appState: {
     clients: LocalGatewayClientRecord[]
     workspaces: LocalGatewayWorkspaceRecord[]
     agents: LocalGatewayAgentRecord[]
     providerProfiles: LocalGatewayProviderProfileRecord[]
     runs: LocalGatewayRunMetadataRecord[]
+    approvals: LocalGatewayApprovalMetadataRecord[]
+    artifacts: LocalGatewayArtifactRecord[]
+    toolCalls: LocalGatewayToolCallRecord[]
+    deploymentTargets?: LocalGatewayDeploymentTargetRecord[]
+    deploymentRuns?: LocalGatewayDeploymentRunRecord[]
+    cells?: LocalGatewayCellRecord[]
+    cellLeases?: LocalGatewayCellLeaseRecord[]
+    cellSnapshots?: LocalGatewayCellSnapshotRecord[]
+    cronSchedules?: LocalGatewayCronScheduleRecord[]
+    budgets?: LocalGatewayBudgetRecord[]
+    usageLedger: LocalGatewayUsageLedgerEntryRecord[]
+    auditEvents: LocalGatewayAuditEventRecord[]
   }
   sessions: LocalGatewaySessionProjection[]
   runs: LocalGatewayRunProjection[]
   approvals: MainspringApprovalRecord[]
+  cron: LocalGatewayCronStatus
+  pricingCatalog: LocalGatewayPricingCatalogStatus
+  usageStatus: LocalGatewayUsageStatus
+  budgetStatus: LocalGatewayBudgetStatus
+  cellStatus: LocalGatewayCellStatus
 }
 
 function projectSession(session: MainspringSessionRecord): LocalGatewaySessionProjection {
@@ -104,6 +493,12 @@ function projectSession(session: MainspringSessionRecord): LocalGatewaySessionPr
     updatedAt: session.updatedAt,
     ...(session.metadata ? { metadata: session.metadata } : {}),
   }
+}
+
+function requiredGatewayText(value: string, label: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) throw new Error(`${label} is required.`)
+  return trimmed
 }
 
 function gatewayRunStatusFromEvents(events: RunEvent[]): RunRecord['status'] {
@@ -190,7 +585,7 @@ function providerInitProjectionFromEvents(
   LocalGatewayRunProjection,
   'providerId' | 'modelId' | 'modelFamily' | 'providerTransport' | 'providerSessionId'
 > {
-  const detail = latestProviderInitWarningDetailFromRunEvents(events)
+  const detail = latestProviderInitDetailFromRunEvents(events)
   if (!detail) return {}
   return {
     ...(detail.provider ? { providerId: detail.provider } : {}),
@@ -199,6 +594,104 @@ function providerInitProjectionFromEvents(
     ...(detail.providerTransport ? { providerTransport: detail.providerTransport } : {}),
     ...(detail.providerSessionId ? { providerSessionId: detail.providerSessionId } : {}),
   }
+}
+
+function approvalIdFromEvent(event: RunEvent): string | null {
+  if (
+    event.type !== 'approval.requested'
+    && event.type !== 'approval.approved'
+    && event.type !== 'approval.denied'
+  ) {
+    return null
+  }
+  const payload = event.payload as Record<string, unknown>
+  if (typeof payload.id === 'string') return payload.id
+  if (typeof payload.approvalId === 'string') return payload.approvalId
+  return null
+}
+
+function usageEntryIdForEvent(event: RunEvent): string {
+  return `usage_${event.eventId}`
+}
+
+function executionCellId(workspaceId: string, backendKey: string): string {
+  return `cell_exec_${workspaceId}_${backendKey}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
+function executionLeaseId(toolCallId: string, backendSessionId?: string): string {
+  return `lease_exec_${(backendSessionId ?? toolCallId)}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
+function artifactPathFromId(rootPath: string, artifactId: string): string {
+  return `${rootPath}/${artifactId}`.replace(/\\/g, '/')
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function textValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function stringListValue(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : []
+}
+
+function backendCapabilityMetadata(value: unknown): Record<string, unknown> | undefined {
+  const record = recordValue(value)
+  if (!record) return undefined
+  const metadata: Record<string, unknown> = {}
+  for (const key of [
+    'isolationKind',
+    'isolationStrength',
+    'securityBoundary',
+    'networkPolicy',
+    'workspaceMapping',
+  ]) {
+    const text = textValue(record[key])
+    if (text) metadata[key] = text
+  }
+  for (const key of ['requiresApproval', 'unsafeFallback']) {
+    if (typeof record[key] === 'boolean') metadata[key] = record[key]
+  }
+  const limits = stringListValue(record.limits)
+  if (limits.length > 0) metadata.limits = limits
+  return Object.keys(metadata).length > 0 ? metadata : undefined
+}
+
+function emptyUsageRollup(): LocalGatewayUsageRollup {
+  return {
+    scopeType: 'total',
+    scopeId: 'total',
+    scopeLabel: 'All usage',
+    summary: summarizeUsageLedger([]),
+  }
+}
+
+function emptyUsageStatus(): LocalGatewayUsageStatus {
+  const total = emptyUsageRollup()
+  return {
+    total,
+    clients: [],
+    workspaces: [],
+    agents: [],
+    unpricedEntries: 0,
+    pricedEntries: 0,
+    estimatedCostUsd: 0,
+  }
+}
+
+type LocalGatewayUsageEvaluationContext = {
+  usageEntries: LocalGatewayUsageLedgerEntryRecord[]
+  runsById: Map<string, LocalGatewayRunMetadataRecord>
+  workspacesById: Map<string, LocalGatewayWorkspaceRecord>
+  agentsById: Map<string, LocalGatewayAgentRecord>
+  clientsById: Map<string, LocalGatewayClientRecord>
 }
 
 /**
@@ -210,12 +703,66 @@ function providerInitProjectionFromEvents(
  */
 export class LocalMainspringGateway {
   readonly appState?: LocalGatewayAppStateStore
+  private readonly cronEnabled: boolean
+  private readonly cronPollIntervalMs: number
+  private readonly now: () => Date
+  private readonly deploymentRepoRoot: string
+  private readonly deploymentCommandRunner?: LocalGatewayDeploymentCommandRunner
+  private readonly inspectExecutionBackends: () => ExecutionBackendInventory
+  private readonly marketplaceRepoRoot: string
+  private readonly pricingCatalog: readonly ModelPricing[]
+  private readonly pricingCatalogStatus: LocalGatewayPricingCatalogStatus
+  private readonly budgetEvaluationStateById = new Map<string, LocalGatewayBudgetEvaluation['status']>()
+  private readonly hyperCells?: HyperCellScheduler
+  private cronTimer: NodeJS.Timeout | null = null
+  private cronLastTickAt?: string
+  private cronLastError?: string
+  private cronTickInFlight: Promise<void> | null = null
 
   constructor(
     private readonly runtime: Mainspring,
-    options: { appState?: LocalGatewayAppStateStore } = {},
+    options: CreateLocalMainspringGatewayOptions = { runtime },
   ) {
     this.appState = options.appState
+    this.cronEnabled = options.cron?.enabled ?? false
+    this.cronPollIntervalMs = Math.max(1_000, options.cron?.pollIntervalMs ?? 30_000)
+    this.now = options.cron?.now ?? (() => new Date())
+    this.deploymentRepoRoot = options.deployments?.repoRoot ?? process.cwd()
+    this.deploymentCommandRunner = options.deployments?.commandRunner
+    this.inspectExecutionBackends = options.cells?.inspectBackends ?? (() => inspectExecutionBackends())
+    this.marketplaceRepoRoot = options.marketplace?.repoRoot ?? process.cwd()
+    const envPricingCatalogPath = modelPricingCatalogPathFromEnv()
+    this.pricingCatalog = options.pricingCatalog ?? modelPricingCatalogFromEnv()
+    this.pricingCatalogStatus = describeModelPricingCatalog({
+      catalog: this.pricingCatalog,
+      configured: Boolean(options.pricingCatalog ?? envPricingCatalogPath),
+      configuredEntries: options.pricingCatalog
+        ? this.pricingCatalog.length
+        : envPricingCatalogPath
+          ? Math.max(0, this.pricingCatalog.length - describeModelPricingCatalog().builtInEntries)
+          : 0,
+      sourceLabel: options.pricingCatalog
+        ? 'in-process catalog'
+        : envPricingCatalogPath
+          ? modelPricingCatalogSourceLabel(envPricingCatalogPath)
+          : undefined,
+    })
+    this.hyperCells = this.appState
+      ? new HyperCellScheduler({
+          appState: this.appState,
+          inspectBackends: this.inspectExecutionBackends,
+          ...(options.cells?.now ? { now: options.cells.now } : {}),
+          ...(typeof options.cells?.leaseTtlMs === 'number'
+            ? { leaseTtlMs: options.cells.leaseTtlMs }
+            : {}),
+          ...(typeof options.cells?.maxActiveLeasesPerCell === 'number'
+            ? { maxActiveLeasesPerCell: options.cells.maxActiveLeasesPerCell }
+            : {}),
+        })
+      : undefined
+    if (this.cronEnabled && this.appState) {
+      this.startCronScheduler()
+    }
   }
 
   readonly sessions = {
@@ -227,8 +774,121 @@ export class LocalMainspringGateway {
     },
   }
 
+  readonly clients = {
+    create: (input: CreateLocalGatewayClientWorkspaceInput): CreateLocalGatewayClientWorkspaceResult =>
+      this.createClientWorkspace(input),
+    update: (input: UpdateLocalGatewayClientWorkspaceInput): UpdateLocalGatewayClientWorkspaceResult =>
+      this.updateClientWorkspace(input),
+    delete: (clientId: string): DeleteLocalGatewayClientResult => this.deleteClient(clientId),
+  }
+
+  readonly workspaces = {
+    create: (input: CreateLocalGatewayWorkspaceSessionInput): CreateLocalGatewayWorkspaceSessionResult =>
+      this.createWorkspaceSession(input),
+    delete: (workspaceId: string): DeleteLocalGatewayWorkspaceResult =>
+      this.deleteWorkspace(workspaceId),
+  }
+
+  readonly agents = {
+    create: (input: CreateLocalGatewayAgentDraftInput): LocalGatewayAgentRecord =>
+      this.createAgentDraft(input),
+    update: (input: UpdateLocalGatewayAgentDraftInput): LocalGatewayAgentRecord =>
+      this.updateAgentDraft(input),
+  }
+
+  readonly providerProfiles = {
+    create: (
+      input: CreateLocalGatewayProviderProfileDraftInput,
+    ): LocalGatewayProviderProfileRecord => this.createProviderProfileDraft(input),
+    update: (
+      input: UpdateLocalGatewayProviderProfileDraftInput,
+    ): LocalGatewayProviderProfileRecord => this.updateProviderProfileDraft(input),
+  }
+
+  readonly cron = {
+    list: (): LocalGatewayCronScheduleRecord[] => this.requireAppState().cronSchedules.list(),
+    create: (
+      input: LocalGatewayCronScheduleDraftInput,
+    ): LocalGatewayCronScheduleRecord => this.createCronScheduleDraft(input),
+    update: (
+      input: UpdateLocalGatewayCronScheduleDraftInput,
+    ): LocalGatewayCronScheduleRecord => this.updateCronScheduleDraft(input),
+    delete: (scheduleId: string): { scheduleId: string; deleted: true } => {
+      this.deleteCronSchedule(scheduleId)
+      return { scheduleId, deleted: true }
+    },
+    runNow: (scheduleId: string): RunRecord => this.runCronScheduleNow(scheduleId, 'manual'),
+    status: (): LocalGatewayCronStatus => ({
+      enabled: this.cronEnabled,
+      running: this.cronTimer !== null,
+      pollIntervalMs: this.cronPollIntervalMs,
+      ...(this.cronLastTickAt ? { lastTickAt: this.cronLastTickAt } : {}),
+      ...(this.cronLastError ? { lastError: this.cronLastError } : {}),
+    }),
+    tick: async (): Promise<void> => {
+      await this.runCronTick()
+    },
+  }
+
+  readonly budgets = {
+    list: (): LocalGatewayBudgetRecord[] => this.requireAppState().budgets.list(),
+    create: (input: LocalGatewayBudgetDraftInput): LocalGatewayBudgetRecord =>
+      this.createBudget(input),
+    update: (input: UpdateLocalGatewayBudgetDraftInput): LocalGatewayBudgetRecord =>
+      this.updateBudget(input),
+    delete: (budgetId: string): { budgetId: string; deleted: true } => {
+      this.deleteBudget(budgetId)
+      return { budgetId, deleted: true }
+    },
+    status: (): LocalGatewayBudgetStatus => this.budgetStatus(),
+  }
+
+  readonly usage = {
+    status: (): LocalGatewayUsageStatus => this.usageStatus(),
+  }
+
+  readonly deployments = {
+    listTargets: (workspaceId?: string): LocalGatewayDeploymentTargetRecord[] =>
+      this.requireAppState().deploymentTargets.list(workspaceId ? { workspaceId } : {}),
+    listRuns: (input: {
+      targetId?: string
+      status?: LocalGatewayDeploymentRunRecord['status']
+    } = {}): LocalGatewayDeploymentRunRecord[] => this.requireAppState().deploymentRuns.list(input),
+    createTarget: (
+      input: CreateLocalGatewayDeploymentTargetDraftInput,
+    ): LocalGatewayDeploymentTargetRecord => this.createDeploymentTarget(input),
+    updateTarget: (
+      input: UpdateLocalGatewayDeploymentTargetDraftInput,
+    ): LocalGatewayDeploymentTargetRecord => this.updateDeploymentTarget(input),
+    plan: (input: {
+      targetId: string
+      operation: LocalGatewayDeploymentOperation
+    }): LocalGatewayDeploymentPlan =>
+      planLocalGatewayDeployment({
+        appState: this.requireAppState(),
+        targetId: input.targetId,
+        operation: input.operation,
+      }),
+    execute: (input: {
+      targetId: string
+      operation: LocalGatewayDeploymentOperation
+      confirm: string
+    }): LocalGatewayDeploymentExecutionResult => this.executeDeployment(input),
+  }
+
+  readonly marketplace = {
+    listTemplates: (): LocalMarketplaceTemplateRecord[] =>
+      listLocalMarketplaceTemplates(this.marketplaceRepoRoot),
+    installTemplate: (
+      input: InstallLocalMarketplaceTemplateInput,
+    ): InstallLocalMarketplaceTemplateResult => this.installMarketplaceTemplate(input),
+  }
+
   readonly runs = {
-    list: (sessionId: string): LocalGatewayRunProjection[] => this.listRuns(sessionId),
+    list: (sessionId: string): LocalGatewayRunProjection[] => {
+      this.syncDerivedAppState()
+      return this.listRuns(sessionId)
+    },
     start: (input: LocalGatewayStartRunInput): RunRecord => {
       return this.startRun(input)
     },
@@ -248,30 +908,100 @@ export class LocalMainspringGateway {
   }
 
   readonly approvals = {
-    list: (): MainspringApprovalRecord[] => this.runtime.approvals.list(),
+    list: (): MainspringApprovalRecord[] => {
+      this.syncDerivedAppState()
+      return this.runtime.approvals.list()
+    },
     approve: (input: LocalGatewayApprovalResponseInput): void => {
       this.runtime.approvals.approve(input)
+      this.recordGatewayApprovalDecision(input, 'approved')
+      this.appState?.auditEvents.create({
+        category: 'gateway',
+        action: 'approval.approved',
+        actor: 'local-gateway',
+        targetType: 'approval',
+        targetId: input.approvalId,
+        runId: input.runId,
+        sessionId: input.sessionId,
+      })
     },
     deny: (input: LocalGatewayApprovalResponseInput): void => {
       this.runtime.approvals.deny(input)
+      this.recordGatewayApprovalDecision(input, 'denied')
+      this.appState?.auditEvents.create({
+        category: 'gateway',
+        action: 'approval.denied',
+        actor: 'local-gateway',
+        targetType: 'approval',
+        targetId: input.approvalId,
+        runId: input.runId,
+        sessionId: input.sessionId,
+      })
     },
   }
 
+  private recordGatewayApprovalDecision(
+    input: LocalGatewayApprovalResponseInput,
+    status: 'approved' | 'denied',
+  ): void {
+    if (!this.appState) return
+
+    const existing = this.appState.approvals.get(input.approvalId)
+    const runMetadata = this.appState.runs.get(input.runId)
+    this.appState.approvals.upsert({
+      approvalId: input.approvalId,
+      runId: input.runId,
+      sessionId: input.sessionId,
+      ...(existing?.workspaceId ?? runMetadata?.workspaceId
+        ? { workspaceId: existing?.workspaceId ?? runMetadata?.workspaceId }
+        : {}),
+      ...(existing?.agentId ?? runMetadata?.agentId
+        ? { agentId: existing?.agentId ?? runMetadata?.agentId }
+        : {}),
+      status,
+      ...(existing?.targetKey ? { targetKey: existing.targetKey } : {}),
+      ...(existing?.requestedAt ? { requestedAt: existing.requestedAt } : {}),
+      resolvedAt: new Date().toISOString(),
+      ...(existing?.metadata ? { metadata: existing.metadata } : {}),
+    })
+  }
+
   snapshot(): LocalGatewaySnapshot {
+    this.syncDerivedAppState()
     const sessions = this.sessions.list()
+    const runs = sessions.flatMap((session) => this.runs.list(session.sessionId))
+    const approvals = this.approvals.list()
     return {
       generatedAt: new Date().toISOString(),
       health: this.runtime.health(),
+      executionBackends: this.inspectExecutionBackends(),
       appState: {
         clients: this.appState?.clients.list() ?? [],
         workspaces: this.appState?.workspaces.list() ?? [],
         agents: this.appState?.agents.list() ?? [],
         providerProfiles: this.appState?.providerProfiles.list() ?? [],
         runs: this.appState?.runs.list() ?? [],
+        approvals: this.appState?.approvals.list() ?? [],
+        artifacts: this.appState?.artifacts.list() ?? [],
+        toolCalls: this.appState?.toolCalls.list() ?? [],
+        deploymentTargets: this.appState?.deploymentTargets.list() ?? [],
+        deploymentRuns: this.appState?.deploymentRuns.list() ?? [],
+        cells: this.appState?.cells.list() ?? [],
+        cellLeases: this.appState?.cellLeases.list() ?? [],
+        cellSnapshots: this.appState?.cellSnapshots.list() ?? [],
+        cronSchedules: this.appState?.cronSchedules.list() ?? [],
+        budgets: this.appState?.budgets.list() ?? [],
+        usageLedger: this.appState?.usageLedger.list() ?? [],
+        auditEvents: this.appState?.auditEvents.list() ?? [],
       },
       sessions,
-      runs: sessions.flatMap((session) => this.runs.list(session.sessionId)),
-      approvals: this.approvals.list(),
+      runs,
+      approvals,
+      cron: this.cron.status(),
+      pricingCatalog: this.pricingCatalogStatus,
+      usageStatus: this.usageStatus(),
+      budgetStatus: this.budgetStatus(),
+      cellStatus: this.cellStatus(),
     }
   }
 
@@ -353,11 +1083,66 @@ export class LocalMainspringGateway {
     input: LocalGatewayStartRunInput,
     metadata: { providerProfileId?: string } = {},
   ): RunRecord {
-    const { sessionId, ...runInput } = input
+    const { sessionId, allowBudgetWarning: _allowBudgetWarning, ...runInput } = input
     const session = this.runtime.storage.stateStore.getSession(sessionId)
     if (!session) throw new Error(`Unknown session: ${sessionId}`)
-    const run = this.runtime.storage.commandStore.enqueueRun(session, runInput)
-    this.persistRunMetadata(run, input, metadata)
+    const budgetEvaluations = this.assertRunBudgetAllowed(input, session)
+    const budgetPolicy = runtimeBudgetPolicyFromEvaluations(budgetEvaluations)
+    const cellLeasePlan = this.hyperCells?.planRunLease({
+      session,
+      computerId: input.computerId,
+      workspaceId: input.workspaceId,
+    })
+    const run = this.runtime.storage.commandStore.enqueueRun(session, {
+      ...runInput,
+      ...(budgetPolicy ? { budget: budgetPolicy } : {}),
+    })
+    const cellLease =
+      this.hyperCells && cellLeasePlan
+        ? this.hyperCells.acquirePlannedRunLease({
+            session,
+            run,
+            sessionId: input.sessionId,
+            computerId: input.computerId,
+            workspaceId: input.workspaceId,
+            plan: cellLeasePlan,
+          })
+        : undefined
+    this.persistRunMetadata(run, input, metadata, cellLease)
+    this.appState?.auditEvents.create({
+      category: 'gateway',
+      action: 'run.enqueued',
+      actor: 'local-gateway',
+      targetType: 'run',
+      targetId: run.runId,
+      runId: run.runId,
+      sessionId: input.sessionId,
+      metadata: {
+        ...(cellLease
+          ? {
+              cellId: cellLease.plan.cellId,
+              cellLeaseId: cellLease.leaseId,
+              backend: cellLease.plan.backend.key,
+              backendUnsafe: cellLease.plan.backend.unsafe,
+            }
+          : {}),
+      },
+    })
+    const warningBudgets = budgetEvaluations.filter((evaluation) => evaluation.status === 'warn')
+    if (warningBudgets.length > 0) {
+      this.appState?.auditEvents.create({
+        category: 'billing',
+        action: 'budget.warn',
+        actor: 'local-gateway',
+        targetType: 'run',
+        targetId: run.runId,
+        runId: run.runId,
+        sessionId: input.sessionId,
+        metadata: {
+          budgetIds: warningBudgets.map((evaluation) => evaluation.budgetId),
+        },
+      })
+    }
     return run
   }
 
@@ -365,6 +1150,7 @@ export class LocalMainspringGateway {
     run: RunRecord,
     input: LocalGatewayStartRunInput,
     metadata: { providerProfileId?: string },
+    cellLease?: AcquiredHyperCellRunLease,
   ): void {
     this.appState?.runs.upsert({
       runId: run.runId,
@@ -375,7 +1161,510 @@ export class LocalMainspringGateway {
       ...(input.providerId ? { providerId: input.providerId } : {}),
       ...(input.modelId ? { modelId: input.modelId } : {}),
       ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+      ...(cellLease
+        ? {
+            metadata: {
+              cellId: cellLease.plan.cellId,
+              cellLeaseId: cellLease.leaseId,
+              requestedComputerId: cellLease.plan.requestedComputerId,
+              executionBackend: cellLease.plan.backend.key,
+              executionBackendUnsafe: cellLease.plan.backend.unsafe,
+            },
+          }
+        : {}),
     })
+  }
+
+  private syncApprovalMetadata(): void {
+    if (!this.appState) return
+
+    for (const session of this.runtime.storage.stateStore.listSessions()) {
+      const runMetadataByRunId = new Map(
+        this.appState.runs
+          .list({ sessionId: session.sessionId })
+          .map((record) => [record.runId, record] as const),
+      )
+      const events = this.runtime.storage.eventStore.listSessionEvents({
+        sessionId: session.sessionId,
+        limit: 500,
+      })
+
+      for (const event of events) {
+        const approvalId = approvalIdFromEvent(event)
+        if (!approvalId) continue
+
+        const runMetadata = runMetadataByRunId.get(event.runId)
+        const existing = this.appState.approvals.get(approvalId)
+        const payload = event.payload as Record<string, unknown>
+        const targetKey =
+          typeof payload.targetKey === 'string'
+            ? payload.targetKey
+            : existing?.targetKey
+        const status =
+          event.type === 'approval.requested'
+            ? existing && existing.status !== 'pending'
+              ? existing.status
+              : 'pending'
+            : event.type === 'approval.approved'
+              ? 'approved'
+              : 'denied'
+        const resolvedAt =
+          event.type === 'approval.approved' || event.type === 'approval.denied'
+            ? event.timestamp
+            : existing && existing.status !== 'pending'
+              ? existing.resolvedAt
+              : undefined
+
+        this.appState.approvals.upsert({
+          approvalId,
+          runId: event.runId,
+          sessionId: event.sessionId,
+          ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
+          ...(runMetadata?.agentId ? { agentId: runMetadata.agentId } : {}),
+          status,
+          ...(targetKey ? { targetKey } : {}),
+          requestedAt: existing?.requestedAt ?? event.timestamp,
+          ...(resolvedAt ? { resolvedAt } : {}),
+          metadata: {
+            ...(Array.isArray(payload.reasons)
+              ? { reasons: payload.reasons.map(String) }
+              : existing?.metadata && typeof existing.metadata === 'object'
+                ? existing.metadata
+                : {}),
+            ...(Array.isArray(payload.permissionCategories)
+              ? { permissionCategories: payload.permissionCategories.map(String) }
+              : {}),
+          },
+        })
+      }
+    }
+  }
+
+  private syncUsageLedger(): void {
+    if (!this.appState) return
+
+    for (const session of this.runtime.storage.stateStore.listSessions()) {
+      const runMetadataByRunId = new Map(
+        this.appState.runs
+          .list({ sessionId: session.sessionId })
+          .map((record) => [record.runId, record] as const),
+      )
+      const sessionEvents = this.runtime.storage.eventStore.listSessionEvents({
+        sessionId: session.sessionId,
+        limit: 500,
+      })
+      const usageEvents = sessionEvents.filter(
+        (event): event is RunEvent<UsageUpdatedRunEventPayload> => event.type === 'usage.updated',
+      )
+
+      for (const event of usageEvents) {
+        const entryId = usageEntryIdForEvent(event)
+        if (this.appState.usageLedger.get(entryId)) continue
+
+        const budgetStatusBefore = new Map(
+          this.evaluateBudgets(this.appState).map((evaluation) => [evaluation.budgetId, evaluation] as const),
+        )
+        const runMetadata = runMetadataByRunId.get(event.runId)
+        const providerInitDetail = latestProviderInitDetailFromRunEvents(
+          sessionEvents.filter((candidate) => candidate.runId === event.runId),
+        )
+        const payload: UsageUpdatedRunEventPayload = {
+          ...providerInitDetail,
+          ...event.payload,
+          provider: event.payload.provider ?? providerInitDetail?.provider,
+          modelId: event.payload.modelId ?? providerInitDetail?.modelId,
+          modelFamily: event.payload.modelFamily ?? providerInitDetail?.modelFamily,
+          providerTransport:
+            event.payload.providerTransport ?? providerInitDetail?.providerTransport,
+          providerSessionId:
+            event.payload.providerSessionId ?? providerInitDetail?.providerSessionId,
+        }
+        const costEstimate = estimateUsageCost({ usage: payload, catalog: this.pricingCatalog })
+
+        this.appState.usageLedger.create({
+          entryId,
+          runId: event.runId,
+          sessionId: event.sessionId,
+          ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
+          ...(payload.provider ?? runMetadata?.providerId
+            ? { providerId: payload.provider ?? runMetadata?.providerId }
+            : {}),
+          ...(payload.modelId ?? runMetadata?.modelId
+            ? { modelId: payload.modelId ?? runMetadata?.modelId }
+            : {}),
+          ...(typeof payload.inputTokens === 'number'
+            ? { inputTokens: payload.inputTokens }
+            : {}),
+          ...(typeof payload.outputTokens === 'number'
+            ? { outputTokens: payload.outputTokens }
+            : {}),
+          ...(typeof payload.totalTokens === 'number'
+            ? { totalTokens: payload.totalTokens }
+            : {}),
+          ...(typeof costEstimate.estimatedCostUsd === 'number'
+            ? { estimatedCostUsd: costEstimate.estimatedCostUsd }
+            : {}),
+          metadata: {
+            sourceEventId: event.eventId,
+            sourceSeq: event.seq,
+            pricingStatus: costEstimate.pricingStatus,
+            ...(costEstimate.pricing
+              ? { pricingModelId: costEstimate.pricing.modelId }
+              : {}),
+            ...(payload.modelFamily ? { modelFamily: payload.modelFamily } : {}),
+            ...(payload.providerTransport
+              ? { providerTransport: payload.providerTransport }
+              : {}),
+            ...(payload.providerSessionId
+              ? { providerSessionId: payload.providerSessionId }
+              : {}),
+            ...(typeof payload.cacheReadTokens === 'number'
+              ? { cacheReadTokens: payload.cacheReadTokens }
+              : {}),
+            ...(typeof payload.cacheWriteTokens === 'number'
+              ? { cacheWriteTokens: payload.cacheWriteTokens }
+              : {}),
+            ...(typeof payload.reasoningTokens === 'number'
+              ? { reasoningTokens: payload.reasoningTokens }
+              : {}),
+            ...(payload.rateLimit ? { rateLimit: payload.rateLimit } : {}),
+          },
+        })
+        this.recordBudgetTransitions({
+          appState: this.appState,
+          runId: event.runId,
+          sessionId: event.sessionId,
+          entryId,
+          previousStatuses: budgetStatusBefore,
+        })
+      }
+    }
+  }
+
+  private syncToolCalls(): void {
+    if (!this.appState) return
+
+    for (const session of this.runtime.storage.stateStore.listSessions()) {
+      const runMetadataByRunId = new Map(
+        this.appState.runs
+          .list({ sessionId: session.sessionId })
+          .map((record) => [record.runId, record] as const),
+      )
+      const events = this.runtime.storage.eventStore.listSessionEvents({
+        sessionId: session.sessionId,
+        limit: 500,
+      })
+
+      for (const event of events) {
+        let status: LocalGatewayToolCallRecord['status'] | null = null
+        if (event.type === 'tool.call.requested') status = 'requested'
+        if (event.type === 'tool.call.updated') status = 'updated'
+        if (event.type === 'tool.call.completed') status = 'completed'
+        if (event.type === 'tool.call.failed') status = 'failed'
+        if (event.type === 'tool.call.blocked') status = 'blocked'
+        if (!status) continue
+
+        const payload = recordValue(event.payload)
+        const toolCallId = textValue(payload?.toolCallId)
+        if (!toolCallId) continue
+        const existingToolCall = this.appState.toolCalls.get(toolCallId)
+        const toolName = textValue(payload?.name) ?? existingToolCall?.toolName ?? toolCallId
+
+        const runMetadata = runMetadataByRunId.get(event.runId)
+        const outputRecord =
+          event.type === 'tool.call.completed' || event.type === 'tool.call.failed'
+            ? recordValue(payload?.output)
+            : event.type === 'tool.call.blocked'
+              ? recordValue(payload?.output)
+              : null
+        const outputRef =
+          textValue(outputRecord?.artifactId)
+          ?? textValue(outputRecord?.artifact)
+          ?? textValue(outputRecord?.url)
+
+        this.appState.toolCalls.upsert({
+          toolCallId,
+          runId: event.runId,
+          sessionId: event.sessionId,
+          toolName,
+          status,
+          ...(runMetadata?.agentId ? { agentId: runMetadata.agentId } : {}),
+          ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
+          ...(outputRef ? { outputRef } : {}),
+          metadata: {
+            sourceEventId: event.eventId,
+            sourceSeq: event.seq,
+            ...(event.type === 'tool.call.blocked' && typeof payload?.status === 'string'
+              ? { blockedStatus: payload.status }
+              : {}),
+          },
+        })
+        this.syncExecutionCellProjection({
+          event,
+          runMetadata,
+          toolCallId,
+          toolName,
+          outputRecord,
+        })
+      }
+    }
+  }
+
+  private syncExecutionCellProjection(input: {
+    event: RunEvent
+    runMetadata: LocalGatewayRunMetadataRecord | undefined
+    toolCallId: string
+    toolName: string
+    outputRecord: Record<string, unknown> | null
+  }): void {
+    if (!this.appState || !input.runMetadata?.workspaceId || !input.outputRecord) return
+
+    const backendKey = textValue(input.outputRecord.backend)
+    const backendLabel = textValue(input.outputRecord.backendLabel)
+    if (!backendKey || !backendLabel) return
+
+    const workspaceId = input.runMetadata.workspaceId
+    const executionCellRecord = recordValue(input.outputRecord.executionCell)
+    const executionLeaseRecord = recordValue(input.outputRecord.executionLease)
+    const cellId = executionCellId(workspaceId, backendKey)
+    const backendSessionId = textValue(input.outputRecord.sessionId)
+    const executionStatus = textValue(input.outputRecord.status) ?? 'observed'
+    const backendUnsafe = input.outputRecord.backendUnsafe === true
+    const backendCapabilities =
+      backendCapabilityMetadata(input.outputRecord.backendCapabilities)
+      ?? backendCapabilityMetadata(executionCellRecord?.backendCapabilities)
+    const leaseId =
+      textValue(executionLeaseRecord?.leaseId)
+      ?? executionLeaseId(input.toolCallId, backendSessionId)
+    const existingCell = this.appState.cells.get(cellId)
+
+    if (existingCell) {
+      this.appState.cells.update({
+        cellId,
+        workspaceId,
+        label: backendLabel,
+        status: 'active',
+        metadata: {
+          source: 'execution-backend',
+          backend: backendKey,
+          backendLabel,
+          backendUnsafe,
+          ...(backendCapabilities ? { backendCapabilities } : {}),
+          ...(textValue(executionCellRecord?.cellKey)
+            ? { runtimeCellKey: textValue(executionCellRecord?.cellKey) }
+            : {}),
+          latestToolCallId: input.toolCallId,
+          latestExecutionStatus: executionStatus,
+        },
+      })
+    } else {
+      this.appState.cells.create({
+        cellId,
+        workspaceId,
+        label: backendLabel,
+        metadata: {
+          source: 'execution-backend',
+          backend: backendKey,
+          backendLabel,
+          backendUnsafe,
+          ...(backendCapabilities ? { backendCapabilities } : {}),
+          ...(textValue(executionCellRecord?.cellKey)
+            ? { runtimeCellKey: textValue(executionCellRecord?.cellKey) }
+            : {}),
+          latestToolCallId: input.toolCallId,
+          latestExecutionStatus: executionStatus,
+        },
+      })
+    }
+
+    this.appState.cellLeases.upsert({
+      leaseId,
+      cellId,
+      runId: input.event.runId,
+      sessionId: input.event.sessionId,
+      status: executionStatus === 'running' ? 'active' : 'released',
+      metadata: {
+        source: 'execution-backend',
+        toolCallId: input.toolCallId,
+        toolName: input.toolName,
+        backend: backendKey,
+        backendLabel,
+        backendUnsafe,
+        ...(backendCapabilities ? { backendCapabilities } : {}),
+        ...(textValue(executionLeaseRecord?.cellKey)
+          ? { runtimeCellKey: textValue(executionLeaseRecord?.cellKey) }
+          : {}),
+        ...(textValue(executionLeaseRecord?.status)
+          ? { runtimeLeaseStatus: textValue(executionLeaseRecord?.status) }
+          : {}),
+        ...(textValue(executionLeaseRecord?.acquiredAt)
+          ? { runtimeLeaseAcquiredAt: textValue(executionLeaseRecord?.acquiredAt) }
+          : {}),
+        ...(textValue(executionLeaseRecord?.releasedAt)
+          ? { runtimeLeaseReleasedAt: textValue(executionLeaseRecord?.releasedAt) }
+          : {}),
+        sourceEventId: input.event.eventId,
+        sourceSeq: input.event.seq,
+      },
+    })
+
+    const snapshotId = `cell_snapshot_${input.event.eventId}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+    if (!this.appState.cellSnapshots.get(snapshotId)) {
+      this.appState.cellSnapshots.create({
+        snapshotId,
+        cellId,
+        leaseId,
+        label: `${backendLabel} ${executionStatus}`,
+        metadata: {
+          source: 'execution-backend',
+          toolCallId: input.toolCallId,
+          toolName: input.toolName,
+          backend: backendKey,
+          backendLabel,
+          backendUnsafe,
+          ...(backendCapabilities ? { backendCapabilities } : {}),
+          ...(textValue(executionCellRecord?.cellKey)
+            ? { runtimeCellKey: textValue(executionCellRecord?.cellKey) }
+            : {}),
+          ...(textValue(executionLeaseRecord?.leaseId)
+            ? { runtimeLeaseId: textValue(executionLeaseRecord?.leaseId) }
+            : {}),
+          executionStatus,
+        },
+      })
+    }
+  }
+
+  private syncArtifacts(): void {
+    if (!this.appState) return
+
+    for (const session of this.runtime.storage.stateStore.listSessions()) {
+      const runMetadataByRunId = new Map(
+        this.appState.runs
+          .list({ sessionId: session.sessionId })
+          .map((record) => [record.runId, record] as const),
+      )
+      const mailbox = MainspringMailbox.fromSessionPath(session.sessionPath)
+      const rows = mailbox.readRecentEvents({
+        sessionId: session.sessionId,
+        limit: 500,
+      })
+
+      for (const row of rows) {
+        const event = row.event
+        if (event.type === 'artifact.created') {
+          if (this.appState.artifacts.get(event.artifactId)) continue
+          const runMetadata = runMetadataByRunId.get(event.runId)
+          this.appState.artifacts.create({
+            artifactId: event.artifactId,
+            runId: event.runId,
+            sessionId: row.sessionId,
+            ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
+            kind: event.kind,
+            path: artifactPathFromId(this.runtime.storage.artifactStore.rootPath, event.artifactId),
+            metadata: {
+              sourceEventId: `native:${row.seq}`,
+              sourceSeq: row.seq,
+              sourceType: event.type,
+            },
+          })
+          continue
+        }
+
+        if (event.type !== 'tool.result' || event.status !== 'completed') continue
+        const output = recordValue(event.output)
+        const artifactId = textValue(output?.artifactId) ?? textValue(output?.artifact)
+        if (!artifactId || this.appState.artifacts.get(artifactId)) continue
+
+        const runMetadata = runMetadataByRunId.get(event.runId)
+        const toolName = textValue(event.name) ?? 'runtime-artifact'
+        const artifactLabel = textValue(output?.artifactLabel)
+        const outputUrl = textValue(output?.url)
+        const kind = toolName === 'browser.screenshot' ? 'image' : 'file'
+        const mediaType =
+          toolName === 'browser.screenshot'
+            ? 'image/png'
+            : textValue(output?.mediaType)
+
+        this.appState.artifacts.create({
+          artifactId,
+          runId: event.runId,
+          sessionId: row.sessionId,
+          ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
+          kind,
+          ...(artifactLabel ? { label: artifactLabel } : {}),
+          path: artifactPathFromId(this.runtime.storage.artifactStore.rootPath, artifactId),
+          ...(mediaType ? { mediaType } : {}),
+          metadata: {
+            sourceEventId: `native:${row.seq}`,
+            sourceSeq: row.seq,
+            sourceType: event.type,
+            toolName,
+            ...(outputUrl ? { url: outputUrl } : {}),
+          },
+        })
+      }
+    }
+  }
+
+  private syncRunCellLeases(): void {
+    this.hyperCells?.releaseTerminalRunLeases({
+      loadRunEvents: (lease) =>
+        lease.runId && lease.sessionId
+          ? this.runtime.storage.eventStore.listRunEvents({
+              sessionId: lease.sessionId,
+              runId: lease.runId,
+              limit: 500,
+            })
+          : [],
+      statusFromEvents: gatewayRunStatusFromEvents,
+    })
+  }
+
+  private syncDerivedAppState(): void {
+    if (!this.appState) return
+    this.syncApprovalMetadata()
+    this.syncToolCalls()
+    this.syncUsageLedger()
+    this.syncArtifacts()
+    this.syncRunCellLeases()
+  }
+
+  private startCronScheduler(): void {
+    if (this.cronTimer || !this.appState) return
+    this.cronTimer = setInterval(() => {
+      void this.runCronTick()
+    }, this.cronPollIntervalMs)
+    this.cronTimer.unref?.()
+  }
+
+  private async runCronTick(): Promise<void> {
+    if (!this.appState) return
+    if (this.cronTickInFlight) {
+      await this.cronTickInFlight
+      return
+    }
+
+    this.cronTickInFlight = (async () => {
+      const now = this.now()
+      const nowIso = now.toISOString()
+      try {
+        for (const schedule of this.appState!.cronSchedules.list({ enabled: true })) {
+          if (!schedule.nextRunAt || schedule.nextRunAt > nowIso) continue
+          this.runCronScheduleNow(schedule.scheduleId, 'scheduler', now)
+        }
+        this.cronLastTickAt = nowIso
+        this.cronLastError = undefined
+      } catch (error) {
+        this.cronLastTickAt = nowIso
+        this.cronLastError = error instanceof Error ? error.message : String(error)
+        throw error
+      } finally {
+        this.cronTickInFlight = null
+      }
+    })()
+
+    await this.cronTickInFlight
   }
 
   private requireAppState(): LocalGatewayAppStateStore {
@@ -383,6 +1672,442 @@ export class LocalMainspringGateway {
       throw new Error('Local gateway app state is not configured.')
     }
     return this.appState
+  }
+
+  private budgetStatus(): LocalGatewayBudgetStatus {
+    const appState = this.appState
+    if (!appState) {
+      return {
+        evaluations: [],
+        blocked: 0,
+        warnings: 0,
+        usageStatus: emptyUsageStatus(),
+      }
+    }
+    const evaluations = this.evaluateBudgets(appState)
+    return {
+      evaluations,
+      blocked: evaluations.filter((evaluation) => evaluation.status === 'blocked').length,
+      warnings: evaluations.filter((evaluation) => evaluation.status === 'warn').length,
+      usageStatus: this.usageStatus(),
+    }
+  }
+
+  private usageStatus(): LocalGatewayUsageStatus {
+    const appState = this.appState
+    if (!appState) return emptyUsageStatus()
+    const context = this.usageContext(appState)
+    const totalSummary = summarizeUsageLedger(context.usageEntries)
+    return {
+      total: {
+        scopeType: 'total',
+        scopeId: 'total',
+        scopeLabel: 'All usage',
+        summary: totalSummary,
+      },
+      clients: [...context.clientsById.values()].map((client) => ({
+        scopeType: 'client',
+        scopeId: client.clientId,
+        scopeLabel: client.name,
+        summary: summarizeUsageLedger(
+          context.usageEntries.filter((entry) => {
+            const workspaceId = this.usageEntryWorkspaceId(entry, context)
+            return workspaceId ? context.workspacesById.get(workspaceId)?.clientId === client.clientId : false
+          }),
+        ),
+      })),
+      workspaces: [...context.workspacesById.values()].map((workspace) => ({
+        scopeType: 'workspace',
+        scopeId: workspace.workspaceId,
+        scopeLabel: workspace.name,
+        summary: summarizeUsageLedger(
+          context.usageEntries.filter((entry) => this.usageEntryWorkspaceId(entry, context) === workspace.workspaceId),
+        ),
+      })),
+      agents: [...context.agentsById.values()].map((agent) => ({
+        scopeType: 'agent',
+        scopeId: agent.agentId,
+        scopeLabel: agent.name,
+        summary: summarizeUsageLedger(
+          context.usageEntries.filter((entry) => context.runsById.get(entry.runId)?.agentId === agent.agentId),
+        ),
+      })),
+      unpricedEntries: totalSummary.unpricedEntries,
+      pricedEntries: totalSummary.pricedEntries,
+      estimatedCostUsd: totalSummary.estimatedCostUsd,
+    }
+  }
+
+  readonly cells = {
+    status: (): LocalGatewayCellStatus => this.cellStatus(),
+  }
+
+  private cellStatus(): LocalGatewayCellStatus {
+    return this.hyperCells?.status() ?? {
+      enabled: false,
+      leaseTtlMs: 0,
+      capacityEnforced: false,
+      cells: 0,
+      leases: {
+        active: 0,
+        released: 0,
+        expired: 0,
+        total: 0,
+      },
+      cellStatuses: [],
+    }
+  }
+
+  private createClientWorkspace(
+    input: CreateLocalGatewayClientWorkspaceInput,
+  ): CreateLocalGatewayClientWorkspaceResult {
+    const appState = this.requireAppState()
+    const clientMetadata = {
+      ...(input.contact ? { contact: input.contact } : {}),
+      ...(input.billingLabel ? { billingLabel: input.billingLabel } : {}),
+      ...(input.metadata ?? {}),
+    }
+    const client = appState.clients.create({
+      name: input.name,
+      ...(Object.keys(clientMetadata).length > 0 ? { metadata: clientMetadata } : {}),
+    })
+    const workspaceRoot = textValue(input.workspaceRoot)
+    const workspace = workspaceRoot
+      ? appState.workspaces.create({
+          clientId: client.clientId,
+          name: textValue(input.workspaceName) ?? `${input.name} Workspace`,
+          root: workspaceRoot,
+        })
+      : undefined
+    const session =
+      workspace
+        ? projectSession(
+            this.runtime.sessions.create({
+              workspace: { root: workspace.root },
+              metadata: {
+                clientId: client.clientId,
+                workspaceId: workspace.workspaceId,
+              },
+            }).record,
+          )
+        : undefined
+
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'client.created',
+      actor: 'local-gateway',
+      targetType: 'client',
+      targetId: client.clientId,
+      ...(workspace ? { metadata: { workspaceId: workspace.workspaceId } } : {}),
+    })
+    if (workspace) {
+      appState.auditEvents.create({
+        category: 'gateway',
+        action: 'workspace.created',
+        actor: 'local-gateway',
+        targetType: 'workspace',
+        targetId: workspace.workspaceId,
+        metadata: { clientId: client.clientId },
+      })
+    }
+    if (session) {
+      appState.auditEvents.create({
+        category: 'gateway',
+        action: 'session.created',
+        actor: 'local-gateway',
+        targetType: 'session',
+        targetId: session.sessionId,
+        sessionId: session.sessionId,
+        metadata: {
+          clientId: client.clientId,
+          ...(workspace ? { workspaceId: workspace.workspaceId } : {}),
+        },
+      })
+    }
+
+    return {
+      client,
+      ...(workspace ? { workspace } : {}),
+      ...(session ? { session } : {}),
+    }
+  }
+
+  private createWorkspaceSession(
+    input: CreateLocalGatewayWorkspaceSessionInput,
+  ): CreateLocalGatewayWorkspaceSessionResult {
+    const appState = this.requireAppState()
+    const client = appState.clients.get(input.clientId)
+    if (!client) {
+      throw new Error(`Unknown gateway client: ${input.clientId}`)
+    }
+    const workspace = appState.workspaces.create({
+      clientId: client.clientId,
+      name: input.name,
+      root: input.workspaceRoot,
+    })
+    const session = projectSession(
+      this.runtime.sessions.create({
+        workspace: { root: workspace.root },
+        metadata: {
+          clientId: client.clientId,
+          workspaceId: workspace.workspaceId,
+        },
+      }).record,
+    )
+
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'workspace.created',
+      actor: 'local-gateway',
+      targetType: 'workspace',
+      targetId: workspace.workspaceId,
+      metadata: { clientId: client.clientId },
+    })
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'session.created',
+      actor: 'local-gateway',
+      targetType: 'session',
+      targetId: session.sessionId,
+      sessionId: session.sessionId,
+      metadata: {
+        clientId: client.clientId,
+        workspaceId: workspace.workspaceId,
+      },
+    })
+
+    return { workspace, session }
+  }
+
+  private deleteWorkspace(workspaceId: string): DeleteLocalGatewayWorkspaceResult {
+    const appState = this.requireAppState()
+    const workspace = appState.workspaces.get(workspaceId)
+    if (!workspace) {
+      throw new Error(`Unknown gateway workspace: ${workspaceId}`)
+    }
+    if (appState.agents.list({ workspaceId }).length > 0) {
+      throw new Error(`Workspace ${workspaceId} cannot be deleted while agents are attached.`)
+    }
+    if (appState.runs.list().some((run) => run.workspaceId === workspaceId)) {
+      throw new Error(`Workspace ${workspaceId} cannot be deleted while run metadata exists.`)
+    }
+    if (appState.approvals.list().some((approval) => approval.workspaceId === workspaceId)) {
+      throw new Error(`Workspace ${workspaceId} cannot be deleted while approval metadata exists.`)
+    }
+    if (appState.artifacts.list().some((artifact) => artifact.workspaceId === workspaceId)) {
+      throw new Error(`Workspace ${workspaceId} cannot be deleted while artifacts exist.`)
+    }
+    if (appState.usageLedger.list().some((entry) => entry.workspaceId === workspaceId)) {
+      throw new Error(`Workspace ${workspaceId} cannot be deleted while usage entries exist.`)
+    }
+    if (appState.budgets.list({ scopeType: 'workspace', scopeId: workspaceId }).length > 0) {
+      throw new Error(`Workspace ${workspaceId} cannot be deleted while budget records exist.`)
+    }
+    if (
+      this.runtime.storage.stateStore.listSessions().some((session) => {
+        const metadata =
+          session.metadata && typeof session.metadata === 'object'
+            ? (session.metadata as Record<string, unknown>)
+            : undefined
+        return metadata?.workspaceId === workspaceId
+      })
+    ) {
+      throw new Error(`Workspace ${workspaceId} cannot be deleted while runtime sessions are linked.`)
+    }
+
+    appState.workspaces.delete(workspaceId)
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'workspace.deleted',
+      actor: 'local-gateway',
+      targetType: 'workspace',
+      targetId: workspaceId,
+      metadata: {
+        ...(workspace.clientId ? { clientId: workspace.clientId } : {}),
+      },
+    })
+    return { workspaceId, deleted: true }
+  }
+
+  private deleteClient(clientId: string): DeleteLocalGatewayClientResult {
+    const appState = this.requireAppState()
+    const client = appState.clients.get(clientId)
+    if (!client) {
+      throw new Error(`Unknown gateway client: ${clientId}`)
+    }
+    if (appState.workspaces.list({ clientId }).length > 0) {
+      throw new Error(`Gateway client ${clientId} cannot be deleted while workspaces are attached.`)
+    }
+    if (
+      this.runtime.storage.stateStore.listSessions().some((session) => {
+        const metadata =
+          session.metadata && typeof session.metadata === 'object'
+            ? (session.metadata as Record<string, unknown>)
+            : undefined
+        return metadata?.clientId === clientId
+      })
+    ) {
+      throw new Error(`Gateway client ${clientId} cannot be deleted while runtime sessions are linked.`)
+    }
+    if (appState.budgets.list({ scopeType: 'client', scopeId: clientId }).length > 0) {
+      throw new Error(`Gateway client ${clientId} cannot be deleted while budget records exist.`)
+    }
+
+    appState.clients.delete(clientId)
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'client.deleted',
+      actor: 'local-gateway',
+      targetType: 'client',
+      targetId: clientId,
+    })
+    return { clientId, deleted: true }
+  }
+
+  private updateClientWorkspace(
+    input: UpdateLocalGatewayClientWorkspaceInput,
+  ): UpdateLocalGatewayClientWorkspaceResult {
+    const appState = this.requireAppState()
+    const existingClient = appState.clients.get(input.clientId)
+    if (!existingClient) {
+      throw new Error(`Unknown gateway client: ${input.clientId}`)
+    }
+
+    const existingClientMetadata = recordValue(existingClient.metadata) ?? {}
+    const clientMetadata = {
+      ...existingClientMetadata,
+      ...(input.contact !== undefined ? { contact: input.contact } : {}),
+      ...(input.billingLabel !== undefined ? { billingLabel: input.billingLabel } : {}),
+      ...(input.metadata ?? {}),
+    }
+    const client = appState.clients.update({
+      clientId: existingClient.clientId,
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.status ? { status: input.status } : {}),
+      metadata: clientMetadata,
+    })
+
+    const requestedWorkspaceId = textValue(input.workspaceId)
+    const workspaceFieldsRequested =
+      input.workspaceName !== undefined || input.workspaceRoot !== undefined
+    const resolvedWorkspaceId =
+      requestedWorkspaceId
+      ?? appState.workspaces.list({ clientId: existingClient.clientId })[0]?.workspaceId
+    const existingWorkspace = resolvedWorkspaceId
+      ? appState.workspaces.get(resolvedWorkspaceId)
+      : null
+
+    if (workspaceFieldsRequested && resolvedWorkspaceId && !existingWorkspace) {
+      throw new Error(`Unknown gateway workspace: ${resolvedWorkspaceId}`)
+    }
+
+    const workspace =
+      existingWorkspace && workspaceFieldsRequested
+        ? appState.workspaces.update({
+            workspaceId: existingWorkspace.workspaceId,
+            ...(input.workspaceName ? { name: input.workspaceName } : {}),
+            ...(input.workspaceRoot ? { root: input.workspaceRoot } : {}),
+            ...(input.workspaceStatus || input.status
+              ? { status: input.workspaceStatus ?? input.status }
+              : {}),
+          })
+        : existingWorkspace ?? undefined
+
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'client.updated',
+      actor: 'local-gateway',
+      targetType: 'client',
+      targetId: client.clientId,
+      metadata: {
+        ...(workspace ? { workspaceId: workspace.workspaceId } : {}),
+      },
+    })
+    if (existingWorkspace && workspaceFieldsRequested) {
+      appState.auditEvents.create({
+        category: 'gateway',
+        action: 'workspace.updated',
+        actor: 'local-gateway',
+        targetType: 'workspace',
+        targetId: existingWorkspace.workspaceId,
+        metadata: { clientId: client.clientId },
+      })
+    }
+
+    return {
+      client,
+      ...(workspace ? { workspace } : {}),
+    }
+  }
+
+  private createAgentDraft(input: CreateLocalGatewayAgentDraftInput): LocalGatewayAgentRecord {
+    const appState = this.requireAppState()
+    const workspace = appState.workspaces.get(input.workspaceId)
+    if (!workspace) {
+      throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
+    }
+    const metadata = {
+      ...(input.instructions ? { instructions: input.instructions } : {}),
+      ...(input.outcome ? { outcome: input.outcome } : {}),
+      ...(input.voice ? { voice: input.voice } : {}),
+      ...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
+      ...(input.modelLabel ? { modelLabel: input.modelLabel } : {}),
+      ...(input.skills ? { skills: input.skills } : {}),
+      ...(input.metadata ?? {}),
+    }
+    const agent = appState.agents.create({
+      workspaceId: workspace.workspaceId,
+      name: input.name,
+      ...(input.version ? { version: input.version } : {}),
+      ...(input.defaultModelId ? { defaultModelId: input.defaultModelId } : {}),
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+    })
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'agent.created',
+      actor: 'local-gateway',
+      targetType: 'agent',
+      targetId: agent.agentId,
+      metadata: { workspaceId: workspace.workspaceId },
+    })
+    return agent
+  }
+
+  private updateAgentDraft(input: UpdateLocalGatewayAgentDraftInput): LocalGatewayAgentRecord {
+    const appState = this.requireAppState()
+    const agent = appState.agents.get(input.agentId)
+    if (!agent) {
+      throw new Error(`Unknown gateway agent: ${input.agentId}`)
+    }
+    const existingMetadata = recordValue(agent.metadata) ?? {}
+    const metadata = {
+      ...existingMetadata,
+      ...(input.instructions ? { instructions: input.instructions } : {}),
+      ...(input.outcome ? { outcome: input.outcome } : {}),
+      ...(input.voice ? { voice: input.voice } : {}),
+      ...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
+      ...(input.modelLabel ? { modelLabel: input.modelLabel } : {}),
+      ...(input.skills ? { skills: input.skills } : {}),
+      ...(input.metadata ?? {}),
+    }
+    const updated = appState.agents.update({
+      agentId: agent.agentId,
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.version ? { version: input.version } : {}),
+      ...(input.defaultModelId ? { defaultModelId: input.defaultModelId } : {}),
+      metadata,
+    })
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'agent.updated',
+      actor: 'local-gateway',
+      targetType: 'agent',
+      targetId: updated.agentId,
+      metadata: {
+        ...(updated.workspaceId ? { workspaceId: updated.workspaceId } : {}),
+      },
+    })
+    return updated
   }
 
   private resolveAppStateRunInput(input: LocalGatewayAppStateRunInput): LocalGatewayStartRunInput {
@@ -427,8 +2152,583 @@ export class LocalMainspringGateway {
       ...(workspaceId ? { workspaceId } : {}),
       ...(agentId ? { agentId } : {}),
       ...(providerId ? { providerId } : {}),
+      ...(providerProfile?.secretRef ? { credentialRef: providerProfile.secretRef } : {}),
       ...(modelId ? { modelId } : {}),
     }
+  }
+
+  private createBudget(input: LocalGatewayBudgetDraftInput): LocalGatewayBudgetRecord {
+    const appState = this.requireAppState()
+    this.validateBudgetScope(appState, input.scopeType, input.scopeId)
+    const budget = appState.budgets.create(input as CreateLocalGatewayBudgetInput)
+    appState.auditEvents.create({
+      category: 'billing',
+      action: 'budget.created',
+      actor: 'local-gateway',
+      targetType: input.scopeType,
+      targetId: input.scopeId,
+      metadata: { budgetId: budget.budgetId },
+    })
+    return budget
+  }
+
+  private updateBudget(input: UpdateLocalGatewayBudgetDraftInput): LocalGatewayBudgetRecord {
+    const appState = this.requireAppState()
+    const existing = appState.budgets.get(input.budgetId)
+    if (!existing) throw new Error(`Unknown budget: ${input.budgetId}`)
+    const budget = appState.budgets.update(input as UpdateLocalGatewayBudgetInput)
+    appState.auditEvents.create({
+      category: 'billing',
+      action: 'budget.updated',
+      actor: 'local-gateway',
+      targetType: existing.scopeType,
+      targetId: existing.scopeId,
+      metadata: { budgetId: budget.budgetId },
+    })
+    return budget
+  }
+
+  private deleteBudget(budgetId: string): void {
+    const appState = this.requireAppState()
+    const existing = appState.budgets.get(budgetId)
+    if (!existing) throw new Error(`Unknown budget: ${budgetId}`)
+    appState.budgets.delete(budgetId)
+    appState.auditEvents.create({
+      category: 'billing',
+      action: 'budget.deleted',
+      actor: 'local-gateway',
+      targetType: existing.scopeType,
+      targetId: existing.scopeId,
+      metadata: { budgetId },
+    })
+  }
+
+  private validateBudgetScope(
+    appState: LocalGatewayAppStateStore,
+    scopeType: LocalGatewayBudgetScope,
+    scopeId: string,
+  ): void {
+    if (scopeType === 'client' && !appState.clients.get(scopeId)) {
+      throw new Error(`Unknown gateway client: ${scopeId}`)
+    }
+    if (scopeType === 'workspace' && !appState.workspaces.get(scopeId)) {
+      throw new Error(`Unknown gateway workspace: ${scopeId}`)
+    }
+    if (scopeType === 'agent' && !appState.agents.get(scopeId)) {
+      throw new Error(`Unknown gateway agent: ${scopeId}`)
+    }
+  }
+
+  private createDeploymentTarget(
+    input: CreateLocalGatewayDeploymentTargetDraftInput,
+  ): LocalGatewayDeploymentTargetRecord {
+    const appState = this.requireAppState()
+    if (input.workspaceId && !appState.workspaces.get(input.workspaceId)) {
+      throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
+    }
+    const target = appState.deploymentTargets.create(input)
+    appState.auditEvents.create({
+      category: 'deployment',
+      action: 'target.created',
+      actor: 'local-gateway',
+      targetType: 'deployment-target',
+      targetId: target.targetId,
+      ...(target.workspaceId ? { metadata: { workspaceId: target.workspaceId } } : {}),
+    })
+    return target
+  }
+
+  private updateDeploymentTarget(
+    input: UpdateLocalGatewayDeploymentTargetDraftInput,
+  ): LocalGatewayDeploymentTargetRecord {
+    const appState = this.requireAppState()
+    const existing = appState.deploymentTargets.get(input.targetId)
+    if (!existing) throw new Error(`Unknown deployment target: ${input.targetId}`)
+    if (input.workspaceId && !appState.workspaces.get(input.workspaceId)) {
+      throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
+    }
+    const target = appState.deploymentTargets.update(input)
+    appState.auditEvents.create({
+      category: 'deployment',
+      action: 'target.updated',
+      actor: 'local-gateway',
+      targetType: 'deployment-target',
+      targetId: target.targetId,
+      metadata: {
+        previousStatus: existing.status,
+        nextStatus: target.status,
+      },
+    })
+    return target
+  }
+
+  private executeDeployment(input: {
+    targetId: string
+    operation: LocalGatewayDeploymentOperation
+    confirm: string
+  }): LocalGatewayDeploymentExecutionResult {
+    const appState = this.requireAppState()
+    const result = executeLocalGatewayDeployment({
+      appState,
+      targetId: input.targetId,
+      operation: input.operation,
+      confirm: input.confirm,
+      dependencies: {
+        repoRoot: this.deploymentRepoRoot,
+        ...(this.deploymentCommandRunner ? { commandRunner: this.deploymentCommandRunner } : {}),
+      },
+    })
+    appState.auditEvents.create({
+      category: 'deployment',
+      action: `run.${input.operation}.${result.execution.ok ? 'succeeded' : 'failed'}`,
+      actor: 'local-gateway',
+      targetType: 'deployment-target',
+      targetId: input.targetId,
+      metadata: {
+        deploymentRunId: result.deploymentRun.deploymentRunId,
+        exitCode: result.execution.exitCode,
+      },
+    })
+    return result
+  }
+
+  private installMarketplaceTemplate(
+    input: InstallLocalMarketplaceTemplateInput,
+  ): InstallLocalMarketplaceTemplateResult {
+    const installed = installLocalMarketplaceTemplate({
+      repoRoot: this.marketplaceRepoRoot,
+      templateId: input.templateId,
+      workspaceRoot: input.workspaceRoot,
+    })
+    const created = this.createClientWorkspace({
+      name: input.clientName?.trim() || installed.template.defaults.clientName,
+      workspaceRoot: input.workspaceRoot,
+      workspaceName: input.workspaceName?.trim() || installed.template.defaults.workspaceName,
+      metadata: {
+        templateId: installed.template.templateId,
+        templateProvenance: installed.template.provenance,
+      },
+    })
+    if (!created.workspace) {
+      throw new Error('Marketplace install requires a workspace-backed client result.')
+    }
+    const agent = this.createAgentDraft({
+      workspaceId: created.workspace.workspaceId,
+      name: input.agentName?.trim() || installed.template.defaults.agentName,
+      ...(installed.template.modelId
+        ? { defaultModelId: installed.template.modelId }
+        : {}),
+      instructions: installed.template.defaults.instructions,
+      outcome: installed.template.defaults.outcome,
+      voice: installed.template.defaults.voice,
+      approvalMode: consoleApprovalMode(installed.template.approvalMode),
+      skills: skillFlagsFromAllowedTools(installed.template.allowedTools),
+      metadata: {
+        templateId: installed.template.templateId,
+        templateProvenance: installed.template.provenance,
+        allowedTools: installed.template.allowedTools,
+        ...(installed.template.runtimeProfile
+          ? { runtimeProfile: installed.template.runtimeProfile }
+          : {}),
+        ...(installed.template.providerId ? { providerId: installed.template.providerId } : {}),
+      },
+    })
+    this.requireAppState().auditEvents.create({
+      category: 'marketplace',
+      action: 'template.installed',
+      actor: 'local-gateway',
+      targetType: 'template',
+      targetId: installed.template.templateId,
+      ...(created.session ? { sessionId: created.session.sessionId } : {}),
+      metadata: {
+        clientId: created.client.clientId,
+        workspaceId: created.workspace.workspaceId,
+        agentId: agent.agentId,
+        installedFiles: installed.installedFiles,
+      },
+    })
+    return {
+      template: installed.template,
+      client: created.client,
+      workspace: created.workspace,
+      session: created.session,
+      agent,
+      installedFiles: installed.installedFiles,
+    }
+  }
+
+  private assertRunBudgetAllowed(
+    input: LocalGatewayStartRunInput,
+    session: MainspringSessionRecord,
+  ): LocalGatewayBudgetEvaluation[] {
+    const appState = this.appState
+    if (!appState) return []
+    const evaluations = this.evaluateBudgetsForRun(appState, input, session)
+    const blocked = evaluations.filter((evaluation) => evaluation.status === 'blocked')
+    if (blocked.length > 0) {
+      appState.auditEvents.create({
+        category: 'billing',
+        action: 'budget.blocked',
+        actor: 'local-gateway',
+        targetType: 'session',
+        targetId: input.sessionId,
+        sessionId: input.sessionId,
+        metadata: { budgetIds: blocked.map((evaluation) => evaluation.budgetId) },
+      })
+      throw new Error(
+        `Run blocked by budget: ${blocked
+          .map((evaluation) => `${evaluation.label} (${evaluation.scopeLabel})`)
+          .join(', ')}.`,
+      )
+    }
+    const warnings = evaluations.filter((evaluation) => evaluation.status === 'warn')
+    if (warnings.length > 0 && !input.allowBudgetWarning) {
+      appState.auditEvents.create({
+        category: 'billing',
+        action: 'budget.warning_ack_required',
+        actor: 'local-gateway',
+        targetType: 'session',
+        targetId: input.sessionId,
+        sessionId: input.sessionId,
+        metadata: { budgetIds: warnings.map((evaluation) => evaluation.budgetId) },
+      })
+      throw new Error(
+        `Run requires budget warning acknowledgement: ${warnings
+          .map((evaluation) => `${evaluation.label} (${evaluation.scopeLabel})`)
+          .join(', ')}. Retry with allowBudgetWarning=true after review.`,
+      )
+    }
+    return evaluations
+  }
+
+  private evaluateBudgets(appState: LocalGatewayAppStateStore): LocalGatewayBudgetEvaluation[] {
+    const budgets = appState.budgets.list({ status: 'active' })
+    const context = this.usageContext(appState)
+    return budgets.map((budget) => this.evaluateBudgetRecord(budget, context))
+  }
+
+  private evaluateBudgetsForRun(
+    appState: LocalGatewayAppStateStore,
+    input: LocalGatewayStartRunInput,
+    session: MainspringSessionRecord,
+  ): LocalGatewayBudgetEvaluation[] {
+    const sessionMetadata = recordValue(session.metadata) ?? {}
+    const workspaceId =
+      input.workspaceId ?? textValue(sessionMetadata.workspaceId as string | undefined)
+    const agentId = input.agentId
+    const clientId =
+      workspaceId
+        ? appState.workspaces.get(workspaceId)?.clientId
+        : textValue(sessionMetadata.clientId as string | undefined)
+    const budgets = appState.budgets
+      .list({ status: 'active' })
+      .filter((budget) =>
+        (budget.scopeType === 'client' && clientId === budget.scopeId)
+        || (budget.scopeType === 'workspace' && workspaceId === budget.scopeId)
+        || (budget.scopeType === 'agent' && agentId === budget.scopeId),
+      )
+    const allEvaluations = this.evaluateBudgets(appState)
+    const evaluationsById = new Map(allEvaluations.map((evaluation) => [evaluation.budgetId, evaluation] as const))
+    return budgets
+      .map((budget) => evaluationsById.get(budget.budgetId))
+      .filter((evaluation): evaluation is LocalGatewayBudgetEvaluation => Boolean(evaluation))
+  }
+
+  private evaluateBudgetRecord(
+    budget: LocalGatewayBudgetRecord,
+    context: LocalGatewayUsageEvaluationContext,
+  ): LocalGatewayBudgetEvaluation {
+    const matchedEntries = context.usageEntries.filter((entry) => {
+      const workspaceId = this.usageEntryWorkspaceId(entry, context)
+      if (budget.scopeType === 'workspace') return workspaceId === budget.scopeId
+      if (budget.scopeType === 'agent') return context.runsById.get(entry.runId)?.agentId === budget.scopeId
+      const clientId = workspaceId ? context.workspacesById.get(workspaceId)?.clientId : undefined
+      return clientId === budget.scopeId
+    })
+    const summary = summarizeUsageLedger(matchedEntries)
+    const usedEstimatedCostUsd = summary.estimatedCostUsd
+    const remainingEstimatedCostUsd = budget.maxEstimatedCostUsd - usedEstimatedCostUsd
+    const scopeLabel = this.budgetScopeLabel(budget, context)
+    const hasUnpricedUsage = summary.unpricedEntries > 0
+    const status =
+      usedEstimatedCostUsd >= budget.maxEstimatedCostUsd
+        ? 'blocked'
+        : usedEstimatedCostUsd >= budget.warnAtUsd || hasUnpricedUsage
+          ? 'warn'
+          : 'ok'
+    const costSensitiveReason =
+      status === 'blocked'
+        ? `Budget blocked cost-sensitive tools: ${budget.label} (${scopeLabel})`
+        : hasUnpricedUsage
+          ? `Budget has ${summary.unpricedEntries} unpriced usage ${summary.unpricedEntries === 1 ? 'entry' : 'entries'} requiring review: ${budget.label} (${scopeLabel})`
+          : status === 'warn'
+            ? `Budget warning requires review for cost-sensitive tools: ${budget.label} (${scopeLabel})`
+            : `Budget allows cost-sensitive tools: ${budget.label} (${scopeLabel})`
+    return {
+      budgetId: budget.budgetId,
+      scopeType: budget.scopeType,
+      scopeId: budget.scopeId,
+      label: budget.label,
+      scopeLabel,
+      status,
+      maxEstimatedCostUsd: budget.maxEstimatedCostUsd,
+      warnAtUsd: budget.warnAtUsd,
+      usedEstimatedCostUsd,
+      remainingEstimatedCostUsd,
+      usageEntryCount: matchedEntries.length,
+      pricedUsageEntryCount: summary.pricedEntries,
+      unpricedUsageEntryCount: summary.unpricedEntries,
+      estimateCoverage: hasUnpricedUsage ? 'incomplete' : 'complete',
+      costSensitiveTools: {
+        mode: status === 'warn' ? 'approval' : status === 'blocked' ? 'block' : 'allow',
+        reason: costSensitiveReason,
+      },
+    }
+  }
+
+  private budgetScopeLabel(
+    budget: LocalGatewayBudgetRecord,
+    context: {
+      workspacesById: Map<string, LocalGatewayWorkspaceRecord>
+      agentsById: Map<string, LocalGatewayAgentRecord>
+      clientsById: Map<string, LocalGatewayClientRecord>
+    },
+  ): string {
+    if (budget.scopeType === 'client') {
+      return context.clientsById.get(budget.scopeId)?.name ?? budget.scopeId
+    }
+    if (budget.scopeType === 'workspace') {
+      return context.workspacesById.get(budget.scopeId)?.name ?? budget.scopeId
+    }
+    return context.agentsById.get(budget.scopeId)?.name ?? budget.scopeId
+  }
+
+  private usageContext(appState: LocalGatewayAppStateStore): LocalGatewayUsageEvaluationContext {
+    return {
+      usageEntries: appState.usageLedger.list(),
+      runsById: new Map(appState.runs.list().map((run) => [run.runId, run] as const)),
+      workspacesById: new Map(
+        appState.workspaces.list().map((workspace) => [workspace.workspaceId, workspace] as const),
+      ),
+      agentsById: new Map(appState.agents.list().map((agent) => [agent.agentId, agent] as const)),
+      clientsById: new Map(appState.clients.list().map((client) => [client.clientId, client] as const)),
+    }
+  }
+
+  private usageEntryWorkspaceId(
+    entry: LocalGatewayUsageLedgerEntryRecord,
+    context: Pick<LocalGatewayUsageEvaluationContext, 'runsById'>,
+  ): string | undefined {
+    return entry.workspaceId ?? context.runsById.get(entry.runId)?.workspaceId
+  }
+
+  private recordBudgetTransitions(input: {
+    appState: LocalGatewayAppStateStore
+    runId: string
+    sessionId: string
+    entryId: string
+    previousStatuses: Map<string, LocalGatewayBudgetEvaluation>
+  }): void {
+    const runMetadata = input.appState.runs.get(input.runId)
+    for (const evaluation of this.evaluateBudgets(input.appState)) {
+      const previousEvaluation = input.previousStatuses.get(evaluation.budgetId)
+      const previousStatus =
+        previousEvaluation && previousEvaluation.usageEntryCount > 0
+          ? previousEvaluation.status
+          : this.budgetEvaluationStateById.get(evaluation.budgetId) ?? 'ok'
+      this.budgetEvaluationStateById.set(evaluation.budgetId, evaluation.status)
+      if (previousStatus === evaluation.status) continue
+      if (evaluation.status === 'warn' || evaluation.status === 'blocked') {
+        input.appState.auditEvents.create({
+          category: 'billing',
+          action: evaluation.status === 'warn' ? 'budget.threshold.warn' : 'budget.threshold.blocked',
+          actor: 'local-gateway',
+          targetType: 'budget',
+          targetId: evaluation.budgetId,
+          runId: input.runId,
+          sessionId: input.sessionId,
+          metadata: {
+            entryId: input.entryId,
+            fromStatus: previousStatus,
+            toStatus: evaluation.status,
+            scopeType: evaluation.scopeType,
+            scopeId: evaluation.scopeId,
+            usedEstimatedCostUsd: evaluation.usedEstimatedCostUsd,
+            remainingEstimatedCostUsd: evaluation.remainingEstimatedCostUsd,
+            ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
+            ...(runMetadata?.agentId ? { agentId: runMetadata.agentId } : {}),
+          },
+        })
+      }
+    }
+  }
+
+  private createCronScheduleDraft(
+    input: LocalGatewayCronScheduleDraftInput,
+  ): LocalGatewayCronScheduleRecord {
+    const appState = this.requireAppState()
+    this.validateCronScheduleInput(appState, input)
+    const nextRunAt = this.computeNextRunAt({
+      cronExpr: input.cronExpr,
+      timezone: input.timezone ?? 'local',
+      after: this.now(),
+    })
+    const schedule = appState.cronSchedules.create({
+      ...input,
+      timezone: input.timezone ?? 'local',
+      allowedTools: input.allowedTools ?? [],
+      enabled: input.enabled ?? true,
+      ...(nextRunAt ? { nextRunAt } : {}),
+    })
+    appState.auditEvents.create({
+      category: 'cron',
+      action: 'schedule.created',
+      actor: 'local-gateway',
+      targetType: 'schedule',
+      targetId: schedule.scheduleId,
+      sessionId: schedule.sessionId,
+      metadata: { enabled: schedule.enabled, cronExpr: schedule.cronExpr },
+    })
+    return schedule
+  }
+
+  private updateCronScheduleDraft(
+    input: UpdateLocalGatewayCronScheduleDraftInput,
+  ): LocalGatewayCronScheduleRecord {
+    const appState = this.requireAppState()
+    const existing = appState.cronSchedules.get(input.scheduleId)
+    if (!existing) throw new Error(`Unknown cron schedule: ${input.scheduleId}`)
+    this.validateCronScheduleInput(appState, { ...existing, ...input })
+    const cronExpr = input.cronExpr ?? existing.cronExpr
+    const timezone = input.timezone ?? existing.timezone
+    const enabled = input.enabled ?? existing.enabled
+    const nextRunAt =
+      enabled
+        ? this.computeNextRunAt({ cronExpr, timezone, after: this.now() })
+        : undefined
+    const schedule = appState.cronSchedules.update({
+      ...input,
+      timezone,
+      ...(enabled ? { nextRunAt, lastError: input.lastError ?? existing.lastError } : { nextRunAt: '', lastError: '' }),
+    })
+    appState.auditEvents.create({
+      category: 'cron',
+      action: 'schedule.updated',
+      actor: 'local-gateway',
+      targetType: 'schedule',
+      targetId: schedule.scheduleId,
+      sessionId: schedule.sessionId,
+      metadata: { enabled: schedule.enabled, cronExpr: schedule.cronExpr },
+    })
+    return schedule
+  }
+
+  private deleteCronSchedule(scheduleId: string): void {
+    const appState = this.requireAppState()
+    const existing = appState.cronSchedules.get(scheduleId)
+    if (!existing) throw new Error(`Unknown cron schedule: ${scheduleId}`)
+    appState.cronSchedules.delete(scheduleId)
+    appState.auditEvents.create({
+      category: 'cron',
+      action: 'schedule.deleted',
+      actor: 'local-gateway',
+      targetType: 'schedule',
+      targetId: scheduleId,
+      sessionId: existing.sessionId,
+    })
+  }
+
+  private runCronScheduleNow(
+    scheduleId: string,
+    trigger: 'manual' | 'scheduler',
+    now = this.now(),
+  ): RunRecord {
+    const appState = this.requireAppState()
+    const schedule = appState.cronSchedules.get(scheduleId)
+    if (!schedule) throw new Error(`Unknown cron schedule: ${scheduleId}`)
+
+    const nextRunAt = schedule.enabled
+      ? this.computeNextRunAt({
+          cronExpr: schedule.cronExpr,
+          timezone: schedule.timezone,
+          after: now,
+        })
+      : undefined
+    const updatedSchedule = appState.cronSchedules.update({
+      scheduleId,
+      lastRunAt: now.toISOString(),
+      nextRunAt: nextRunAt ?? '',
+      lastError: '',
+    })
+    const run = this.runs.startFromAppState({
+      sessionId: updatedSchedule.sessionId,
+      input: updatedSchedule.prompt,
+      mode: 'chat',
+      allowedTools: updatedSchedule.allowedTools,
+      ...(updatedSchedule.workspaceId ? { workspaceId: updatedSchedule.workspaceId } : {}),
+      ...(updatedSchedule.agentId ? { agentId: updatedSchedule.agentId } : {}),
+      ...(updatedSchedule.providerProfileId
+        ? { providerProfileId: updatedSchedule.providerProfileId }
+        : {}),
+      ...(updatedSchedule.computerId ? { computerId: updatedSchedule.computerId } : {}),
+      ...(updatedSchedule.runtimeProfile ? { runtimeProfile: updatedSchedule.runtimeProfile } : {}),
+    })
+    appState.runs.upsert({
+      runId: run.runId,
+      sessionId: updatedSchedule.sessionId,
+      ...(updatedSchedule.workspaceId ? { workspaceId: updatedSchedule.workspaceId } : {}),
+      ...(updatedSchedule.agentId ? { agentId: updatedSchedule.agentId } : {}),
+      metadata: { scheduleId: updatedSchedule.scheduleId, trigger },
+    })
+    appState.auditEvents.create({
+      category: 'cron',
+      action: trigger === 'manual' ? 'schedule.run-now' : 'schedule.triggered',
+      actor: 'local-gateway',
+      targetType: 'schedule',
+      targetId: updatedSchedule.scheduleId,
+      runId: run.runId,
+      sessionId: updatedSchedule.sessionId,
+      metadata: { nextRunAt: nextRunAt ?? null },
+    })
+    return run
+  }
+
+  private validateCronScheduleInput(
+    appState: LocalGatewayAppStateStore,
+    input: {
+      sessionId: string
+      workspaceId?: string
+      agentId?: string
+      providerProfileId?: string
+      computerId?: string
+      label: string
+      prompt: string
+      cronExpr: string
+      timezone?: CronTimezone
+    },
+  ): void {
+    if (!this.runtime.storage.stateStore.getSession(input.sessionId)) {
+      throw new Error(`Unknown session: ${input.sessionId}`)
+    }
+    requiredGatewayText(input.label, 'cron schedule label')
+    requiredGatewayText(input.prompt, 'cron schedule prompt')
+    parseCronExpression(input.cronExpr)
+    this.resolveGatewayWorkspace(appState, input.workspaceId)
+    this.resolveGatewayAgent(appState, input.agentId)
+    this.resolveGatewayProviderProfile(appState, input.providerProfileId)
+  }
+
+  private computeNextRunAt(input: {
+    cronExpr: string
+    timezone: CronTimezone
+    after: Date
+  }): string | undefined {
+    const next = nextCronOccurrence({
+      expression: parseCronExpression(input.cronExpr),
+      timezone: input.timezone,
+      after: input.after,
+    })
+    return next?.toISOString()
   }
 
   private resolveGatewayWorkspace(
@@ -451,6 +2751,36 @@ export class LocalMainspringGateway {
     return agent
   }
 
+  private createProviderProfileDraft(
+    input: CreateLocalGatewayProviderProfileInput,
+  ): LocalGatewayProviderProfileRecord {
+    const appState = this.requireAppState()
+    const profile = appState.providerProfiles.create(input)
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'provider-profile.created',
+      actor: 'local-gateway',
+      targetType: 'provider-profile',
+      targetId: profile.profileId,
+    })
+    return profile
+  }
+
+  private updateProviderProfileDraft(
+    input: UpdateLocalGatewayProviderProfileInput,
+  ): LocalGatewayProviderProfileRecord {
+    const appState = this.requireAppState()
+    const profile = appState.providerProfiles.update(input)
+    appState.auditEvents.create({
+      category: 'gateway',
+      action: 'provider-profile.updated',
+      actor: 'local-gateway',
+      targetType: 'provider-profile',
+      targetId: profile.profileId,
+    })
+    return profile
+  }
+
   private resolveGatewayProviderProfile(
     appState: LocalGatewayAppStateStore,
     providerProfileId: string | undefined,
@@ -467,5 +2797,5 @@ export class LocalMainspringGateway {
 export function createLocalMainspringGateway(
   options: CreateLocalMainspringGatewayOptions,
 ): LocalMainspringGateway {
-  return new LocalMainspringGateway(options.runtime, { appState: options.appState })
+  return new LocalMainspringGateway(options.runtime, options)
 }

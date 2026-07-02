@@ -2,6 +2,16 @@
 
 Build a local assistant for one operator.
 
+## Runnable Walkthrough
+
+This example is now runnable with no paid key:
+
+```bash
+pnpm example:personal-assistant
+```
+
+It uses `MockProvider`, runs one real SDK/runtime session, reads a workspace note through `file.read`, and prints a JSON summary of the session, run, events, and tool activity.
+
 ## Shape
 
 - Organization: personal workspace.
@@ -14,3 +24,8 @@ Build a local assistant for one operator.
 ## Monetization
 
 This is the local-first starter. It proves the runtime loop before adding clients or billing.
+
+## Example Artifacts
+
+- [Sample Run](sample-run.md)
+- [Expected Events](expected-events.md)

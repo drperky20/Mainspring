@@ -45,6 +45,9 @@ describe('run trace view-model', () => {
         activeRunCount: 1,
         pendingApprovalCount: 1,
       },
+      artifactCount: 0,
+      usageEntryCount: 0,
+      estimatedCostUsd: 0,
       providers: [],
       clients: [
         {
@@ -56,9 +59,13 @@ describe('run trace view-model', () => {
           agentCount: 1,
           activeRunCount: 1,
           pendingApprovalCount: 1,
+          artifactCount: 0,
+          usageEntryCount: 0,
+          estimatedCostUsd: 0,
           primaryAgentName: 'Front desk assistant',
         },
       ],
+      clientDetails: [],
       activeRuns: [
         {
           runId: 'run_1',
@@ -152,6 +159,9 @@ describe('run trace view-model', () => {
             activeRunCount: 0,
             pendingApprovalCount: 0,
           },
+          artifactCount: 0,
+          usageEntryCount: 0,
+          estimatedCostUsd: 0,
           providers: [],
           clients: [
             {
@@ -163,8 +173,12 @@ describe('run trace view-model', () => {
               agentCount: 0,
               activeRunCount: 0,
               pendingApprovalCount: 0,
+              artifactCount: 0,
+              usageEntryCount: 0,
+              estimatedCostUsd: 0,
             },
           ],
+          clientDetails: [],
           activeRuns: [],
           pendingApprovals: [],
         },

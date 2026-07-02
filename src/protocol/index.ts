@@ -451,6 +451,13 @@ export const RunIntentSchema = z.object({
         .max(128)
         .regex(/^[A-Za-z0-9_.:-]+$/)
         .optional(),
+      credentialRef: z
+        .string()
+        .trim()
+        .min(1)
+        .max(256)
+        .regex(/^(env|provider-profile|managed):[A-Za-z0-9_.-]+$/)
+        .optional(),
       modelId: z
         .string()
         .trim()
@@ -476,6 +483,26 @@ export const RuntimePolicySchema = z.object({
   allowBrowser: z.boolean().default(false),
   allowMemory: z.boolean().default(false),
   allowedTools: z.array(z.string()).default([]),
+  budget: z
+    .object({
+      status: z.enum(['ok', 'warn', 'blocked']),
+      scopeType: z.enum(['client', 'workspace', 'agent', 'run']).optional(),
+      scopeId: z.string().min(1).optional(),
+      budgetId: z.string().min(1).optional(),
+      label: z.string().min(1).optional(),
+      reason: z.string().min(1).optional(),
+      estimatedCostUsd: z.number().finite().nonnegative().optional(),
+      remainingEstimatedCostUsd: z.number().finite().optional(),
+      requireApproval: z.boolean().default(false),
+      enforceUsageLimit: z.boolean().default(false),
+      costSensitiveTools: z
+        .object({
+          mode: z.enum(['allow', 'approval', 'block']).default('allow'),
+          reason: z.string().min(1).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   redaction: z.enum(['strict', 'balanced']).default('strict'),
 })
 

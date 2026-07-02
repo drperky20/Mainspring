@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import {
+  PROVIDER_INIT_LOG_MESSAGE,
+  providerInitDetailFromRunEvent,
+} from './contracts/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -26,6 +30,37 @@ describe('mainspring package exports', () => {
       expect(entry.import).toMatch(/^\.\/dist\/.+\.js$/)
       expect(entry.types).toMatch(/^\.\/dist\/.+\.d\.ts$/)
     }
+  })
+
+  it('exposes the browser-safety helper as a narrow gateway subpath', () => {
+    const packageJson = readPackageJson()
+
+    expect(packageJson.exports?.['./gateway/browser-safety']).toEqual({
+      import: './dist/gateway/browserSafety.js',
+      types: './dist/gateway/browserSafety.d.ts',
+    })
+  })
+
+  it('exposes provider-init runtime helpers from the contracts barrel', () => {
+    expect(PROVIDER_INIT_LOG_MESSAGE).toBe('Provider session initialized')
+    expect(typeof providerInitDetailFromRunEvent).toBe('function')
+  })
+
+  it('exposes the RunLog Fabric canonical subpaths', () => {
+    const packageJson = readPackageJson()
+
+    expect(packageJson.exports?.['./core']).toEqual({
+      import: './dist/core/index.js',
+      types: './dist/core/index.d.ts',
+    })
+    expect(packageJson.exports?.['./adapters/sqlite']).toEqual({
+      import: './dist/adapters/sqlite/index.js',
+      types: './dist/adapters/sqlite/index.d.ts',
+    })
+    expect(packageJson.exports?.['./hosts/runlog']).toEqual({
+      import: './dist/hosts/runlog/index.js',
+      types: './dist/hosts/runlog/index.d.ts',
+    })
   })
 
   it('uses package imports for internal protocol and control contracts', () => {

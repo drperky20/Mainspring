@@ -28,6 +28,7 @@ export interface DashboardClientViewModel {
   name: string
   subtitle: string
   activeRunSummary?: string
+  usageSummary?: string
   statusLabel: string
   providerReady: boolean
   activeRunCount: number
@@ -37,7 +38,7 @@ export interface DashboardClientViewModel {
 export interface DashboardViewModel {
   source: 'prototype-localStorage' | 'gateway-projection'
   providerReady: boolean
-  providerState: 'ready' | 'unverified' | 'missing'
+  providerState: 'ready' | 'unavailable' | 'unverified' | 'missing'
   clients: DashboardClientViewModel[]
   statusStrip: string[]
   activeRunCount: number
@@ -99,6 +100,7 @@ export function gatewayProjectionToDashboardViewModel(
         name: client.name,
         subtitle: client.primaryAgentName ?? 'No agent attached yet',
         ...(runSummary ? { activeRunSummary: runSummary } : {}),
+        ...(usageArtifactSummary(client) ? { usageSummary: usageArtifactSummary(client) } : {}),
         statusLabel: gatewayClientStatusLabel(client.status, activeRun?.providerLabel),
         providerReady: client.providerReady,
         activeRunCount: client.activeRunCount,
@@ -112,10 +114,7 @@ export function gatewayProjectionToDashboardViewModel(
         'run',
         projection.counts.activeRunCount,
       )}`,
-      `${projection.counts.pendingApprovalCount} pending ${pluralize(
-        'approval',
-        projection.counts.pendingApprovalCount,
-      )}`,
+      gatewayUsageArtifactStatus(projection),
     ],
     activeRunCount: projection.counts.activeRunCount,
     pendingApprovalCount: projection.counts.pendingApprovalCount,
@@ -136,6 +135,7 @@ function gatewayClientStatusLabel(
 ): string {
   if (status === 'needs-agent') return 'No agent attached yet'
   if (status === 'provider-missing') return 'Provider missing'
+  if (status === 'provider-unavailable') return 'Provider unavailable'
   if (status === 'provider-unverified') return 'Provider unverified'
   if (status === 'needs-approval') {
     return providerLabel ? `Approval needed - ${providerLabel}` : 'Approval needed'
@@ -148,6 +148,7 @@ function gatewayProviderStateLabel(
   state: ConsoleDashboardProjection['providerState'],
 ): string {
   if (state === 'ready') return 'Provider ready'
+  if (state === 'unavailable') return 'Provider unavailable'
   if (state === 'unverified') return 'Provider unverified'
   return 'Provider missing'
 }
@@ -166,4 +167,30 @@ function activeRunSummary(
     run.providerTransport,
   ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
   return parts.length > 0 ? parts.join(' | ') : undefined
+}
+
+function usageArtifactSummary(
+  client: ConsoleDashboardProjection['clients'][number],
+): string | undefined {
+  const parts: string[] = []
+  if (client.usageEntryCount > 0) {
+    parts.push(
+      client.estimatedCostUsd > 0
+        ? `${client.usageEntryCount} usage ${pluralize('entry', client.usageEntryCount)} | est $${client.estimatedCostUsd.toFixed(3)}`
+        : `${client.usageEntryCount} usage ${pluralize('entry', client.usageEntryCount)}`,
+    )
+  }
+  if (client.artifactCount > 0) {
+    parts.push(`${client.artifactCount} ${pluralize('artifact', client.artifactCount)}`)
+  }
+  return parts.length > 0 ? parts.join(' | ') : undefined
+}
+
+function gatewayUsageArtifactStatus(projection: ConsoleDashboardProjection): string {
+  const usageEntryCount = projection.usageEntryCount ?? 0
+  const artifactCount = projection.artifactCount ?? 0
+  const estimatedCostUsd = projection.estimatedCostUsd ?? 0
+  const costLabel =
+    estimatedCostUsd > 0 ? ` | est $${estimatedCostUsd.toFixed(3)}` : ''
+  return `${usageEntryCount} usage ${usageEntryCount === 1 ? 'entry' : 'entries'} | ${artifactCount} ${pluralize('artifact', artifactCount)}${costLabel}`
 }

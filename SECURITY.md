@@ -1,33 +1,43 @@
 # Security Policy
 
-Mainspring treats agents as useful but untrusted workers. The current package has real runtime policy checks, approval receipts, redaction, workspace containment for file tools, and non-root Docker packaging. It does not yet provide desktop sandboxing, VM isolation, secure desktop secret storage, or browser-side secure auth flows.
+Mainspring treats agents as useful but untrusted workers. It has real local runtime controls, but it is not magic containment.
 
 ## Report A Vulnerability
 
-Open a private security advisory or contact the maintainers through the distribution channel you are using. Include reproduction steps, affected version, expected impact, and whether host execution, secrets, or workspace containment are involved.
+Open a private security advisory or contact the maintainers through the distribution channel you are using. Include reproduction steps, affected version, expected impact, and whether host execution, provider secrets, workspace containment, gateway auth, or browser DTOs are involved.
 
 ## Current Security Truth
 
 - Host shell execution is not a sandbox.
 - Process execution must not be marketed as secure containment.
-- Browser adapter execution is trusted, not isolated.
 - Tool execution is policy-gated and approval-aware.
-- File tools enforce realpath workspace containment.
+- Approval receipts bind approval id, run id, target tool, input hash, expiry, and nonce.
+- File tools enforce workspace containment.
 - Logs, runtime events, and bridged control output redact obvious secret-shaped values.
-- Docker packaging runs non-root and the local security guard rejects privileged mode and Docker-socket mounts.
-- Renderer `localStorage` provider auth is prototype-only and must not be used for real provider keys.
+- Provider keys must not be stored in renderer localStorage.
+- Browser-managed provider secrets are write-only and resolved host-side.
+- Local gateway managed secrets are encrypted at rest in app-state storage; Windows can use Credential Manager for the local master key.
+- Local gateway hosted-auth mode uses `scrypt` password hashing and server-side sessions, but it is not enterprise SSO or a cloud identity boundary.
+- Host, WSL, and Docker execution backends are explicit. WSL/Docker availability must be detected and fail closed when unavailable.
+- Docker execution is a local container route, not a complete VM isolation product.
+- The Electron shell exposes no raw shell or filesystem bridge to the renderer.
 
-## Not Implemented Yet
+## Not Implemented
 
-- HyperCells or VM isolation
-- secure desktop secret store
-- billing ledger or budget caps
-- hosted control plane
-- production browser isolation
+- Not implemented: cross-platform secure desktop credential vault.
+- Not implemented: full HyperCell VM pool.
+- Not implemented: operator roles and tenant-scoped hosted authorization.
+- Not implemented: payment-backed billing or provider-side spend reservation.
+- Not implemented: production browser isolation.
+- Linux desktop installer packaging.
 
-## Production Expectations
+## Required Practice
 
-- Replace development secrets in local env files.
-- Use a real secret-management system before multi-user or production deployments.
-- Add stronger workload isolation before trusting shell or browser execution with higher-risk tasks.
-- Review current-state and deployment docs alongside this file before making security claims.
+- Pass secret references, not plaintext secrets, through runtime contracts.
+- Keep decrypted secrets out of prompts, logs, events, browser payloads, and tool outputs.
+- Resolve dangerous work through the policy and approval path.
+- Keep browser DTOs sanitized and tested.
+- Keep product orchestration outside `RuntimeKernel`.
+- Preserve the mailbox, tool, policy, provider, and event seams.
+
+Read [docs/security.md](docs/security.md) for the detailed security model.

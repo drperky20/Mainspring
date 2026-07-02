@@ -1,4 +1,5 @@
 import type { ConsoleGatewaySnapshot } from 'mainspring/gateway'
+import { browserUnsafeGatewayTextMarkers } from 'mainspring/gateway/browser-safety'
 
 export const prototypeConsoleStorageKey = 'mainspring.console.v1'
 
@@ -28,13 +29,7 @@ export const prototypeConsoleDataSource = {
   storageKey: prototypeConsoleStorageKey,
 } satisfies ConsoleDataSource
 
-export const forbiddenConsoleSnapshotTokens = [
-  'secretRef',
-  'workspaceRoot',
-  'sessionPath',
-  'OPENAI_API_KEY',
-  'OPENROUTER_API_KEY',
-] as const
+export const forbiddenConsoleSnapshotTokens = browserUnsafeGatewayTextMarkers()
 
 export function createStaticGatewaySnapshotDataSource(
   snapshot: ConsoleGatewaySnapshot,

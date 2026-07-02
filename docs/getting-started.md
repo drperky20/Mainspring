@@ -1,61 +1,76 @@
 # Getting Started
 
-## Local Setup
+## Requirements
+
+- Node.js 20 or newer
+- Corepack and pnpm
+- Git
+
+Docker is optional. It is only needed for the container runtime path.
+
+## Install
 
 ```bash
 corepack enable
 corepack prepare pnpm@9.15.4 --activate
 pnpm install
-cp .env.example .env
 pnpm verify
 ```
 
-## Minimal Embedded Run
-
-```ts
-import { EchoProvider, createMainspring } from 'mainspring'
-
-const runtime = createMainspring({
-  sessionsRoot: '.mainspring/sessions',
-  workspaceRoot: '.mainspring/workspace',
-  provider: new EchoProvider(),
-})
-
-await runtime.start()
-const session = runtime.sessions.create()
-const run = session.runs.start({ input: 'Hello', allowedTools: [] })
-
-for await (const event of run.events()) {
-  console.log(event)
-}
-
-await runtime.stop()
-```
-
-## Runtime Entrypoint
+## Run A Local Example
 
 ```bash
-pnpm build
-MAINSPRING_SESSIONS_ROOT=.mainspring/sessions \
-MAINSPRING_WORKSPACE_ROOT=.mainspring/workspace \
-pnpm start
+pnpm example:coding-agent
 ```
 
-## Provider Configuration
+Run all examples:
 
 ```bash
+pnpm examples:smoke
+```
+
+The examples use the real SDK/runtime path. They are not sandboxes.
+
+## Run The Gateway And Console
+
+```bash
+pnpm gateway:dev
+pnpm console:dev
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173/?mainspringConsoleSource=local-gateway-dev
+```
+
+The gateway is local-only. Remote and wildcard bind overrides fail closed.
+
+## Configure A Provider
+
+OpenRouter:
+
+```bash
+OPENROUTER_API_KEY=...
 MAINSPRING_PROVIDER=openrouter
 MAINSPRING_MODEL=openrouter/free
 MAINSPRING_CREDENTIAL_REF=env:OPENROUTER_API_KEY
-OPENROUTER_API_KEY=
 ```
 
-OpenAI-compatible proxies are also supported:
+OpenAI-compatible:
 
 ```bash
+OPENAI_API_KEY=...
 MAINSPRING_PROVIDER=openai
-MAINSPRING_MODEL=gpt-5.5
+MAINSPRING_MODEL=gpt-4.1-mini
 MAINSPRING_CREDENTIAL_REF=env:OPENAI_API_KEY
-MAINSPRING_OPENAI_BASE_URL=http://127.0.0.1:8645/v1
-MAINSPRING_OPENAI_RESPONSES_MODE=codex-proxy
 ```
+
+Provider keys belong in environment variables or managed secret storage. Do not store them in browser localStorage.
+
+## Next
+
+- [Architecture](architecture.md)
+- [Runtime Loop](runtime-loop.md)
+- [Local Gateway](features/local-gateway.md)
+- [Security](security.md)

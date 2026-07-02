@@ -15,6 +15,11 @@ describe('developmentGatewaySnapshotFixture', () => {
       providerProfiles: 2,
       sessions: 2,
       runs: 3,
+      storedApprovals: 0,
+      artifacts: 0,
+      usageLedgerEntries: 0,
+      auditEvents: 0,
+      memoryEntries: 0,
       pendingApprovals: 1,
     })
     expect(findForbiddenDevelopmentGatewaySnapshotFixtureTokens()).toEqual([])
@@ -55,7 +60,7 @@ describe('developmentGatewaySnapshotFixture', () => {
       providerReady: true,
       activeRunCount: 2,
       pendingApprovalCount: 1,
-      statusStrip: ['2 clients', 'Provider ready', '2 active runs', '1 pending approval'],
+      statusStrip: ['2 clients', 'Provider ready', '2 active runs', '0 usage entries | 0 artifacts'],
     })
     expect(result.viewModel.clients).toEqual([
       expect.objectContaining({

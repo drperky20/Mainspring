@@ -24,6 +24,11 @@ const gatewaySnapshot = {
     providerProfiles: 1,
     sessions: 1,
     runs: 2,
+    storedApprovals: 0,
+    artifacts: 1,
+    usageLedgerEntries: 1,
+    auditEvents: 0,
+    memoryEntries: 0,
     pendingApprovals: 1,
   },
   clients: [
@@ -109,6 +114,35 @@ const gatewaySnapshot = {
       targetKey: 'tool:shell.exec',
     },
   ],
+  approvalMetadata: [],
+  artifacts: [
+    {
+      artifactId: 'artifact_1',
+      runId: 'run_done',
+      sessionId: 'session_1',
+      workspaceId: 'workspace_acme',
+      kind: 'report',
+      label: 'Outcome',
+      mediaType: 'text/markdown',
+      sizeBytes: 256,
+      createdAt: '2026-06-27T15:41:00.000Z',
+    },
+  ],
+  usageLedger: [
+    {
+      entryId: 'usage_1',
+      runId: 'run_done',
+      sessionId: 'session_1',
+      workspaceId: 'workspace_acme',
+      providerId: 'openrouter',
+      modelId: 'anthropic/claude-sonnet-4',
+      totalTokens: 165,
+      estimatedCostUsd: 0.003,
+      createdAt: '2026-06-27T15:41:30.000Z',
+    },
+  ],
+  auditEvents: [],
+  memoryEntries: [],
 } satisfies ConsoleGatewaySnapshot
 
 describe('composeConsoleDashboardReadModel', () => {
@@ -137,8 +171,10 @@ describe('composeConsoleDashboardReadModel', () => {
       id: 'client_acme',
       subtitle: 'Research Agent',
       activeRunSummary: 'OpenRouter | anthropic/claude-sonnet-4',
+      usageSummary: '1 usage entry | est $0.003 | 1 artifact',
       statusLabel: 'Approval needed - OpenRouter',
     })
+    expect(result.viewModel.statusStrip).toContain('1 usage entry | 1 artifact | est $0.003')
     expect(findForbiddenConsoleReadModelTokens(result)).toEqual([])
   })
 

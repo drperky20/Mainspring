@@ -59,6 +59,9 @@ describe('dashboard view-model boundary', () => {
         activeRunCount: 2,
         pendingApprovalCount: 1,
       },
+      artifactCount: 0,
+      usageEntryCount: 0,
+      estimatedCostUsd: 0,
       providers: [
         {
           profileId: 'provider_profile_openrouter',
@@ -80,9 +83,13 @@ describe('dashboard view-model boundary', () => {
           agentCount: 1,
           activeRunCount: 2,
           pendingApprovalCount: 1,
+          artifactCount: 0,
+          usageEntryCount: 0,
+          estimatedCostUsd: 0,
           primaryAgentName: 'Research Agent',
         },
       ],
+      clientDetails: [],
       activeRuns: [
         {
           runId: 'run_waiting',
@@ -131,7 +138,7 @@ describe('dashboard view-model boundary', () => {
           pendingApprovalCount: 1,
         },
       ],
-      statusStrip: ['1 client', 'Provider ready', '2 active runs', '1 pending approval'],
+      statusStrip: ['1 client', 'Provider ready', '2 active runs', '0 usage entries | 0 artifacts'],
       activeRunCount: 2,
       pendingApprovalCount: 1,
     })
@@ -167,6 +174,9 @@ describe('dashboard view-model boundary', () => {
           activeRunCount: 0,
           pendingApprovalCount: 0,
         },
+        artifactCount: 0,
+        usageEntryCount: 0,
+        estimatedCostUsd: 0,
         providers: [],
         clients: [
           {
@@ -178,9 +188,13 @@ describe('dashboard view-model boundary', () => {
             agentCount: 0,
             activeRunCount: 0,
             pendingApprovalCount: 0,
+            artifactCount: 0,
+            usageEntryCount: 0,
+            estimatedCostUsd: 0,
           },
         ],
         activeRuns: [],
+        clientDetails: [],
         pendingApprovals: [],
       }).clients[0],
     ).toMatchObject({
@@ -206,6 +220,9 @@ describe('dashboard view-model boundary', () => {
         activeRunCount: 0,
         pendingApprovalCount: 0,
       },
+      artifactCount: 0,
+      usageEntryCount: 0,
+      estimatedCostUsd: 0,
       providers: [
         {
           profileId: 'provider_profile_managed',
@@ -226,8 +243,12 @@ describe('dashboard view-model boundary', () => {
           agentCount: 1,
           activeRunCount: 0,
           pendingApprovalCount: 0,
+          artifactCount: 0,
+          usageEntryCount: 0,
+          estimatedCostUsd: 0,
         },
       ],
+      clientDetails: [],
       activeRuns: [],
       pendingApprovals: [],
     })
@@ -236,7 +257,7 @@ describe('dashboard view-model boundary', () => {
       '1 client',
       'Provider unverified',
       '0 active runs',
-      '0 pending approvals',
+      '0 usage entries | 0 artifacts',
     ])
     expect(viewModel).toMatchObject({
       providerReady: false,
@@ -244,6 +265,71 @@ describe('dashboard view-model boundary', () => {
     })
     expect(viewModel.clients[0]).toMatchObject({
       statusLabel: 'Provider unverified',
+      providerReady: false,
+    })
+  })
+
+  it('keeps unavailable gateway provider state visible in status labels', () => {
+    const viewModel = gatewayProjectionToDashboardViewModel({
+      generatedAt: '2026-06-27T15:11:00.000Z',
+      health: 'ready',
+      providerReady: false,
+      providerState: 'unavailable',
+      counts: {
+        health: 'ready',
+        clientCount: 1,
+        workspaceCount: 1,
+        agentCount: 1,
+        providerProfileCount: 1,
+        activeSessionCount: 0,
+        activeRunCount: 0,
+        pendingApprovalCount: 0,
+      },
+      artifactCount: 0,
+      usageEntryCount: 0,
+      estimatedCostUsd: 0,
+      providers: [
+        {
+          profileId: 'provider_profile_external',
+          providerId: 'openrouter',
+          label: 'External OpenRouter',
+          status: 'active',
+          credentialState: 'unavailable',
+          ready: false,
+        },
+      ],
+      clients: [
+        {
+          clientId: 'client_1',
+          name: 'Client',
+          status: 'provider-unavailable',
+          providerReady: false,
+          workspaceCount: 1,
+          agentCount: 1,
+          activeRunCount: 0,
+          pendingApprovalCount: 0,
+          artifactCount: 0,
+          usageEntryCount: 0,
+          estimatedCostUsd: 0,
+        },
+      ],
+      clientDetails: [],
+      activeRuns: [],
+      pendingApprovals: [],
+    })
+
+    expect(viewModel.statusStrip).toEqual([
+      '1 client',
+      'Provider unavailable',
+      '0 active runs',
+      '0 usage entries | 0 artifacts',
+    ])
+    expect(viewModel).toMatchObject({
+      providerReady: false,
+      providerState: 'unavailable',
+    })
+    expect(viewModel.clients[0]).toMatchObject({
+      statusLabel: 'Provider unavailable',
       providerReady: false,
     })
   })
@@ -264,6 +350,9 @@ describe('dashboard view-model boundary', () => {
         activeRunCount: 1,
         pendingApprovalCount: 0,
       },
+      artifactCount: 0,
+      usageEntryCount: 0,
+      estimatedCostUsd: 0,
       providers: [
         {
           profileId: 'provider_profile_openrouter',
@@ -284,9 +373,13 @@ describe('dashboard view-model boundary', () => {
           agentCount: 1,
           activeRunCount: 1,
           pendingApprovalCount: 0,
+          artifactCount: 0,
+          usageEntryCount: 0,
+          estimatedCostUsd: 0,
           primaryAgentName: 'Runtime Agent',
         },
       ],
+      clientDetails: [],
       activeRuns: [
         {
           runId: 'run_runtime',

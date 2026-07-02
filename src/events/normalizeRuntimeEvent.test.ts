@@ -12,15 +12,23 @@ const EMITTED_RUN_EVENT_TYPES = [
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'run.awaiting_approval',
   'assistant.text.delta',
   'assistant.text.done',
   'tool.call.requested',
+  'tool.call.updated',
   'tool.call.completed',
   'tool.call.failed',
   'tool.call.blocked',
   'approval.requested',
   'approval.approved',
   'approval.denied',
+  'artifact.created',
+  'browser.updated',
+  'browser.screenshot.created',
+  'file.changed',
+  'memory.updated',
+  'skill.updated',
   'usage.updated',
   'runtime.warning',
   'runtime.error',
@@ -130,7 +138,7 @@ function row(event: MainspringEvent, seq = 1): RuntimeEventRow {
 describe('normalizeRuntimeEventRow', () => {
   it('keeps the public RunEventType contract fully classified', () => {
     expect(allRunEventTypesCovered).toBe(true)
-    expect(EMITTED_RUN_EVENT_TYPES).toHaveLength(16)
+    expect(EMITTED_RUN_EVENT_TYPES).toHaveLength(24)
     expect(EMITTED_RUN_EVENT_TYPES as readonly string[]).not.toContain('provider.init')
   })
 
@@ -160,6 +168,11 @@ describe('normalizeRuntimeEventRow', () => {
         'run.cancelled',
       ],
       [
+        'run awaiting approval',
+        { type: 'run.status', runId: 'run_1', status: 'waiting_approval', phase: 'tools' },
+        'run.awaiting_approval',
+      ],
+      [
         'assistant delta',
         { type: 'assistant.text.delta', runId: 'run_1', text: 'hel' },
         'assistant.text.delta',
@@ -179,6 +192,17 @@ describe('normalizeRuntimeEventRow', () => {
           input: { path: 'README.md' },
         },
         'tool.call.requested',
+      ],
+      [
+        'tool update',
+        {
+          type: 'tool.update',
+          runId: 'run_1',
+          toolCallId: 'tool_1',
+          message: 'running tool',
+          payload: { progress: 0.5 },
+        },
+        'tool.call.updated',
       ],
       [
         'tool completed',
@@ -244,6 +268,67 @@ describe('normalizeRuntimeEventRow', () => {
         'approval.denied',
       ],
       [
+        'artifact created',
+        {
+          type: 'artifact.created',
+          runId: 'run_1',
+          artifactId: 'artifact_1',
+          kind: 'file',
+        },
+        'artifact.created',
+      ],
+      [
+        'browser updated',
+        {
+          type: 'browser.event',
+          runId: 'run_1',
+          event: 'opened',
+          payload: { url: 'https://example.test' },
+        },
+        'browser.updated',
+      ],
+      [
+        'browser screenshot created',
+        {
+          type: 'browser.screenshot',
+          runId: 'run_1',
+          artifactId: 'artifact_browser_1',
+          url: 'https://example.test/screenshot.png',
+        },
+        'browser.screenshot.created',
+      ],
+      [
+        'file changed',
+        {
+          type: 'file.change',
+          runId: 'run_1',
+          path: 'notes/output.md',
+          action: 'updated',
+        },
+        'file.changed',
+      ],
+      [
+        'memory updated',
+        {
+          type: 'memory.event',
+          runId: 'run_1',
+          action: 'stored',
+          metadata: { scope: 'workspace' },
+        },
+        'memory.updated',
+      ],
+      [
+        'skill updated',
+        {
+          type: 'skill.event',
+          runId: 'run_1',
+          skillKey: 'summary',
+          action: 'installed',
+          metadata: { version: '1.0.0' },
+        },
+        'skill.updated',
+      ],
+      [
         'usage',
         {
           type: 'usage',
@@ -282,6 +367,201 @@ describe('normalizeRuntimeEventRow', () => {
     const payloadJson = JSON.stringify(normalized?.payload)
     expect(payloadJson).toContain('[redacted]')
     expect(payloadJson).not.toContain('sk-ant-secret123456789')
+  })
+
+  it('preserves waiting approval run status as a typed SDK run lifecycle event', () => {
+    const normalized = normalizeRuntimeEventRow(
+      row({
+        type: 'run.status',
+        runId: 'run_1',
+        status: 'waiting_approval',
+        phase: 'tool-policy',
+      }),
+    )
+
+    expect(normalized).toMatchObject({
+      type: 'run.awaiting_approval',
+      payload: {
+        phase: 'tool-policy',
+      },
+      visibility: 'public',
+    })
+  })
+
+  it('preserves sanitized tool update detail as a typed SDK run event', () => {
+    const normalized = normalizeRuntimeEventRow(
+      row({
+        type: 'tool.update',
+        runId: 'run_1',
+        toolCallId: 'tool_1',
+        message: 'streaming shell output',
+        payload: {
+          stdout: 'apiKey=sk-ant-secret123456789',
+          stderr: 'ok',
+          exitCode: 0,
+        },
+      }),
+    )
+
+    expect(normalized).toMatchObject({
+      type: 'tool.call.updated',
+      payload: {
+        toolCallId: 'tool_1',
+        message: 'streaming shell output',
+      },
+    })
+    const payloadJson = JSON.stringify(normalized?.payload)
+    expect(payloadJson).toContain('[redacted]')
+    expect(payloadJson).not.toContain('sk-ant-secret123456789')
+  })
+
+  it('preserves artifact creation rows as typed SDK run events', () => {
+    const normalized = normalizeRuntimeEventRow(
+      row({
+        type: 'artifact.created',
+        runId: 'run_1',
+        artifactId: 'artifact_1',
+        kind: 'file',
+      }),
+    )
+
+    expect(normalized).toMatchObject({
+      type: 'artifact.created',
+      payload: {
+        artifactId: 'artifact_1',
+        kind: 'file',
+      },
+      visibility: 'artifact-only',
+    })
+  })
+
+  it('preserves browser events as typed SDK run events with sanitized details', () => {
+    const event = normalizeRuntimeEventRow(
+      row({
+        type: 'browser.event',
+        runId: 'run_1',
+        event: 'navigated',
+        payload: {
+          url: 'https://example.test/?apiKey=sk-ant-secret123456789',
+          note: 'token=sk-ant-secret123456789',
+        },
+      }),
+    )
+
+    expect(event).toMatchObject({
+      type: 'browser.updated',
+      payload: {
+        action: 'navigated',
+        payload: {
+          url: 'https://example.test/?apiKey=[redacted]',
+          note: 'token=[redacted]',
+        },
+      },
+      visibility: 'sensitive',
+    })
+
+    const screenshot = normalizeRuntimeEventRow(
+      row({
+        type: 'browser.screenshot',
+        runId: 'run_1',
+        artifactId: 'artifact_browser_1',
+        url: 'https://example.test/screenshot.png?access_token=sk-ant-secret123456789',
+      }),
+    )
+
+    expect(screenshot).toMatchObject({
+      type: 'browser.screenshot.created',
+      payload: {
+        artifactId: 'artifact_browser_1',
+        url: 'https://example.test/screenshot.png?access_token=%5Bredacted%5D',
+      },
+      visibility: 'sensitive',
+    })
+    expect(JSON.stringify(screenshot?.payload)).not.toContain('sk-ant-secret123456789')
+  })
+
+  it('preserves file changes as typed SDK run events with normalized action', () => {
+    expect(
+      normalizeRuntimeEventRow(
+        row({
+          type: 'file.change',
+          runId: 'run_1',
+          path: 'notes/output.md',
+          action: 'created',
+        }),
+      ),
+    ).toMatchObject({
+      type: 'file.changed',
+      payload: {
+        path: 'notes/output.md',
+        action: 'created',
+      },
+      visibility: 'sensitive',
+    })
+
+    expect(
+      normalizeRuntimeEventRow(
+        row({
+          type: 'file.change',
+          runId: 'run_1',
+          path: 'notes/output.md',
+          action: 'renamed',
+        }),
+      )?.payload,
+    ).toEqual({
+      path: 'notes/output.md',
+      action: 'unknown',
+    })
+  })
+
+  it('preserves memory and skill updates as typed SDK run events with sanitized metadata', () => {
+    const memory = normalizeRuntimeEventRow(
+      row({
+        type: 'memory.event',
+        runId: 'run_1',
+        action: 'stored',
+        metadata: {
+          scope: 'workspace',
+          note: 'apiKey=sk-ant-secret123456789',
+        },
+      }),
+    )
+
+    expect(memory).toMatchObject({
+      type: 'memory.updated',
+      payload: {
+        action: 'stored',
+        metadata: {
+          scope: 'workspace',
+          note: 'apiKey=[redacted]',
+        },
+      },
+      visibility: 'sensitive',
+    })
+
+    const skill = normalizeRuntimeEventRow(
+      row({
+        type: 'skill.event',
+        runId: 'run_1',
+        skillKey: 'summary',
+        action: 'installed',
+        metadata: {
+          source: 'apiKey=sk-ant-secret123456789',
+        },
+      }),
+    )
+
+    expect(skill).toMatchObject({
+      type: 'skill.updated',
+      payload: {
+        skillKey: 'summary',
+        action: 'installed',
+        metadata: {
+          source: 'apiKey=[redacted]',
+        },
+      },
+      visibility: 'sensitive',
+    })
   })
 
   it('preserves extended usage detail in normalized runtime usage events', () => {

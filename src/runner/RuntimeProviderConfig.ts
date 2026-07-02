@@ -16,6 +16,13 @@ export interface RuntimeProviderSelection {
   fallbackReason?: string
 }
 
+export interface RuntimeProviderResolveOptions {
+  providerId: RuntimeProviderId
+  modelId?: string
+  credentialRef: string
+  options?: Record<string, unknown>
+}
+
 function clean(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
   return trimmed ? trimmed : undefined
@@ -40,6 +47,25 @@ function parsePositiveInteger(value: string | undefined): number | undefined {
 export function createRuntimeProviderFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): RuntimeProviderSelection {
+  const resolved = runtimeProviderResolveOptionsFromEnv(env)
+  const { providerId, modelId, credentialRef, options } = resolved
+  const registry = createDefaultProviderRegistry({ defaultProviderId: providerId })
+  return {
+    provider: registry.resolve({
+      providerId,
+      modelId,
+      credentialRef,
+      options,
+    }),
+    providerId,
+    modelId,
+    credentialRef,
+  }
+}
+
+export function runtimeProviderResolveOptionsFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): RuntimeProviderResolveOptions {
   const providerId = normalizeProviderId(env.MAINSPRING_PROVIDER) ?? MAINSPRING_APP_PROVIDER_ID
   const modelId =
     clean(env.MAINSPRING_MODEL) ??
@@ -47,7 +73,6 @@ export function createRuntimeProviderFromEnv(
   const credentialRef =
     clean(env.MAINSPRING_CREDENTIAL_REF) ??
     (providerId === 'openai' ? 'env:OPENAI_API_KEY' : MAINSPRING_APP_CREDENTIAL_REF)
-  const registry = createDefaultProviderRegistry({ defaultProviderId: providerId })
   const requestTimeoutMs = parsePositiveInteger(env.MAINSPRING_PROVIDER_REQUEST_TIMEOUT_MS)
   const baseUrl = clean(env.MAINSPRING_OPENAI_BASE_URL) ?? clean(env.OPENAI_BASE_URL)
   const responsesMode = clean(env.MAINSPRING_OPENAI_RESPONSES_MODE)
@@ -56,14 +81,9 @@ export function createRuntimeProviderFromEnv(
   if (providerId === 'openai' && baseUrl) options.baseUrl = baseUrl
   if (providerId === 'openai' && responsesMode) options.responsesMode = responsesMode
   return {
-    provider: registry.resolve({
-      providerId,
-      modelId,
-      credentialRef,
-      options: Object.keys(options).length ? options : undefined,
-    }),
     providerId,
     modelId,
     credentialRef,
+    ...(Object.keys(options).length > 0 ? { options } : {}),
   }
 }

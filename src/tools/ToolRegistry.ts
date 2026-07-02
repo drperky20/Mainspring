@@ -24,11 +24,18 @@ export interface ToolExecutionInput {
 export type ToolExecutionResult =
   | { status: 'completed'; output: unknown }
   | { status: 'approval_required'; approval: RuntimeApprovalRequest }
+  | {
+      status: 'policy_blocked'
+      reasons: string[]
+      permissionCategories: string[]
+    }
 
 export interface RuntimeToolContext {
   input: unknown
   runId: string
+  sessionId?: string
   workspaceRoot: string
+  computerId?: string
   registeredTools: ToolManifest[]
   readRecentEvents?: (input: { limit?: number }) => unknown[] | Promise<unknown[]>
   emitEvent: (event: MainspringEvent) => void
@@ -57,7 +64,9 @@ export const builtinManifest = (manifest: Omit<ToolManifest, 'source' | 'version
 
 export interface ToolRegistryOptions {
   runId: string
+  sessionId?: string
   workspaceRoot: string
+  computerId?: string
   policy: RuntimePolicyGuard | RuntimePolicy
   readRecentEvents?: (input: { runId: string; limit?: number }) => unknown[] | Promise<unknown[]>
   emitEvent?: (event: MainspringEvent) => void
@@ -129,11 +138,21 @@ export class ToolRegistry {
       return { status: 'approval_required', approval }
     }
 
+    if (decision.blocked) {
+      return {
+        status: 'policy_blocked',
+        reasons: decision.reasons,
+        permissionCategories: decision.permissionCategories,
+      }
+    }
+
     const readRecentEvents = this.options.readRecentEvents
     const output = await tool.execute({
       input: input.input,
       runId: this.options.runId,
+      ...(this.options.sessionId ? { sessionId: this.options.sessionId } : {}),
       workspaceRoot: this.options.workspaceRoot,
+      ...(this.options.computerId ? { computerId: this.options.computerId } : {}),
       registeredTools: this.registeredManifests(),
       readRecentEvents: readRecentEvents
         ? (eventInput) => readRecentEvents({ runId: this.options.runId, limit: eventInput.limit })

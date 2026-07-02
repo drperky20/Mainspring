@@ -6,6 +6,8 @@ import {
   redactRuntimeSensitiveText,
   RunCancelInboundContentSchema,
   RuntimePolicySchema,
+  RuntimeSecretRefSchema,
+  ProviderUsageSchema,
   runtimeErrorMessage,
   sanitizeRuntimeResponse,
   type MainspringEvent,
@@ -21,13 +23,17 @@ import type {
   ProviderEvent,
   ProviderMessage,
   QueryInput,
+  RuntimeSecretResolver,
 } from '../providers/types.js'
 import type { ProjectedTurnEvent } from '../agent/TurnLifecycle.js'
 import { approvalRequestedEvent, buildApprovalRequest } from '../policy/ApprovalPolicy.js'
 import { createApprovalReceipt, type ApprovalReceipt } from '../policy/ApprovalReceipt.js'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
+import { ToolResultStorage } from '../tools/ToolResultStorage.js'
 import { ToolRegistry } from '../tools/ToolRegistry.js'
+import { estimateUsageCost } from '../usage/UsageAccounting.js'
+import { modelPricingCatalogFromEnv, type ModelPricing } from '../usage/ModelPricing.js'
 import { CancellationController } from './CancellationController.js'
 import { ContinuationStore } from './ContinuationStore.js'
 import { AgentRunLoop } from '../agent/AgentRunLoop.js'
@@ -49,6 +55,7 @@ export interface RuntimeProviderInput {
   sessionId: string
   dispatch?: GatewayRunDispatch
   providerId?: string
+  credentialRef?: string
 }
 
 export interface RuntimeKernelOptions {
@@ -57,9 +64,11 @@ export interface RuntimeKernelOptions {
   cwd: string | ((input: RuntimeWorkspaceRootInput) => string)
   systemPrompt?: string
   env?: Record<string, string | undefined>
+  secretResolver?: RuntimeSecretResolver
   defaultModelId?: string
   tools?: RuntimeTool[]
   policy?: RuntimePolicy | RuntimePolicyGuard
+  pricingCatalog?: readonly ModelPricing[]
   staleProcessingAckAfterMs?: number
 }
 
@@ -78,7 +87,9 @@ type ActiveQuery = {
   fallbackToolCallIds: Map<string, string[]>
   policy: RuntimePolicyGuard
   cwd: string
+  computerId?: string
   abortController?: AbortController
+  budgetEstimatedCostUsd: number
 }
 
 type ProviderPendingToolApproval = {
@@ -98,6 +109,7 @@ type PreProviderPendingToolApproval = {
   toolCallId: string
   policy: RuntimePolicyGuard
   cwd?: string
+  computerId?: string
 }
 
 type PendingToolApproval = ProviderPendingToolApproval | PreProviderPendingToolApproval
@@ -105,6 +117,7 @@ type ProviderToolEventMode = 'managed_tools' | 'warn_on_tool_events' | 'legacy_n
 type ToolRegistryExecutionResult =
   | { status: 'completed'; output: unknown }
   | { status: 'approval_required'; approvalId: string }
+  | { status: 'policy_blocked'; output: unknown }
   | { status: 'failed'; error: string }
 
 const PRE_PROVIDER_APPROVAL_STATE_PREFIX = 'pendingPreProviderToolApproval:'
@@ -137,6 +150,10 @@ function parseStoredPreProviderApproval(value: unknown): PreProviderPendingToolA
     toolCallId,
     policy: new RuntimePolicyGuard(policy.data),
     cwd: typeof record.cwd === 'string' && record.cwd.trim() ? record.cwd : undefined,
+    computerId:
+      typeof record.computerId === 'string' && record.computerId.trim()
+        ? record.computerId
+        : undefined,
   }
 }
 
@@ -253,6 +270,19 @@ function runtimeProviderIdFromInput(
   return formatted.dispatch?.intent.runtimeOptions?.providerId
 }
 
+function runtimeCredentialRefFromInput(
+  formatted: ReturnType<typeof formatRuntimeInboundPrompt>,
+): string | undefined {
+  return formatted.dispatch?.intent.runtimeOptions?.credentialRef
+}
+
+function parsedRuntimeCredentialRefFromInput(
+  formatted: ReturnType<typeof formatRuntimeInboundPrompt>,
+): import('../providers/types.js').RuntimeCredentialRef | undefined {
+  const credentialRef = runtimeCredentialRefFromInput(formatted)
+  return credentialRef ? RuntimeSecretRefSchema.parse(credentialRef) : undefined
+}
+
 function serializeReplayContent(value: unknown): string {
   if (typeof value === 'string') return value
   if (value === undefined) return ''
@@ -265,8 +295,11 @@ export class RuntimeKernel {
   private readonly cancelledRuns = new Set<string>()
   private readonly pendingToolApprovals = new Map<string, PendingToolApproval>()
   private readonly continuationStore: ContinuationStore
+  private readonly toolResultStorage = new ToolResultStorage()
+  private readonly pricingCatalog: readonly ModelPricing[]
 
   constructor(private readonly options: RuntimeKernelOptions) {
+    this.pricingCatalog = options.pricingCatalog ?? modelPricingCatalogFromEnv(options.env)
     this.options.mailbox.recoverStaleProcessingAcks({
       staleAfterMs: options.staleProcessingAckAfterMs,
     })
@@ -485,6 +518,7 @@ export class RuntimeKernel {
       sessionId: pending.sessionId,
       policy: pending.policy,
       cwd,
+      ...(pending.computerId ? { computerId: pending.computerId } : {}),
       name: pending.toolName,
       input: pending.input,
       approvalReceipt: createApprovalReceipt({
@@ -536,6 +570,7 @@ export class RuntimeKernel {
       sessionId,
       dispatch: formatted.dispatch,
       providerId,
+      credentialRef: runtimeCredentialRefFromInput(formatted),
     })
     const replayMessages = resumeAt
       ? this.buildStructuredReplayMessages({
@@ -545,6 +580,7 @@ export class RuntimeKernel {
         })
       : []
     const model = runtimeModelIdFromInput(formatted, this.options.defaultModelId)
+    const credentialRef = parsedRuntimeCredentialRefFromInput(formatted)
     const prefersStructuredReplay = this.prefersStructuredReplayPrompt(provider, providerId)
     const history =
       resumeAt && !prefersStructuredReplay
@@ -559,6 +595,11 @@ export class RuntimeKernel {
       cwd,
       systemPrompt: formatted.systemPrompt ?? this.options.systemPrompt,
       env: this.options.env,
+      resolveCredential: (ref: import('../providers/types.js').RuntimeCredentialRef) =>
+        ref.kind === 'env'
+          ? this.options.env?.[ref.key] ?? process.env[ref.key]
+          : this.options.secretResolver?.(ref),
+      ...(credentialRef ? { credentialRef } : {}),
       ...(model ? { model } : {}),
       ...(providerId ? { providerId } : {}),
       resumeAt,
@@ -585,6 +626,8 @@ export class RuntimeKernel {
       fallbackToolCallIds: new Map(),
       policy,
       cwd,
+      budgetEstimatedCostUsd: 0,
+      ...(formatted.dispatch?.computerId ? { computerId: formatted.dispatch.computerId } : {}),
     }
     const hasRuntimeTools = (this.options.tools?.length ?? 0) > 0
     const toolEventMode: ProviderToolEventMode = hasRuntimeTools
@@ -646,6 +689,10 @@ export class RuntimeKernel {
       if (this.cancelledRuns.has(active.runId)) {
         this.activeQueries.delete(active.runId)
         this.options.mailbox.markAck(active.messageId, 'completed')
+      } else if (active.providerError) {
+        this.activeQueries.delete(active.runId)
+        this.options.mailbox.markAck(active.messageId, 'failed', active.providerError.message)
+        this.status(active.runId, active.sessionId, 'failed', 'provider')
       } else if (summary.exitReason === 'completed') {
         this.activeQueries.delete(active.runId)
         this.options.mailbox.markAck(active.messageId, 'completed')
@@ -664,8 +711,7 @@ export class RuntimeKernel {
                   ),
                   'Provider stopped after tool activity without producing a final assistant response.',
                 )
-            : active.providerError?.message ??
-              'Provider query failed.'
+            : 'Provider query failed.'
         this.activeQueries.delete(active.runId)
         this.options.mailbox.markAck(active.messageId, 'failed', failureMessage)
         if (!active.providerError) {
@@ -725,6 +771,27 @@ export class RuntimeKernel {
           usage: event.usage,
           ...(event.providerSessionId ? { providerSessionId: event.providerSessionId } : {}),
         })
+        if (active.policy.policy.budget?.status === 'blocked') {
+          const message =
+            active.policy.policy.budget.reason
+            ?? `Runtime budget blocked${active.policy.policy.budget.label ? `: ${active.policy.policy.budget.label}` : ''}`
+          active.providerError = { message, retryable: false }
+          this.ev(sessionId, {
+            type: 'log',
+            runId,
+            level: 'warning',
+            message,
+            payload: sanitizeRuntimeResponse({
+              category: 'budget',
+              budget: active.policy.policy.budget,
+              usage: event.usage,
+            }),
+          })
+          this.err(runId, sessionId, message, false)
+          active.abortController?.abort()
+          return
+        }
+        this.enforceRuntimeUsageBudget(active, event.usage)
         return
       case 'runtime.error':
         active.providerError = { message: runtimeTextMessage(event.message, 'Provider query failed.'), retryable: event.retryable }
@@ -756,6 +823,69 @@ export class RuntimeKernel {
         }
         return
     }
+  }
+
+  private enforceRuntimeUsageBudget(active: ActiveQuery, usagePayload: unknown): void {
+    const budget = active.policy.policy.budget
+    if (!budget?.enforceUsageLimit || active.providerError) return
+    const remainingEstimatedCostUsd = budget.remainingEstimatedCostUsd
+    if (typeof remainingEstimatedCostUsd !== 'number' || !Number.isFinite(remainingEstimatedCostUsd)) return
+
+    const parsed = ProviderUsageSchema.safeParse(usagePayload)
+    if (!parsed.success) {
+      const message = `Runtime budget usage payload is invalid; cannot enforce budget safely.`
+      this.failRuntimeBudget(active, message, {
+        category: 'budget',
+        budget,
+        usage: usagePayload,
+        validationIssues: parsed.error.issues.map((issue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+        })),
+      })
+      return
+    }
+
+    const estimate = estimateUsageCost({ usage: parsed.data, catalog: this.pricingCatalog })
+    if (estimate.pricingStatus === 'unpriced') {
+      const modelLabel = parsed.data.modelId ? ` for ${parsed.data.modelId}` : ''
+      const providerLabel = parsed.data.provider ? ` on ${parsed.data.provider}` : ''
+      const message = `Runtime budget usage is unpriced${modelLabel}${providerLabel}; cannot enforce budget safely.`
+      this.failRuntimeBudget(active, message, {
+        category: 'budget',
+        budget,
+        usage: parsed.data,
+        pricingStatus: estimate.pricingStatus,
+      })
+      return
+    }
+
+    active.budgetEstimatedCostUsd += estimate.estimatedCostUsd ?? 0
+    if (active.budgetEstimatedCostUsd > remainingEstimatedCostUsd) {
+      const message = `Runtime budget exceeded${budget.label ? `: ${budget.label}` : ''}.`
+      this.failRuntimeBudget(active, message, {
+        category: 'budget',
+        budget,
+        usage: parsed.data,
+        pricingStatus: estimate.pricingStatus,
+        estimatedCostUsd: estimate.estimatedCostUsd,
+        cumulativeEstimatedCostUsd: active.budgetEstimatedCostUsd,
+        remainingEstimatedCostUsd,
+      })
+    }
+  }
+
+  private failRuntimeBudget(active: ActiveQuery, message: string, payload: unknown): void {
+    active.providerError = { message, retryable: false }
+    this.ev(active.sessionId, {
+      type: 'log',
+      runId: active.runId,
+      level: 'warning',
+      message,
+      payload: sanitizeRuntimeResponse(payload),
+    })
+    this.err(active.runId, active.sessionId, message, false)
+    active.abortController?.abort()
   }
 
   private requestPreProviderApprovalIfNeeded(
@@ -807,6 +937,7 @@ export class RuntimeKernel {
       toolCallId,
       policy,
       cwd,
+      ...(dispatch.computerId ? { computerId: dispatch.computerId } : {}),
     })
     this.continuationStore.setJson(preProviderApprovalStateKey(approval.id), {
       runId,
@@ -816,6 +947,7 @@ export class RuntimeKernel {
       toolCallId,
       policy: policy.policy,
       cwd,
+      ...(dispatch.computerId ? { computerId: dispatch.computerId } : {}),
     })
     this.ev(sessionId, approvalRequestedEvent({ runId, approval }))
     this.status(runId, sessionId, 'waiting_approval', 'approval')
@@ -872,6 +1004,7 @@ export class RuntimeKernel {
       sessionId: active.sessionId,
       policy: active.policy,
       cwd: active.cwd,
+      ...(active.computerId ? { computerId: active.computerId } : {}),
       name: event.name,
       input: event.input,
       approvalReceipt: options.approvalReceipt,
@@ -890,6 +1023,17 @@ export class RuntimeKernel {
         name: event.name,
         status: 'approval_required',
         approvalId: result.approvalId,
+      })
+      return
+    }
+
+    if (result.status === 'policy_blocked') {
+      this.toolResult(active.runId, active.sessionId, toolCallId, event.name, result.output, 'denied')
+      this.pushTool(active, {
+        type: 'tool_result',
+        name: event.name,
+        status: 'denied',
+        output: result.output,
       })
       return
     }
@@ -916,6 +1060,7 @@ export class RuntimeKernel {
     sessionId: string
     policy: RuntimePolicyGuard
     cwd: string
+    computerId?: string
     name: string
     input: unknown
     approvalReceipt?: ApprovalReceipt
@@ -926,7 +1071,13 @@ export class RuntimeKernel {
       return { status: 'failed', error: 'Runtime tool call failed: no runtime tools are configured.' }
     }
 
-    const registry = this.registry(input.runId, input.sessionId, input.policy, input.cwd)
+    const registry = this.registry(
+      input.runId,
+      input.sessionId,
+      input.policy,
+      input.cwd,
+      input.computerId,
+    )
     registry.registerMany(tools)
 
     try {
@@ -938,7 +1089,25 @@ export class RuntimeKernel {
       if (result.status === 'approval_required') {
         return { status: 'approval_required', approvalId: result.approval.id }
       }
-      return { status: 'completed', output: runtimeFeedbackValue(result.output) }
+      if (result.status === 'policy_blocked') {
+        return {
+          status: 'policy_blocked',
+          output: {
+            blocked: true,
+            reasons: result.reasons,
+            permissionCategories: result.permissionCategories,
+          },
+        }
+      }
+      return {
+        status: 'completed',
+        output: this.toolResultStorage.prepare({
+          runId: input.runId,
+          workspaceRoot: input.cwd,
+          toolName: input.name,
+          output: runtimeFeedbackValue(result.output),
+        }).output,
+      }
     } catch (error) {
       return {
         status: 'failed',
@@ -1051,10 +1220,13 @@ export class RuntimeKernel {
     sessionId: string,
     policy: RuntimePolicyGuard,
     cwd: string,
+    computerId?: string,
   ): ToolRegistry {
     return new ToolRegistry({
       runId,
+      sessionId,
       workspaceRoot: cwd,
+      ...(computerId ? { computerId } : {}),
       policy,
       readRecentEvents: ({ runId: id, limit }) =>
         this.options.mailbox.readRecentEvents({ sessionId, runId: id, limit }),

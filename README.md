@@ -2,57 +2,39 @@
 
 # Mainspring
 
-**Mainspring is the open-source operating system for agent businesses.**
-
-Mainspring turns raw LLM output into controlled, replayable, policy-bound, inspectable, sellable agent work. It gives builders a runtime plane for consequences and a control plane for sessions, approvals, traces, usage, and operator context.
+Mainspring is a local-first TypeScript RunLog Fabric runtime for controlled personal-agent work. It turns model output into durable, policy-bound runs with append-only events, checkpoints, approvals, traces, usage records, and tool execution.
 
 ```text
-SDK / control host
--> per-session SQLite mailbox
--> SessionRuntimeSupervisor
--> RuntimeKernel
+SDK / HTTP / channel adapter
+-> RunLog intake
+-> SQLite WAL RunLog
+-> RunLogScheduler
+-> RunLogExecutor
 -> AgentProvider.query
 -> ToolRegistry
 -> RuntimePolicyGuard / ApprovalReceipt
--> tools
--> events_out
--> SDK / control event projection
+-> tools / workspace / artifacts
+-> RunLog events + checkpoints
+-> SDK / gateway / console projection
 ```
 
-The model owns language reasoning. Mainspring owns everything with consequences.
+The model reasons. Mainspring owns the parts with consequences.
 
-## What Mainspring Does
+The older per-session SQLite legacy mailbox and `RuntimeKernel` path still exists as compatibility and migration surface for current SDK/gateway behavior. New runtime work should target RunLog Fabric first.
 
-- Runs agents through a durable SQLite mailbox and event journal
-- Keeps tool execution outside the model in a typed tool registry
-- Gates risky actions through policy checks and approval receipts
-- Preserves run traces, usage, warnings, and tool output for replay and inspection
-- Ships an embeddable TypeScript SDK plus a local prototype founder cockpit
-- Stays local-first and explicit about what is implemented versus what is still roadmap
+## What Ships Today
 
-## Who It Is For
+- Embeddable SDK for local sessions, runs, approvals, events, artifacts, and usage.
+- Canonical RunLog Fabric core with SQLite WAL events, scheduler leases, checkpoints, provider routing, tool-call handling, policy checks, and host projections.
+- Legacy per-session SQLite mailbox and `RuntimeKernel` compatibility path while SDK/gateway migration continues.
+- Built-in file, shell, terminal, browser-adapter, web, memory, skill, and diagnostics tools.
+- Local gateway development host with app-state SQLite for clients, workspaces, agents, provider profiles, budgets, usage, cron, marketplace templates, deployments, and audit rows.
+- Vite console with prototype local state plus explicit `local-gateway-dev` transport for live local gateway workflows.
+- Experimental Electron shell for the console, with verified Windows packaging.
+- Runnable example agents and a trusted local template catalog.
+- Docker runtime image and local release verification scripts.
 
-- Founders building an agent business for real clients
-- Agencies managing multiple customer workspaces and policies
-- Developers who want self-hosted agent infrastructure instead of opaque chats
-- Operators who need traces, approvals, receipts, and workspace boundaries from day one
-
-## Current Package
-
-This repository currently ships:
-
-| Path | Responsibility |
-| --- | --- |
-| `src/runner` | `RuntimeKernel`, session supervisor, runtime entrypoint, provider routing |
-| `src/mailbox` | per-session SQLite mailbox and `events_out` journal |
-| `src/providers` | provider abstraction, OpenRouter/OpenAI-compatible clients, mocks |
-| `src/tools` | file, shell, browser-adapter, web, memory, skill, diagnostics tools |
-| `src/policy` | policy guard, approval requests, approval receipts |
-| `src/sdk` | embeddable SDK for sessions, runs, approvals, monitoring, and usage |
-| `src/gateway` | local snapshot and read-model helpers for future host wiring |
-| `apps/console` | prototype founder cockpit UI with explicit localStorage honesty |
-| `examples/` | agent-business templates for local-first use cases |
-| `docker/` | non-root runtime image and local compose packaging |
+Mainspring is still local-first infrastructure. It is not a hosted SaaS control plane, not a secure VM pool, and not a payment marketplace.
 
 ## Quick Start
 
@@ -60,14 +42,26 @@ This repository currently ships:
 corepack enable
 corepack prepare pnpm@9.15.4 --activate
 pnpm install
-cp .env.example .env
 pnpm verify
 ```
 
-`pnpm verify` is the main confidence button:
+Run an example that does not need a paid provider key:
+
+```bash
+pnpm example:coding-agent
+```
+
+Run the local gateway and console:
+
+```bash
+pnpm gateway:dev
+pnpm console:dev
+```
+
+Open the console with:
 
 ```text
-doctor -> typecheck -> tests -> build -> security guard -> console typecheck -> console build
+http://127.0.0.1:5173/?mainspringConsoleSource=local-gateway-dev
 ```
 
 ## Minimal SDK Example
@@ -98,122 +92,95 @@ for await (const event of run.events()) {
 await mainspring.stop()
 ```
 
-More examples live in [examples/](examples/) and [docs/examples.md](docs/examples.md).
+## Project Layout
 
-## Provider Setup
+| Path | Purpose |
+| --- | --- |
+| `src/core` | RunLog Fabric kernel, scheduler, executor, provider routing, events, checkpoints. |
+| `src/adapters` | SQLite WAL RunLog storage and local content-addressed blob storage. |
+| `src/capabilities` | Optional RunLog capabilities such as workspace leases and cron rows. |
+| `src/hosts` | RunLog projections for SDK, gateway, console, and future hosts. |
+| `src/compat` | Temporary compatibility exports for migration. |
+| `src/runner` | Legacy runtime kernel, supervisor, provider config, runtime entrypoint. |
+| `src/mailbox` | Legacy per-session SQLite mailbox, event journal, attachments. |
+| `src/providers` | Provider abstraction and OpenAI/OpenRouter-compatible clients. |
+| `src/tools` | Tool registry and built-in tools. |
+| `src/policy` | Policy guard and approval receipts. |
+| `src/sdk` | Local embedding API for sessions, runs, approvals, and monitoring. |
+| `src/gateway` | Local gateway, app-state store, auth, cron, budgets, marketplace, deployments. |
+| `apps/console` | Operator console. |
+| `apps/desktop` | Experimental Electron shell. |
+| `examples` | Runnable local agents and template catalog seeds. |
+| `docker` | Non-root runtime container and local compose file. |
+| `docs` | Architecture, feature, operations, and security documentation. |
 
-Mainspring currently supports direct OpenAI-compatible and OpenRouter-style providers through the runtime provider layer.
+## Documentation
 
-### OpenRouter
+Start with [docs/index.md](docs/index.md).
 
-```bash
-OPENROUTER_API_KEY=your_key_here
-MAINSPRING_PROVIDER_ID=openrouter
-MAINSPRING_MODEL_ID=openrouter/free
-pnpm verify
-```
-
-### OpenAI-Compatible
-
-```bash
-OPENAI_API_KEY=your_key_here
-MAINSPRING_PROVIDER_ID=openai
-MAINSPRING_MODEL_ID=gpt-4.1-mini
-pnpm verify
-```
-
-Provider keys belong in environment variables or secret references. Do not store them in the browser console.
-
-## Console Status
-
-Run the prototype cockpit locally:
-
-```bash
-pnpm console:dev
-```
-
-What the console is today:
-
-- local-first prototype UI
-- draft clients, agents, provider labels, and skill toggles
-- sample trace flow
-- development gateway fixture preview for read-only dashboard and trace-style screens
-
-What it is not yet:
-
-- live gateway transport
-- runtime-backed approvals
-- secure provider credential manager
-- billing surface
-- Electron desktop app
-
-## Security Model
-
-Mainspring is careful about boundaries, but it is not magic.
-
-- Host shell execution is not a sandbox.
-- Process execution must not be marketed as secure containment.
-- Browser tools are adapter-trusted.
-- File tools enforce workspace containment checks.
-- Approval receipts exist for policy-gated actions.
-- Docker packaging runs non-root, but Docker is not a complete isolation story by itself.
-- Renderer `localStorage` provider auth is prototype-only and must not hold real provider keys.
-
-Read the full security truth in [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md).
-
-## Current Limits
-
-- No HyperCells, VM isolation, or secure desktop secret store
-- No live hosted control plane
-- No billing ledger
-- No production-ready browser isolation
-- No Electron packaging in this checkout
-- Console is still prototype/localStorage by default
-
-That honesty is deliberate. The repo is meant to be useful now without pretending roadmap work already exists.
-
-## Docs
+Common paths:
 
 - [Getting Started](docs/getting-started.md)
 - [Architecture](docs/architecture.md)
-- [Current State](docs/current-state.md)
 - [Runtime Loop](docs/runtime-loop.md)
 - [SDK](docs/sdk.md)
+- [Local Gateway](docs/features/local-gateway.md)
+- [Console And Desktop](docs/features/console-and-desktop.md)
+- [Tools And Execution Backends](docs/features/tools-and-execution.md)
+- [Secrets And Providers](docs/features/secrets-and-providers.md)
+- [Budgets And Usage](docs/features/budgets-and-usage.md)
+- [Cron, Marketplace, And Deployments](docs/features/automation-marketplace-deployment.md)
+- [Operations And Verification](docs/operations.md)
 - [Security](docs/security.md)
-- [Deployment](docs/deployment.md)
-- [Brand](docs/brand.md)
-- [Positioning](docs/positioning.md)
-- [Marketing](docs/marketing.md)
-- [Roadmap](docs/roadmap.md)
-- [Open Source Notes](docs/open-source.md)
-- [Hermes Port Goal](docs/hermes-agent-port-goal.md)
+- [Current State Audit](docs/current-state.md)
 
-## Roadmap
+## Verification
 
-Near-term pressure:
+The normal confidence gate is:
 
-- keep preserving the mailbox and event-journal runtime spine
-- wire more console surfaces to truthful gateway-backed read models
-- tighten provider/session/trace projections without widening fake product claims
-- continue Hermes-inspired harness replacement in tested TypeScript slices
+```bash
+pnpm verify
+```
 
-Longer-term direction:
+The full local release gate is:
 
-- local gateway host
-- stronger trace and artifact surfaces
-- richer client/workspace/agent objects
-- future isolation contracts before claiming secure execution
+```bash
+pnpm release:check
+```
+
+Focused checks:
+
+```bash
+pnpm gateway:systems:check
+pnpm examples:smoke
+pnpm package:check
+pnpm desktop:systems:check
+pnpm security:sensitive-patterns
+```
+
+## Security Truth
+
+- Host shell execution is not a sandbox.
+- Process execution must not be marketed as secure containment.
+- Renderer `localStorage` provider auth is prototype-only.
+- Provider keys must not be stored in browser localStorage.
+- Managed provider secrets are write-only from the browser and resolved host-side.
+- WSL and Docker execution backends are explicit backend routes, not a complete VM isolation product.
+- The local gateway hosted-auth mode is a local/operator slice, not enterprise SSO or a hosted control plane.
+
+Read [SECURITY.md](SECURITY.md) and [docs/security.md](docs/security.md) before expanding privileged surfaces.
+
+## Current Limits
+
+- No cross-platform secure desktop keychain.
+- No multi-user hosted control plane.
+- No full HyperCell VM pool.
+- No live provider billing or payment-backed marketplace.
+- Linux users run from source; Linux desktop installer packaging is not currently a supported release lane.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Good contributions for this phase:
-
-- runtime correctness
-- event-journal and replay ergonomics
-- documentation clarity
-- provider integrations
-- policy and approval surfaces
-- console polish that preserves prototype honesty
+See [CONTRIBUTING.md](CONTRIBUTING.md). The highest-value contributions preserve the runtime spine, improve verification, tighten docs, and avoid fake product surfaces.
 
 ## License
 

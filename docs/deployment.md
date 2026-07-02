@@ -1,53 +1,50 @@
 # Deployment
 
-Mainspring currently deploys as one runtime package. You can embed it in a product API, run it as a local process, or build the supplied non-root Docker image.
-
-## Local Package
+## Source Run
 
 ```bash
 pnpm install
-cp .env.example .env
 pnpm verify
 pnpm build
 pnpm start
 ```
 
-Runtime inputs are configured with `MAINSPRING_*` environment variables:
-
-```bash
-MAINSPRING_SESSIONS_ROOT=.mainspring/sessions
-MAINSPRING_WORKSPACE_ROOT=.mainspring/workspace
-MAINSPRING_PROVIDER=openrouter
-MAINSPRING_MODEL=openrouter/free
-MAINSPRING_CREDENTIAL_REF=env:OPENROUTER_API_KEY
-```
+Linux users should use the source path. Linux desktop installer packaging is not currently supported.
 
 ## Docker
 
 ```bash
+docker compose -f docker/compose.local.yml config
 docker compose -f docker/compose.local.yml up --build
 ```
 
-The image:
+The image runs non-root, uses named volumes, does not publish a public port, and does not mount the Docker socket.
 
-- Runs as UID/GID `10001`.
-- Declares `/runtime`, `/workspaces`, `/sessions`, and `/artifacts` volumes.
-- Does not expose a public port.
-- Does not mount the Docker socket.
-- Starts `node dist/runner/main.js`.
+## Desktop
 
-## Hosted Product Wrapper
+Windows package:
 
-For a SaaS/control-plane product, wrap this package with:
+```bash
+pnpm desktop:pack
+```
 
-| Layer | Suggested backing |
-| --- | --- |
-| Product API | Fastify/Express/Next route handlers that write dispatches and read events. |
-| Queue | Postgres leases first, Redis/SQS after scale. |
-| Runtime runners | Containers or microVMs running `mainspring-runtime`. |
-| Metadata | Postgres for users, orgs, clients, agents, sessions, turns, approvals, usage. |
-| Artifacts | Local filesystem for self-host, S3-compatible storage for hosted. |
-| Secrets | KMS or managed secret store, passed to runtime only as scoped refs. |
-| Observability | Structured logs and event-journal projections with redaction. |
+Cross-platform source/build checks:
 
-The package boundary stays the same: the control plane owns tenancy and business objects; Mainspring owns provider/tool execution and the evented runtime loop.
+```bash
+pnpm desktop:packaging:check
+pnpm desktop:systems:check
+```
+
+`desktop:packaging:check` keeps desktop installer packaging Windows-only. The desktop shell is not a privileged runtime gateway or secret vault.
+
+## VPS Lane
+
+The local gateway can plan and execute guarded VPS deployment commands after explicit operator confirmation.
+
+It does not copy provider secrets. Remote env files must be managed separately.
+
+Check:
+
+```bash
+pnpm deploy:check
+```

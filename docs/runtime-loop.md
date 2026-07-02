@@ -1,46 +1,52 @@
 # Runtime Loop
 
-The runtime turns a model response into controlled work.
+The RunLog runtime loop turns a queued `RunIntent` into durable events, tool decisions, checkpoints, and a final run status.
 
-## Responsibilities
-
-| Component | Responsibility |
-| --- | --- |
-| LLM provider | Language reasoning, tool-call proposals, final text. |
-| Runtime kernel | Poll inbound mailbox rows, start provider queries, route provider events, write terminal status. |
-| Mailbox | Durable inbound commands, outbound messages, event journal, processing acks, heartbeat. |
-| Tool registry | Tool manifest registration, policy checks, approval receipt validation, execution. |
-| Policy guard | Risk scoring and approval decisions. |
-| Tools | Files, shell, browser adapter, memory, web, skills, diagnostics. |
-| Event journal | Durable trace of text, tools, approvals, usage, logs, and errors. |
-
-## Turn Flow
+## Flow
 
 ```text
-SDK/control plane writes GatewayRunDispatch
--> SQLite inbound mailbox
--> SessionRuntimeSupervisor discovers session
--> RuntimeKernel reads pending inbound row
--> provider receives prompt + system prompt + tool manifests
--> provider emits text/tool events
--> ToolRegistry validates requested tool
--> RuntimePolicyGuard scores risk
--> approval request or tool execution
--> tool result is sanitized
--> result is pushed back to provider
--> provider emits final text
--> RuntimeKernel writes terminal run.status
--> SDK/control plane streams normalized events
+RunLogKernel.startRun
+-> append run.created / input.received / run.queued
+-> RunLogScheduler.claimNext
+-> RunLogExecutor
+-> ProviderRouter.resolve
+-> AgentProvider.query
+-> provider events
+-> ToolRegistry if tool_call
+-> RuntimePolicyGuard / approval pause if required
+-> checkpoint.saved
+-> run.completed / run.failed / run.awaiting_approval
 ```
 
-## Failure Handling
+## Implemented Pieces
 
-- Provider error: emit `error`, mark run failed unless retry policy says otherwise.
-- Unknown tool: emit tool failure and push failure observation to the provider.
-- Approval required: emit `approval.requested`, persist pending approval state, and resume when a receipt arrives.
-- Cancellation: send cancel signal to provider, clear pending approvals, and emit terminal cancelled state.
-- Bad output: redact and truncate before returning it to the model, event stream, or logs.
+- `src/core/RunLogKernel.ts` starts and drains runs.
+- `src/core/RunLogExecutor.ts` records provider events, routes tool calls, appends checkpoints, and pauses on approval.
+- `src/core/RunLogScheduler.ts` claims queued runs with DB leases.
+- `src/adapters/sqlite/SqliteRunLogStore.ts` persists agents, runs, events, checkpoints, leases, and cron rows.
+- `src/hosts/runlog/RunLogProjection.ts` projects run events into a host-friendly read model.
 
-## Design Rule
+## Event Boundaries
 
-Tool output is observation, not instruction. Retrieved files, webpages, logs, command output, and model-generated tool results cannot override policy or operator approvals.
+RunLog events are append-only. Important event families:
+
+- `run.created`, `input.received`, `run.queued`, `run.claimed`
+- `provider.init`, `assistant.delta`, `assistant.result`, `usage.reported`
+- `tool.call.requested`, `tool.call.completed`, `tool.call.blocked`, `tool.call.failed`
+- `approval.requested`, `run.awaiting_approval`
+- `workspace.lease.created`, `workspace.lease.released`
+- `checkpoint.saved`
+- `cron.due`
+- `run.completed`, `run.failed`, `run.cancelled`
+
+## Approvals
+
+Approvals are durable runtime state, not UI booleans. A tool that requires approval causes the run to enter `awaiting_approval`; future work should resume from the checkpoint with an approval receipt rather than replaying side effects.
+
+## Recovery
+
+SQLite stores queued/running state and checkpoints. If an object/process restarts before a run is claimed, the next `RunLogKernel` instance can claim and execute it. Expired running leases are claimable by later workers.
+
+## Legacy Projection
+
+The old mailbox runtime still projects native mailbox events into SDK/gateway events. During migration, compatibility hosts should project RunLog events to those same public DTOs rather than adding another event family.

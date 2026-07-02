@@ -10,6 +10,11 @@ export type MainspringRuntimeIdentity = typeof MAINSPRING_RUNTIME_IDENTITY
 export * from './contracts/index.js'
 export * from './sdk/index.js'
 export * from './gateway/index.js'
+export * as MainspringCore from './core/index.js'
+export * as MainspringAdapters from './adapters/index.js'
+export * as MainspringCapabilities from './capabilities/index.js'
+export * as MainspringRunLogHost from './hosts/runlog/index.js'
+export * as MainspringCompat from './compat/index.js'
 export * as MainspringProtocol from './protocol/index.js'
 export * as MainspringControl from './control/index.js'
 
@@ -91,6 +96,60 @@ export {
 } from './agent/TurnLifecycle.js'
 export { AgentRunLoop } from './agent/AgentRunLoop.js'
 export type { AgentRunLoopOptions, AgentRunLoopSummary } from './agent/AgentRunLoop.js'
+export {
+  DEFAULT_CONTEXT_MAX_TOKENS,
+  DEFAULT_PROTECTED_HEAD_MESSAGES,
+  DEFAULT_PROTECTED_TAIL_MESSAGES,
+  estimateTextTokens,
+  summarizeContextBudget,
+} from './agent/ContextBudget.js'
+export type { ContextBudgetInput, ContextBudgetSummary } from './agent/ContextBudget.js'
+export { createContextCompressionPlan } from './agent/ContextCompressionPlan.js'
+export type { ContextCompressionPlan } from './agent/ContextCompressionPlan.js'
+export { buildRunContextPack } from './agent/ContextPack.js'
+export { buildWorkspaceContext } from './agent/WorkspaceContext.js'
+export type {
+  WorkspaceContextOptions,
+  WorkspaceContextSummary,
+  WorkspaceEntrySummary,
+} from './agent/WorkspaceContext.js'
+export { buildSubdirectoryHints } from './agent/SubdirectoryHints.js'
+export type { SubdirectoryHint, SubdirectoryHintsOptions } from './agent/SubdirectoryHints.js'
+export { buildCodingContext } from './agent/CodingContext.js'
+export type { CodingContextOptions, CodingContextSummary } from './agent/CodingContext.js'
+export { createMemoryContext } from './memory/MemoryContext.js'
+export type { MemoryContext, MemoryContextOptions } from './memory/MemoryContext.js'
+export { MemoryProvider } from './memory/MemoryProvider.js'
+export type { MemoryProviderOptions } from './memory/MemoryProvider.js'
+export { createJsonlMemoryStore, JsonlMemoryStore, listStoredMemoryEntries } from './memory/MemoryStore.js'
+export type {
+  ListMemoryInput,
+  MemoryRecord,
+  MemoryScope,
+  MemoryStore,
+  WriteMemoryInput,
+} from './memory/MemoryStore.js'
+export {
+  describeModelPricingCatalog,
+  defaultModelPricingCatalog,
+  loadModelPricingCatalogFile,
+  lookupModelPricing,
+  modelPricingCatalogFromEnv,
+  modelPricingCatalogPathFromEnv,
+  modelPricingCatalogSourceLabel,
+  parseModelPricingCatalog,
+} from './usage/ModelPricing.js'
+export type {
+  DescribeModelPricingCatalogOptions,
+  LoadModelPricingCatalogOptions,
+  LookupModelPricingOptions,
+  ModelPricing,
+  ModelPricingCatalogStatus,
+} from './usage/ModelPricing.js'
+export { estimateUsageCost } from './usage/UsageAccounting.js'
+export type { EstimateUsageCostOptions, UsageCostEstimate } from './usage/UsageAccounting.js'
+export { summarizeUsageLedger } from './usage/UsageLedger.js'
+export type { UsageLedgerEntryLike, UsageLedgerSummary } from './usage/UsageLedger.js'
 export type {
   ProjectedTurnEvent,
   ToolResultClassification,
@@ -126,6 +185,20 @@ export type {
 } from './tools/ToolRegistry.js'
 export { createFileReadTool, createFileTools, createFileWriteTool } from './tools/FileTools.js'
 export { createShellTool } from './tools/ShellTool.js'
+export {
+  backendPreferenceFromComputerId,
+  backendSummaryLine,
+  inspectExecutionBackends,
+  parseExecutionBackendPreference,
+  resolveExecutionBackend,
+} from './tools/ExecutionBackend.js'
+export type {
+  ExecutionBackendInventory,
+  ExecutionBackendStatus,
+  ProcessExecutionBackend,
+  ProcessExecutionBackendPreference,
+  ResolvedExecutionBackend,
+} from './tools/ExecutionBackend.js'
 export {
   createBrowserOpenTool,
   createBrowserScreenshotTool,

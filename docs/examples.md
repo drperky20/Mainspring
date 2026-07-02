@@ -1,11 +1,25 @@
 # Examples
 
-The examples folder contains product-shaped starter specs. They are intentionally small: each one describes the business object model, agent policy, tools, and monetization route.
+Run one example:
+
+```bash
+pnpm example:coding-agent
+```
+
+Run all examples:
+
+```bash
+pnpm examples:smoke
+```
+
+## Inventory
 
 | Example | Purpose |
 | --- | --- |
-| `personal-assistant` | Local private assistant with memory and approvals. |
-| `agency-client-agent` | Agency selling a managed assistant to one client. |
-| `support-agent` | Customer support agent with policy files and approval gates. |
-| `coding-agent` | Codebase agent with file tools, shell tests, and patch review. |
-| `local-first-agent` | Self-hosted single-user deployment. |
+| `coding-agent` | Approval-backed file mutation workflow. |
+| `personal-assistant` | Local note-reading assistant. |
+| `support-agent` | Support workflow over policy and FAQ files. |
+| `agency-client-agent` | Client deliverable workflow. |
+| `local-first-agent` | Local memory workflow. |
+
+Examples use the real SDK/runtime path. They are not sandboxes.

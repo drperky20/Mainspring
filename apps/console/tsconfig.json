@@ -5,8 +5,14 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": ".",
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "paths": {
+      "mainspring": ["../../src/index.ts"],
+      "mainspring/gateway": ["../../src/gateway/index.ts"],
+      "mainspring/gateway/browser-safety": ["../../src/gateway/browserSafety.ts"]
+    }
   },
   "include": ["src"]
 }

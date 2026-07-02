@@ -1084,7 +1084,35 @@ describe('HTTP provider clients', () => {
     )
     expect(unresolvedEvents.at(-1)).toMatchObject({
       type: 'error',
-      message: 'Provider credential ref kind managed cannot be resolved in-process.',
+      message: 'Provider credential ref kind managed could not be resolved in-process.',
     })
+  })
+
+  it('uses a managed secret resolver for in-process provider requests', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    const client = openRouter(async (url, init) => {
+      requests.push({ url: String(url), init })
+      return jsonResponse({
+        id: 'gen_managed_secret',
+        choices: [{ message: { role: 'assistant', content: 'managed ok' } }],
+      })
+    })
+
+    const events = await collectEvents(
+      client.query({
+        prompt: 'hello',
+        cwd: '/workspace',
+        credentialRef: { kind: 'managed', key: 'provider_profile_1' },
+        resolveCredential: (ref) =>
+          ref.kind === 'managed' && ref.key === 'provider_profile_1'
+            ? 'sk-managed-secret-value'
+            : undefined,
+      }),
+    )
+
+    expect(requests[0]?.init?.headers).toMatchObject({
+      authorization: 'Bearer sk-managed-secret-value',
+    })
+    expect(events).toContainEqual({ type: 'result', text: 'managed ok' })
   })
 })

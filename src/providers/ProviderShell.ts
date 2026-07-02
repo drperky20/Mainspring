@@ -41,6 +41,7 @@ export class ProviderShell implements AgentProvider {
       model: input.model ?? this.modelId,
       providerId: this.providerId,
       credentialRef: this.credentialRef,
+      resolveCredential: input.resolveCredential,
     })
   }
 }

@@ -24,13 +24,28 @@ export interface DeriveAppDashboardBootstrapInput {
   mode?: ConsoleDataSourceSelectorMode
 }
 
+function isExplicitConsoleMode(value: string | null | undefined): value is ConsoleDataSourceSelectorMode {
+  return (
+    value === 'development-gateway-fixture' ||
+    value === 'local-gateway-dev' ||
+    value === 'prototype-localStorage'
+  )
+}
+
 export function resolveAppDashboardBootstrapMode(
   search: string,
+  configuredMode?: string,
 ): ConsoleDataSourceSelectorMode | undefined {
   const value = new URLSearchParams(search).get(developmentConsoleBootstrapSearchParam)
-  return value === 'development-gateway-fixture' || value === 'local-gateway-dev'
-    ? value
-    : undefined
+  if (isExplicitConsoleMode(value)) {
+    return value === 'prototype-localStorage' ? undefined : value
+  }
+
+  if (isExplicitConsoleMode(configuredMode)) {
+    return configuredMode === 'prototype-localStorage' ? undefined : configuredMode
+  }
+
+  return undefined
 }
 
 export function deriveAppDashboardBootstrap({

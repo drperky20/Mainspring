@@ -1,69 +1,85 @@
 # Architecture
 
-Mainspring is a single TypeScript package that turns model output into a controlled agentic runtime loop.
+Mainspring is moving to a TypeScript-native RunLog Fabric: a small durable kernel for agent execution, with infrastructure adapters around it instead of infrastructure assumptions inside it.
 
-## Core Boundary
-
-```mermaid
-flowchart LR
-  User["User / SDK / Control Plane"] --> Mailbox["SQLite Mailbox"]
-  Mailbox --> Kernel["RuntimeKernel"]
-  Kernel --> Provider["LLM Provider"]
-  Provider --> Kernel
-  Kernel --> Registry["ToolRegistry"]
-  Registry --> Policy["PolicyGuard"]
-  Policy --> Approval["Approval Receipt"]
-  Registry --> Tools["File / Shell / Browser / Memory / Web / Skills"]
-  Tools --> Registry
-  Kernel --> Events["Event Journal"]
-  Events --> SDK["Mainspring SDK"]
-```
-
-The LLM never executes tools directly. It emits provider events. The runtime validates and routes those events through policy, approvals, tool execution, sanitization, and event persistence.
-
-## Runtime Components
-
-| Component | Files | Role |
-| --- | --- | --- |
-| Runtime kernel | `src/runner/RuntimeKernel.ts` | Polls inbound messages, formats prompts, starts provider queries, handles tool calls, writes events, completes runs. |
-| Mailbox | `src/mailbox/*` | Durable SQLite transport for inbound messages, outbound messages, events, attachments, heartbeats, and processing acks. |
-| Provider layer | `src/providers/*` | Provider abstraction plus OpenRouter/OpenAI-compatible HTTP clients, registry, mock, and echo providers. |
-| Tool registry | `src/tools/ToolRegistry.ts` | Exposes tool manifests, checks policy, validates approval receipts, executes tools, emits tool events. |
-| Policy | `src/policy/*` | Risk decisions, approval requests, receipts, replay protection, and policy defaults. |
-| Protocol | `src/protocol/*` | Runtime schemas, mailbox rows, dispatch contracts, event schemas, redaction, path containment helpers. |
-| Control channel | `src/control/*`, `src/runner/ChannelBridge.ts` | Optional outbound websocket channel for control-plane turn dispatch and event ACK replay. |
-| SDK | `src/sdk/*`, `src/storage/*` | Embedded local facade for sessions, runs, approvals, monitoring, and SQLite-backed storage. |
-
-## Full Turn
+## Canonical Flow
 
 ```text
-session.runs.start
--> command store writes GatewayRunDispatch into the mailbox
--> supervisor discovers the session mailbox
--> RuntimeKernel reads pending inbound row
--> provider receives prompt, system prompt, tools, and model config
--> provider emits text/tool events
--> ToolRegistry validates tool request
--> PolicyGuard allows, denies, or requests approval
--> approval receipt gates dangerous execution
--> tool runs inside workspace boundary
--> output is sanitized and pushed back to provider
--> RuntimeKernel writes normalized events
--> SDK/control plane streams run trace
+SDK / HTTP / channel adapter
+-> RunLog intake
+-> SQLite WAL RunLog
+-> DB lease scheduler
+-> RunLogExecutor
+-> ProviderRouter
+-> ToolRegistry / RuntimePolicyGuard / approvals
+-> lazy workspace, browser, memory, artifact adapters
+-> RunLog events and checkpoints
+-> SDK / gateway / console projections
 ```
 
-## Storage
+The legacy mailbox spine still exists for compatibility:
 
-The package is local-first:
+```text
+SDK / control host
+-> per-session SQLite mailbox
+-> SessionRuntimeSupervisor
+-> RuntimeKernel
+-> AgentProvider.query
+-> ToolRegistry
+-> RuntimePolicyGuard / ApprovalReceipt
+-> tools
+-> events_out
+-> SDK / control event projection
+```
 
-- Inbound mailbox: SQLite.
-- Outbound mailbox: SQLite.
-- Event journal: SQLite.
-- Attachments/artifacts: filesystem rooted under configured runtime paths.
-- SDK session metadata: JSON file beside each mailbox.
+New work should target the RunLog path first. Compatibility code may project RunLog events back to existing SDK/gateway shapes while the older mailbox runtime is retired in slices.
 
-Hosted products can wrap the package with Postgres queues, object storage, and container/microVM sandbox drivers without changing the kernel contract.
+## Canonical Source Layout
 
-## Extension Boundary
+| Area | Path | Role |
+| --- | --- | --- |
+| Core | `src/core` | `AgentSpec`, `RunIntent`, append-only events, checkpoints, scheduler, executor, provider routing. |
+| SQLite adapter | `src/adapters/sqlite` | Default WAL-backed RunLog, run leases, checkpoints, agents, and cron rows. |
+| Blob adapter | `src/adapters/local-blob` | Local content-addressed artifact/blob storage. |
+| Capabilities | `src/capabilities` | Optional runtime capabilities such as workspace and cron. |
+| Hosts | `src/hosts` | Read-model projections for SDK, gateway, console, and future channel hosts. |
+| Compat | `src/compat` | Temporary exports that help old runtime/gateway code migrate to the RunLog model. |
+| Legacy runtime | `src/mailbox`, `src/runner`, `src/runtime` | Existing mailbox/kernel path kept working during migration. |
 
-The embedded package boundary is intentionally small. Applications should import `createMainspring`, `Mainspring`, `MAINSPRING_RUNTIME_IDENTITY`, `RuntimeKernel`, `ToolRegistry`, and the public protocol/control contracts. Product-specific auth, billing, customer records, and hosted queueing should live in a surrounding control plane while Mainspring remains the runtime plane.
+## Storage Model
+
+The default local deployment needs only:
+
+- one Node process
+- one SQLite database using WAL
+- local content-addressed blob storage
+- local workspace directories materialized only when needed
+
+Agents are data, not resident processes. Idle agents are rows plus blob/workspace references. A run is executable only while a scheduler lease is active.
+
+Scale adapters can replace pieces independently:
+
+- SQLite -> Postgres for multi-host leases
+- local blobs -> S3/R2/MinIO
+- DB lease queue -> Redis/BullMQ only when measured bottlenecks justify it
+- local process/workspace -> Docker, VPS, Kubernetes, or managed workers
+
+## Runtime Rules
+
+- Providers propose text and tool calls; Mainspring owns side effects.
+- Tools execute only through `ToolRegistry`.
+- Risky tools go through `RuntimePolicyGuard` and approval receipts.
+- Checkpoints are written after provider/tool/approval boundaries.
+- Workspaces are leased lazily. Text-only runs do not hydrate files.
+- Browser automation is lazy. No browser process should run just because an agent exists.
+- Cron is stored as due rows in the RunLog SQLite adapter and creates ordinary queued runs.
+- Subagents should be child runs with parent IDs, not permanent subprocesses.
+- Secrets belong in environment, local secret store, or an external secret adapter, never renderer localStorage.
+
+## Security Truth
+
+- Host shell execution is not a sandbox.
+- Docker/WSL routing is not VM isolation.
+- Browser/localStorage provider auth is prototype-only until replaced.
+- Process execution must not be marketed as secure containment.
+- HyperCells, VM pools, operator roles, billing, marketplace trust, and secure desktop secrets should not be claimed unless backed by implementation.

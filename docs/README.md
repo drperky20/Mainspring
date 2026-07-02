@@ -1,9 +1,7 @@
-# Documentation
+# Mainspring Docs
 
-Mainspring documentation is split between:
-
-- public product and runtime docs under `docs/`
-- current-reality audit in `docs/current-state.md`
-- active continuation ledger in `docs/goal-digest.md`
+This folder contains the working documentation for Mainspring. It is intentionally small, current, and organized around how the codebase works today.
 
 Start with [index.md](index.md).
+
+`goal-digest.md` is preserved as a repo-local long-running milestone ledger. It is not part of the main reading path and is excluded from npm package artifacts.

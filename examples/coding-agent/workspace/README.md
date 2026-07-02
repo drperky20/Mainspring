@@ -1,3 +1,3 @@
-# Workspace
+# Coding Agent Workspace
 
-Use this workspace for source trees, notes, and generated patches under operator review.
+This workspace is used by the runnable coding-agent example.

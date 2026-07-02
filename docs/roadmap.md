@@ -1,41 +1,29 @@
 # Roadmap
 
-This roadmap is directional. It separates current package truth from planned expansion.
+## Near Term
 
-## Now
-
-- runtime kernel
-- per-session SQLite mailbox
-- tool registry
-- policy guard and approval receipts
-- SDK sessions and run monitoring
-- provider integrations for OpenRouter and OpenAI-compatible lanes
-- prototype founder cockpit console
-- read-only development gateway fixture previews
-
-## Next
-
-- more truthful gateway-backed console detail surfaces
-- richer run trace and artifact read models
-- cleaner client, workspace, and agent authoring flows
-- better examples and operator templates
-- launch-quality open-source documentation and assets
+- Improve console workflows over the existing local gateway.
+- Keep provider profile and secret handling leak-free.
+- Improve artifact browsing and trace review.
+- Add clearer diagnostics for WSL/Docker backend availability.
+- Strengthen deployment evidence for real VPS hosts.
+- Keep docs compact and current.
 
 ## Later
 
-- local gateway host for real console wiring
-- stronger trace, artifacts, and approval workflows
-- wider provider and tool coverage
-- explicit isolation contracts before any secure-execution claims
-- deployment stories for teams that outgrow one machine
+- Cross-platform OS secret storage.
+- Future work: stronger isolation backends.
+- Hosted multi-user control plane.
+- Future work: operator roles and tenant authorization.
+- Future work: payment-backed billing integrations.
+- Future work: production browser isolation.
 
-## Not To Claim Early
+## Do Not Claim Yet
 
-These remain roadmap or research areas until code and tests prove them:
-
-- HyperCells
-- VM isolation
-- secure desktop secret store
-- billing ledger
-- Electron packaging
-- hosted control plane
+- Do not claim: secure host shell containment
+- Do not claim: full VM isolation
+- Do not claim: desktop secret vault
+- Do not claim: enterprise SSO
+- provider-side spend reservation
+- Do not claim: remote paid marketplace
+- Linux desktop installer packaging

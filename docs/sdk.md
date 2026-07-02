@@ -1,6 +1,8 @@
 # SDK
 
-The SDK is embedded in the `mainspring` package. It runs the local runtime loop, stores sessions and events through the SQLite mailbox, and exposes approvals, monitoring, and run streams.
+Use the SDK when embedding Mainspring in a local app, test harness, or product wrapper.
+
+## Minimal Run
 
 ```ts
 import { EchoProvider, createMainspring } from 'mainspring'
@@ -14,12 +16,9 @@ const mainspring = createMainspring({
 
 await mainspring.start()
 
-const session = mainspring.sessions.create({
-  metadata: { client: 'demo-client' },
-})
-
+const session = mainspring.sessions.create()
 const run = session.runs.start({
-  input: 'Draft a refund reply for this customer.',
+  input: 'Write a short status note.',
   allowedTools: [],
   mode: 'chat',
 })
@@ -32,8 +31,6 @@ await mainspring.stop()
 ```
 
 ## Approvals
-
-Dangerous tools can pause for approval. The SDK exposes pending approvals from the event journal:
 
 ```ts
 const pending = mainspring.approvals.list()[0]
@@ -48,19 +45,28 @@ if (pending) {
 }
 ```
 
-## Public API
+## Resumed Runs
 
-New integrations should import:
+`resumeRunId` queues a new turn onto an existing run ID. Use it only when the provider session is meant to continue and the runtime should rebuild structured replay context from the same run's mailbox history.
 
-- `createMainspring`
-- `Mainspring`
-- `MAINSPRING_RUNTIME_IDENTITY`
-- `RuntimeKernel`
-- `ToolRegistry`
-- `RuntimePolicyGuard`
-- `createFileTools`
-- `createShellTool`
-- `createWebTools`
-- `createMemoryTools`
+```ts
+const followUp = session.runs.start({
+  input: 'Continue from the previous tool result.',
+  resumeRunId: run.record.runId,
+  allowedTools: ['file.read'],
+  mode: 'chat',
+})
+```
 
-The SDK is the recommended local embedding surface. Hosted products can use the same contracts from `mainspring/protocol` and `mainspring/control` when they run Mainspring inside remote sandboxes or workers.
+## Public Surfaces
+
+- `mainspring`
+- `mainspring/sdk`
+- `mainspring/contracts`
+- `mainspring/protocol`
+- `mainspring/protocol/node`
+- `mainspring/control`
+- `mainspring/gateway`
+- `mainspring/gateway/server`
+
+Use the local gateway when you need clients, workspaces, agents, provider profiles, budgets, cron, marketplace, deployments, or console snapshots.

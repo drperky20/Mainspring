@@ -22,6 +22,11 @@ const gatewaySnapshotFixture = {
     providerProfiles: 1,
     sessions: 1,
     runs: 2,
+    storedApprovals: 0,
+    artifacts: 0,
+    usageLedgerEntries: 0,
+    auditEvents: 0,
+    memoryEntries: 0,
     pendingApprovals: 1,
   },
   clients: [
@@ -107,6 +112,11 @@ const gatewaySnapshotFixture = {
       targetKey: 'tool:shell.exec',
     },
   ],
+  approvalMetadata: [],
+  artifacts: [],
+  usageLedger: [],
+  auditEvents: [],
+  memoryEntries: [],
 } satisfies ConsoleGatewaySnapshot
 
 describe('console data source boundary', () => {
@@ -137,5 +147,44 @@ describe('console data source boundary', () => {
     })
     expect(findForbiddenConsoleSnapshotTokens(gatewaySnapshotFixture)).toEqual([])
     expect(JSON.stringify(gatewaySnapshotFixture)).not.toContain('localStorage')
+  })
+
+  it('flags newer browser-unsafe filesystem and credential field names', () => {
+    const unsafeSnapshot = {
+      ...gatewaySnapshotFixture,
+      artifacts: [
+        {
+          artifactId: 'artifact_unsafe',
+          runId: 'run_1',
+          sessionId: 'session_1',
+          kind: 'report',
+          artifactPath: 'C:\\Users\\drper\\.mainspring\\artifacts\\artifact_unsafe.md',
+          filePath: '/tmp/mainspring/artifacts/artifact_unsafe.md',
+          createdAt: '2026-06-27T13:01:00.000Z',
+        },
+      ],
+      health: {
+        ...gatewaySnapshotFixture.health,
+        sessionsRoot: 'C:\\Users\\drper\\.mainspring\\sessions',
+      },
+      metadata: {
+        databasePath: 'C:\\Users\\drper\\.mainspring\\gateway.sqlite',
+        dbPath: 'C:\\Users\\drper\\.mainspring\\gateway.sqlite',
+        gatewayToken: 'hosted_token_unsafe',
+        providerKeyRef: `ANTHROPIC_API_${'KEY'}`,
+        privateKeyMarker: `BEGIN PRIVATE ${'KEY'}`,
+      },
+    } as unknown as ConsoleGatewaySnapshot
+
+    expect(findForbiddenConsoleSnapshotTokens(unsafeSnapshot)).toEqual([
+      'sessionsRoot',
+      'gatewayToken',
+      'artifactPath',
+      'databasePath',
+      'dbPath',
+      'filePath',
+      `ANTHROPIC_API_${'KEY'}`,
+      `BEGIN PRIVATE ${'KEY'}`,
+    ])
   })
 })

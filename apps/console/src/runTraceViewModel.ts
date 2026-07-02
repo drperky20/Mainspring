@@ -1,5 +1,5 @@
 import type { ConsoleDashboardProjection } from './dashboardProjection'
-import type { RunEvent } from 'mainspring'
+import type { ConsoleGatewayRunEvent } from 'mainspring/gateway'
 
 export interface RunTraceEventRow {
   time: string
@@ -164,7 +164,7 @@ export function gatewayProjectionToRunTraceViewModel(input: {
 export function gatewayRunEventsToTraceViewModel(input: {
   clientName: string
   agentName: string
-  events: RunEvent[]
+  events: ConsoleGatewayRunEvent[]
   footer?: string[]
 }): RunTraceViewModel {
   return {
@@ -207,7 +207,7 @@ function gatewayStatusLabel(status: ConsoleDashboardProjection['activeRuns'][num
   return 'Run active'
 }
 
-function eventDetail(event: RunEvent): Record<string, string> {
+function eventDetail(event: ConsoleGatewayRunEvent): Record<string, string> {
   const detail: Record<string, string> = {
     Title: event.type,
     Run: event.runId,

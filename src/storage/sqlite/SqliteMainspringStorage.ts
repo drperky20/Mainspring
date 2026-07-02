@@ -5,11 +5,13 @@ import {
   createMainspringRuntimeId,
   mainspringRuntimeProfileFromOptions,
   normalizeMailboxSessionId,
+  RunContextPackSchema,
   type ApprovalResponseInboundContent,
   type GatewayRunDispatch,
   type RuntimePolicy,
 } from '#protocol'
 import { resolveContainedSessionMailboxPaths } from '#protocol/node'
+import { buildRunContextPack } from '../../agent/ContextPack.js'
 import type {
   ArtifactStore,
   CommandStore,
@@ -42,6 +44,7 @@ function defaultPolicy(input: StartRunInput): RuntimePolicy {
     allowBrowser: input.allowBrowser ?? false,
     allowMemory: input.allowMemory ?? false,
     allowedTools: input.allowedTools ?? [],
+    ...(input.budget ? { budget: input.budget } : {}),
     redaction: input.redaction ?? 'strict',
   }
 }
@@ -61,8 +64,9 @@ function writeSessionRecord(record: MainspringSessionRecord): MainspringSessionR
 function buildGatewayDispatch(
   session: MainspringSessionRecord,
   input: StartRunInput,
+  mailbox?: MainspringMailbox,
 ): { dispatch: GatewayRunDispatch; run: RunRecord } {
-  const runId = createMainspringRuntimeId('run')
+  const runId = input.resumeRunId ?? createMainspringRuntimeId('run')
   const workspaceId = input.workspaceId ?? `workspace_${session.sessionId}`
   const agentId = input.agentId ?? 'agent_default'
   const sessionKey = session.sessionId
@@ -77,8 +81,19 @@ function buildGatewayDispatch(
     memory: input.allowMemory ?? false,
     ...(input.allowedTools ? { tools: input.allowedTools } : {}),
     ...(input.providerId ? { providerId: input.providerId } : {}),
+    ...(input.credentialRef ? { credentialRef: input.credentialRef } : {}),
     ...(input.modelId ? { modelId: input.modelId } : {}),
   }
+  const historyMessages = mailbox?.readRecentAssistantMessages(session.sessionId, 6) ?? []
+  const contextPack = RunContextPackSchema.parse(
+    input.clientContext?.contextPack ??
+      buildRunContextPack({
+        latestMessage: input.input,
+        historyMessages,
+        systemPrompt: input.systemPrompt,
+        toolCount: input.allowedTools?.length ?? 0,
+      }),
+  )
   return {
     run: {
       runId,
@@ -104,6 +119,11 @@ function buildGatewayDispatch(
         mode: input.mode ?? 'chat',
         approvalPolicy: input.approvalPolicy ?? 'balanced',
         runtimeOptions,
+        clientContext: {
+          route: input.clientContext?.route ?? '/sdk',
+          lane: input.clientContext?.lane ?? 'platform',
+          contextPack,
+        },
       },
       policy: defaultPolicy(input),
       trace: {
@@ -181,8 +201,8 @@ export class SqliteMainspringCommandStore implements CommandStore {
   constructor(private readonly stateStore: StateStore) {}
 
   enqueueRun(session: MainspringSessionRecord, input: StartRunInput): RunRecord {
-    const { dispatch, run } = buildGatewayDispatch(session, input)
     const mailbox = MainspringMailbox.fromSessionPath(session.sessionPath)
+    const { dispatch, run } = buildGatewayDispatch(session, input, mailbox)
     mailbox.writeInbound({
       runId: run.runId,
       sessionId: session.sessionId,

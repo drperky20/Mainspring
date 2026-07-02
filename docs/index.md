@@ -1,15 +1,32 @@
-# Mainspring Docs Index
+# Documentation Index
 
-- [README](../README.md)
-- [Current State](current-state.md)
+## Start
+
+- [Getting Started](getting-started.md)
 - [Architecture](architecture.md)
 - [Runtime Loop](runtime-loop.md)
 - [SDK](sdk.md)
+- [Operations](operations.md)
 - [Security](security.md)
-- [Deployment](deployment.md)
+
+## Features
+
+- [Local Gateway](features/local-gateway.md)
+- [Console And Desktop](features/console-and-desktop.md)
+- [Tools And Execution](features/tools-and-execution.md)
+- [Secrets And Providers](features/secrets-and-providers.md)
+- [Budgets And Usage](features/budgets-and-usage.md)
+- [Automation, Marketplace, And Deployment](features/automation-marketplace-deployment.md)
+
+## Project
+
 - [Examples](examples.md)
-- [Brand](brand.md)
-- [Positioning](positioning.md)
-- [Marketing](marketing.md)
+- [Deployment](deployment.md)
+- [Current State](current-state.md)
 - [Roadmap](roadmap.md)
-- [Open Source](open-source.md)
+- [Documentation Guide](documentation-guide.md)
+- [Desktop Packaging ADR](adr/desktop-packaging.md)
+
+## Historical Ledger
+
+`docs/goal-digest.md` is a repo-local continuation ledger for long-running development work. It is intentionally excluded from npm package artifacts, and user-facing docs should not depend on it for instructions.

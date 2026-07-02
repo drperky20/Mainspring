@@ -86,4 +86,21 @@ describe('resolveAppDashboardBootstrapMode', () => {
       ),
     ).toBe('local-gateway-dev')
   })
+
+  it('can opt into a development mode through Vite env when the query string is absent', () => {
+    expect(resolveAppDashboardBootstrapMode('', 'prototype-localStorage')).toBeUndefined()
+    expect(resolveAppDashboardBootstrapMode('', 'development-gateway-fixture')).toBe(
+      'development-gateway-fixture',
+    )
+    expect(resolveAppDashboardBootstrapMode('', 'local-gateway-dev')).toBe('local-gateway-dev')
+  })
+
+  it('lets the query string override the configured env mode', () => {
+    expect(
+      resolveAppDashboardBootstrapMode(
+        `?${developmentConsoleBootstrapSearchParam}=development-gateway-fixture`,
+        'local-gateway-dev',
+      ),
+    ).toBe('development-gateway-fixture')
+  })
 })

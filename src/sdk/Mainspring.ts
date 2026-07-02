@@ -1,9 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { createMainspringRuntimeId } from '#protocol'
+import { MAINSPRING_APP_PROVIDER_ID, createMainspringRuntimeId } from '#protocol'
 import type {
   CreateMainspringOptions,
   MainspringApprovalRecord,
+  ProviderInitRunContext,
   ProviderInitWarningDetail,
   MainspringSessionRecord,
   MonitoringSnapshot,
@@ -17,21 +18,29 @@ import type {
   ToolCallCompletedRunEventPayload,
   ToolCallFailedRunEventPayload,
   ToolCallRequestedRunEventPayload,
+  ToolCallUpdatedRunEventPayload,
   UsageUpdatedRunEventPayload,
 } from '../contracts/runtime.js'
 import {
-  latestProviderInitWarningDetailFromRunEvents,
-  providerInitWarningDetailFromRunEvent,
+  latestProviderInitDetailFromRunEvents,
+  providerInitDetailFromRunEvent,
 } from '../contracts/runtime.js'
 import { createPollingEventStream } from '../events/EventStream.js'
 import { createDefaultRuntimeTools } from '../runtime/defaultTools.js'
 import { RuntimeEngine } from '../runtime/RuntimeEngine.js'
 import { createSqliteMainspringStorage } from '../storage/sqlite/SqliteMainspringStorage.js'
-import { createRuntimeProviderFromEnv } from '../runner/RuntimeProviderConfig.js'
-import type { AgentProvider } from '../providers/types.js'
+import {
+  createRuntimeProviderFromEnv,
+  runtimeProviderResolveOptionsFromEnv,
+} from '../runner/RuntimeProviderConfig.js'
+import { createDefaultProviderRegistry } from '../providers/ProviderRegistry.js'
+import type { AgentProvider, RuntimeSecretResolver } from '../providers/types.js'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
 import { ToolRegistry } from '../tools/ToolRegistry.js'
 import type { RuntimeProviderInput } from '../runner/RuntimeKernel.js'
+import { buildCodingContext } from '../agent/CodingContext.js'
+import { buildWorkspaceContext } from '../agent/WorkspaceContext.js'
+import { createMemoryContext } from '../memory/MemoryContext.js'
 
 function isTerminalEvent(event: RunEvent): boolean {
   return (
@@ -61,12 +70,12 @@ function isToolResultEvent(
   )
 }
 
-type DerivedProviderUsageContext = ProviderInitWarningDetail
+type DerivedProviderUsageContext = ProviderInitRunContext
 
-function providerInitContextFromWarning(
+function providerInitContextFromRunEvent(
   event: RunEvent,
 ): DerivedProviderUsageContext | null {
-  return providerInitWarningDetailFromRunEvent(event)
+  return providerInitDetailFromRunEvent(event)
 }
 
 function usageWithDerivedProviderContext(
@@ -157,7 +166,14 @@ class MainspringRunHandle {
 }
 
 class MainspringSessionHandle {
-  constructor(private readonly runtime: Mainspring, readonly record: MainspringSessionRecord) {}
+  readonly memory
+
+  constructor(private readonly runtime: Mainspring, readonly record: MainspringSessionRecord) {
+    this.memory = createMemoryContext({
+      workspaceRoot: record.workspaceRoot,
+      sessionId: record.sessionId,
+    })
+  }
 
   readonly runs = {
     start: (input: StartRunInput) => {
@@ -173,6 +189,13 @@ class MainspringSessionHandle {
       return new MainspringRunHandle(this.runtime, this.record, run)
     },
   }
+
+  readonly workspace = {
+    context: () => buildWorkspaceContext(this.record.workspaceRoot),
+    codingContext: (query?: string) =>
+      buildCodingContext(this.record.workspaceRoot, { query }),
+  }
+
 }
 
 export class Mainspring {
@@ -180,7 +203,12 @@ export class Mainspring {
   readonly storage
   private readonly engine: RuntimeEngine
   private readonly providerRegistry = new Map<string, AgentProvider>()
+  private readonly builtInProviderRegistry = createDefaultProviderRegistry({
+    defaultProviderId: MAINSPRING_APP_PROVIDER_ID,
+  })
+  private readonly builtInProviderDefaults = new Map<string, { credentialRef: string; options?: Record<string, unknown> }>()
   private readonly runtimeTools: RuntimeTool[]
+  private readonly secretResolver?: RuntimeSecretResolver
   private activeProviderId = 'default'
 
   constructor(readonly options: CreateMainspringOptions) {
@@ -192,9 +220,20 @@ export class Mainspring {
     if (!provider) throw new Error('No runtime provider is configured.')
     const defaultProviderId = envProviderSelection?.providerId ?? 'default'
     this.activeProviderId = defaultProviderId
+    this.secretResolver = options.secretResolver
     this.runtimeTools = [...(options.tools ?? createDefaultRuntimeTools())]
     this.providerRegistry.set(defaultProviderId, provider)
     if (defaultProviderId !== 'default') this.providerRegistry.set('default', provider)
+    for (const providerId of ['openrouter', 'openai'] as const) {
+      const defaults = runtimeProviderResolveOptionsFromEnv({
+        ...process.env,
+        MAINSPRING_PROVIDER: providerId,
+      })
+      this.builtInProviderDefaults.set(providerId, {
+        credentialRef: defaults.credentialRef,
+        ...(defaults.options ? { options: defaults.options } : {}),
+      })
+    }
     for (const [providerId, registeredProvider] of Object.entries(options.providers ?? {})) {
       this.providerRegistry.set(providerId, registeredProvider)
     }
@@ -207,6 +246,7 @@ export class Mainspring {
       sessionsRoot: path.resolve(options.sessionsRoot),
       workspaceRoot: path.resolve(options.workspaceRoot ?? process.cwd()),
       provider: (input) => this.providerForRuntime(input),
+      secretResolver: this.secretResolver,
       ...(defaultModelId ? { defaultModelId } : {}),
       tools: this.runtimeTools,
       policy: options.policy,
@@ -217,9 +257,39 @@ export class Mainspring {
 
   private providerForRuntime(input: RuntimeProviderInput): AgentProvider {
     const providerId = input.providerId ?? this.activeProviderId
-    const provider = this.providerRegistry.get(providerId)
-    if (!provider) throw new Error(`Unknown runtime provider: ${providerId}`)
-    return provider
+    const staticProvider = this.providerRegistry.get(providerId)
+    const wantsBuiltInCredentialOverride =
+      Boolean(input.credentialRef) && (providerId === 'openrouter' || providerId === 'openai')
+
+    if (staticProvider && !wantsBuiltInCredentialOverride) {
+      return this.withSecretResolver(staticProvider)
+    }
+
+    let provider: AgentProvider
+    if (providerId === 'openrouter' || providerId === 'openai') {
+      const defaults = this.builtInProviderDefaults.get(providerId)
+      provider = this.builtInProviderRegistry.resolve({
+        providerId,
+        credentialRef: input.credentialRef ?? defaults?.credentialRef,
+        options: defaults?.options,
+      })
+      return this.withSecretResolver(provider)
+    }
+
+    if (!staticProvider) throw new Error(`Unknown runtime provider: ${providerId}`)
+    return this.withSecretResolver(staticProvider)
+  }
+
+  private withSecretResolver(provider: AgentProvider): AgentProvider {
+    if (!this.secretResolver) return provider
+    return {
+      query: (queryInput) =>
+        provider.query({
+          ...queryInput,
+          resolveCredential: (ref) =>
+            queryInput.resolveCredential?.(ref) ?? this.secretResolver?.(ref),
+        }),
+    }
   }
 
   async start(): Promise<void> {
@@ -372,6 +442,7 @@ export class Mainspring {
       if (!session) throw new Error(`Unknown session: ${input.sessionId}`)
       const registry = new ToolRegistry({
         runId: createMainspringRuntimeId('tool'),
+        sessionId: input.sessionId,
         workspaceRoot: session.workspaceRoot,
         policy: this.options.policy ?? {
           approvalPolicy: 'balanced',
@@ -407,7 +478,7 @@ export class Mainspring {
 
   collectUsageForRun(sessionId: string, runId: string) {
     const events = this.storage.eventStore.listRunEvents({ sessionId, runId, limit: 200 })
-    const providerInitContext = latestProviderInitWarningDetailFromRunEvents(events)
+    const providerInitContext = latestProviderInitDetailFromRunEvents(events)
     return events
       .filter((event): event is RunEventOfType<'usage.updated'> => isRunEventType(event, 'usage.updated'))
       .map((event) => usageWithDerivedProviderContext(event.payload, providerInitContext))
@@ -421,6 +492,7 @@ export class Mainspring {
           event,
         ): event is
           | RunEventOfType<'tool.call.requested'>
+          | RunEventOfType<'tool.call.updated'>
           | RunEventOfType<'tool.call.completed'>
           | RunEventOfType<'tool.call.failed'>
           | RunEventOfType<'tool.call.blocked'> => event.type.startsWith('tool.call'),
@@ -490,7 +562,7 @@ export class Mainspring {
     const usage: MonitoringSnapshot['providers']['usage'] = []
 
     for (const event of allEvents) {
-      const providerInitContext = providerInitContextFromWarning(event)
+      const providerInitContext = providerInitContextFromRunEvent(event)
       if (providerInitContext) providerInitContextByRun.set(event.runId, providerInitContext)
       if (event.type === 'run.started') activeRuns.set(event.runId, 'running')
       if (event.type === 'approval.requested') activeRuns.set(event.runId, 'waiting_approval')
@@ -504,6 +576,17 @@ export class Mainspring {
           sessionId: event.sessionId,
           name: payload.name,
           status: 'requested',
+          timestamp: event.timestamp,
+        })
+      }
+      if (event.type === 'tool.call.updated') {
+        const payload: ToolCallUpdatedRunEventPayload =
+          (event as RunEventOfType<'tool.call.updated'>).payload
+        recentTools.push({
+          runId: event.runId,
+          sessionId: event.sessionId,
+          name: payload.toolCallId,
+          status: 'updated',
           timestamp: event.timestamp,
         })
       }

@@ -6,11 +6,26 @@ Sell a managed agent to a client.
 
 - Organization: your agency.
 - Client: one customer account.
-- Workspace: isolated client files, policies, deliverables, artifacts.
+- Workspace: separated client files, policies, deliverables, artifacts.
 - Agent: client-specific workflow operator.
 - Tools: file, web fetch/search, browser preview, memory.
 - Policy: shell and source mutation require approval.
 
 ## Business Model
 
-Charge a monthly retainer plus usage margin. Use the usage ledger to report model tokens, sandbox time, artifacts, and review work.
+Charge a monthly retainer plus usage margin outside Mainspring. Use the usage ledger to report model tokens, runtime time, artifacts, and review work.
+
+## Example Artifacts
+
+- [Sample Run](sample-run.md)
+- [Expected Events](expected-events.md)
+
+## Runnable Walkthrough
+
+Run the local no-paid-key walkthrough:
+
+```bash
+pnpm example:agency-client-agent
+```
+
+It uses `MockProvider`, runs through the real SDK/runtime path, reads one client brief, auto-resolves one approval through the standard approval API, writes one client-facing deliverable, prints a JSON summary, and then cleans up its local runtime state.

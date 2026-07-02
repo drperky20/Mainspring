@@ -1,30 +1,77 @@
 # Contributing To Mainspring
 
-Mainspring is built around one core rule: the runtime must make agent actions inspectable, bounded, and replayable.
+Mainspring is built around one rule: agent actions must be inspectable, bounded, and replayable.
 
-## Development
+## Set Up
 
 ```bash
+corepack enable
+corepack prepare pnpm@9.15.4 --activate
 pnpm install
-pnpm typecheck
-pnpm test
-pnpm run security:mainspring
+pnpm verify
 ```
 
-## Boundaries
+## Development Checks
 
-- Keep this repository usable as a single `mainspring` package.
-- Keep business/control-plane concepts as contracts, docs, SDK metadata, or external wrapper examples unless an actual app is added.
-- Keep model/tool/runtime behavior under `src/runner`, `src/tools`, `src/providers`, `src/policy`, `src/mailbox`, and `src/storage`.
-- Keep browser-facing responses product-safe. Do not expose raw sandbox paths, provider keys, internal tokens, or process details.
-- Prefer event-sourced changes over hidden state mutation.
-- Add a protocol/contract test when changing `src/protocol`, `src/control`, or `src/contracts`.
-- Add runtime tests when changing policy, tool execution, event emission, or provider loops.
+Use the smallest check that proves your change, then run broader checks before handing off.
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm verify
+pnpm gateway:systems:check
+pnpm examples:smoke
+pnpm release:check
+```
+
+Desktop changes:
+
+```bash
+pnpm desktop:typecheck
+pnpm desktop:build
+pnpm desktop:systems:check
+```
+
+## Architecture Boundaries
+
+Preserve the runtime spine:
+
+```text
+SDK / control host
+-> per-session SQLite mailbox
+-> SessionRuntimeSupervisor
+-> RuntimeKernel
+-> AgentProvider.query
+-> ToolRegistry
+-> RuntimePolicyGuard / ApprovalReceipt
+-> tools
+-> events_out
+-> SDK / control event projection
+```
+
+Do not bypass `RuntimeKernel`, the mailbox/event journal, or approval receipts.
+
+## Security Boundaries
+
+- Host shell execution is not a sandbox.
+- Process execution must not be marketed as secure containment.
+- Provider keys must not be stored in renderer localStorage.
+- Browser-facing DTOs must not expose raw secrets, host paths, database paths, backend internals, or deployment private fields.
+- Requested isolated-capable backends must fail closed when unavailable.
+- Gateway app-state must not become a second runtime truth source.
+
+## Docs Expectations
+
+User-facing docs live in focused pages under `docs/`. `docs/current-state.md` and `docs/goal-digest.md` are audit/history references, not the main how-to path.
+
+When behavior changes, update the relevant feature doc and verification command. See [docs/documentation-guide.md](docs/documentation-guide.md).
 
 ## Pull Request Checklist
 
-- The change preserves tenant isolation.
-- Dangerous tool behavior has policy coverage.
-- New response payloads are redacted where needed.
-- Public docs explain any new operator-facing concept.
-- Local checks pass or the blocker is documented.
+- Runtime spine preserved.
+- New privileged behavior has policy/approval coverage.
+- Browser-facing payloads are sanitized.
+- Tests cover success and fail-closed behavior.
+- Docs explain current behavior and limits.
+- Verification commands pass or blockers are documented accurately.
+- No local runtime artifacts, package tarballs, DBs, logs, caches, or secrets are staged.

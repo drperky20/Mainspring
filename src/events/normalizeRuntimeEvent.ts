@@ -2,6 +2,7 @@ import {
   asRecord,
   type MainspringEvent,
   sanitizeRuntimeResponse,
+  sanitizeRuntimeUrl,
 } from '#protocol'
 import type { EventVisibility, RunEvent } from '../contracts/runtime.js'
 import type { RuntimeEventRow } from '../mailbox/SqliteMailbox.js'
@@ -53,6 +54,14 @@ function sanitizedObject(value: unknown): Record<string, unknown> | undefined {
   const sanitized = asRecord(sanitizeRuntimeResponse(value))
   if (!sanitized) return undefined
   return Object.keys(sanitized).length > 0 ? sanitized : undefined
+}
+
+function normalizedFileAction(value: string): 'created' | 'updated' | 'deleted' | 'unknown' {
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'created' || normalized === 'updated' || normalized === 'deleted') {
+    return normalized
+  }
+  return 'unknown'
 }
 
 function visibilityForEvent(event: MainspringEvent): EventVisibility {
@@ -113,10 +122,7 @@ export function normalizeRuntimeEventRow(row: RuntimeEventRow): RunEvent | null 
       if (event.status === 'cancelled')
         return createBaseEvent(row, 'run.cancelled', { phase: event.phase })
       if (event.status === 'waiting_approval') {
-        return createBaseEvent(row, 'runtime.warning', {
-          message: 'Run is waiting for approval.',
-          phase: event.phase,
-        })
+        return createBaseEvent(row, 'run.awaiting_approval', { phase: event.phase })
       }
       return createBaseEvent(row, 'runtime.warning', {
         message: `Unhandled run status ${event.status}.`,
@@ -132,6 +138,12 @@ export function normalizeRuntimeEventRow(row: RuntimeEventRow): RunEvent | null 
         toolCallId: event.toolCallId,
         name: event.name,
         input: summarizeUnknown(event.input),
+      })
+    case 'tool.update':
+      return createBaseEvent(row, 'tool.call.updated', {
+        toolCallId: event.toolCallId,
+        message: event.message,
+        ...(event.payload !== undefined ? { payload: summarizeUnknown(event.payload) } : {}),
       })
     case 'tool.result': {
       if (event.status === 'denied' || event.status === 'approval_required') {
@@ -166,6 +178,37 @@ export function normalizeRuntimeEventRow(row: RuntimeEventRow): RunEvent | null 
       const type = decision === 'denied' ? 'approval.denied' : 'approval.approved'
       return createBaseEvent(row, type, sanitizeRuntimeResponse(approval ?? {}))
     }
+    case 'artifact.created':
+      return createBaseEvent(row, 'artifact.created', {
+        artifactId: event.artifactId,
+        kind: event.kind,
+      })
+    case 'browser.event':
+      return createBaseEvent(row, 'browser.updated', {
+        action: event.event,
+        ...(event.payload !== undefined ? { payload: summarizeUnknown(event.payload) } : {}),
+      })
+    case 'browser.screenshot':
+      return createBaseEvent(row, 'browser.screenshot.created', {
+        ...(event.artifactId ? { artifactId: event.artifactId } : {}),
+        ...(event.url ? { url: sanitizeRuntimeUrl(event.url) } : {}),
+      })
+    case 'file.change':
+      return createBaseEvent(row, 'file.changed', {
+        path: event.path,
+        action: normalizedFileAction(event.action),
+      })
+    case 'memory.event':
+      return createBaseEvent(row, 'memory.updated', {
+        action: event.action,
+        ...(event.metadata !== undefined ? { metadata: summarizeUnknown(event.metadata) } : {}),
+      })
+    case 'skill.event':
+      return createBaseEvent(row, 'skill.updated', {
+        skillKey: event.skillKey,
+        action: event.action,
+        ...(event.metadata !== undefined ? { metadata: summarizeUnknown(event.metadata) } : {}),
+      })
     case 'usage': {
       const usage = event.usage as Record<string, unknown> | null
       const payload = asRecord(sanitizeRuntimeResponse(usage ?? {}))
@@ -191,8 +234,8 @@ export function normalizeRuntimeEventRow(row: RuntimeEventRow): RunEvent | null 
     }
     default:
       return createBaseEvent(row, 'runtime.warning', {
-        message: `Unhandled runtime event ${event.type}.`,
-        payload: summarizeUnknown(event),
+        message: `Unhandled runtime event ${row.type}.`,
+        payload: summarizeUnknown(row.event),
       })
   }
 }

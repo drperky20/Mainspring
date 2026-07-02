@@ -1,0 +1,232 @@
+#!/usr/bin/env node
+import { readFileSync } from 'node:fs'
+
+const workflowPath = '.github/workflows/release-check.yml'
+const ciWorkflowPath = '.github/workflows/ci.yml'
+const gatewaySystemsPath = 'scripts/check-gateway-systems.mjs'
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
+const workflow = readFileSync(workflowPath, 'utf8')
+const ciWorkflow = readFileSync(ciWorkflowPath, 'utf8')
+const gatewaySystems = readFileSync(gatewaySystemsPath, 'utf8')
+
+const failures = []
+
+requirePackageScript('verify')
+requirePackageScript('gateway:systems:check')
+requirePackageScript('execution-backends:check')
+requirePackageScript('gateway:dev:help')
+requirePackageScript('console:browser-safety:check')
+requirePackageScript('docs:check')
+requirePackageScript('security:truth')
+requirePackageScript('examples:smoke')
+requirePackageScript('agentic:check')
+requirePackageScript('desktop:systems:check')
+requirePackageScript('desktop:pack')
+requirePackageScript('desktop:packaging:check')
+requirePackageScript('optional-verifiers:check')
+requirePackageScript('release:workflow:check')
+requirePackageScript('package:check')
+
+requireReleaseCheckCommand('pnpm verify')
+requireReleaseCheckCommand('pnpm security:truth')
+requireReleaseCheckCommand('pnpm gateway:systems:check')
+requireReleaseCheckCommand('pnpm gateway:dev:help')
+requireReleaseCheckCommand('pnpm examples:smoke')
+requireReleaseCheckCommand('pnpm agentic:check')
+requireReleaseCheckCommand('pnpm desktop:systems:check')
+requireReleaseCheckCommand('pnpm release:workflow:check')
+requireReleaseCheckCommand('pnpm optional-verifiers:check')
+requireReleaseCheckCommand('pnpm package:check')
+requireReleaseCheckCommand('pnpm pack --dry-run')
+requireReleaseCheckCommand('npm pack --dry-run')
+requireReleaseCheckCommand('docker compose -f docker/compose.local.yml config')
+requireVerifyCommand('pnpm docs:check')
+requireVerifyCommand('pnpm security:truth')
+requireVerifyCommand('pnpm console:browser-safety:check')
+
+const jobs = {
+  'release-check': requireJob('release-check'),
+  'desktop-windows': requireJob('desktop-windows'),
+}
+
+requireWorkflowTrigger('pull_request:')
+requireWorkflowTrigger('push:')
+requireWorkflowTrigger('branches:')
+requireWorkflowTrigger('- main')
+requireWorkflowTrigger('workflow_dispatch:')
+requireWorkflowText(workflowPath, workflow, 'permissions:')
+requireWorkflowText(workflowPath, workflow, 'contents: read')
+requireWorkflowText(workflowPath, workflow, 'concurrency:')
+requireWorkflowText(workflowPath, workflow, 'group: release-check-${{ github.workflow }}-${{ github.ref }}')
+requireWorkflowText(workflowPath, workflow, 'cancel-in-progress: true')
+
+for (const [jobName, job] of Object.entries(jobs)) {
+  if (!job) continue
+  requireJobCommand(jobName, job, 'uses: actions/checkout@v4')
+  requireJobCommand(jobName, job, 'uses: actions/setup-node@v4')
+  requireJobCommand(jobName, job, 'node-version: 20')
+  requireJobCommand(jobName, job, 'run: corepack enable')
+  requireJobCommand(jobName, job, 'run: pnpm install --frozen-lockfile')
+}
+
+requireJobCommand('release-check', jobs['release-check'], 'runs-on: ubuntu-latest')
+requireJobCommand('release-check', jobs['release-check'], 'timeout-minutes: 35')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm verify')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm gateway:systems:check')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm gateway:dev:help')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm run desktop:typecheck')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm run desktop:build')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm examples:smoke')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm agentic:check')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm release:workflow:check')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm optional-verifiers:check')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm package:check')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm pack --dry-run')
+requireJobCommand('release-check', jobs['release-check'], 'run: npm pack --dry-run')
+requireJobCommand('release-check', jobs['release-check'], 'run: docker compose -f docker/compose.local.yml config')
+
+requireGatewaySystemsCheck('scripts/check-execution-backends.mjs')
+
+requireJobCommand('desktop-windows', jobs['desktop-windows'], 'runs-on: windows-latest')
+requireJobCommand('desktop-windows', jobs['desktop-windows'], 'timeout-minutes: 35')
+requireJobCommand('desktop-windows', jobs['desktop-windows'], 'run: pnpm run desktop:typecheck')
+requireJobCommand('desktop-windows', jobs['desktop-windows'], 'run: pnpm run desktop:build')
+requireJobCommand('desktop-windows', jobs['desktop-windows'], 'run: pnpm run desktop:pack')
+requireJobCommand('desktop-windows', jobs['desktop-windows'], 'name: mainspring-desktop-windows')
+requireJobCommand('desktop-windows', jobs['desktop-windows'], 'apps/desktop/release/Mainspring Setup 0.1.0.exe')
+
+requireCiWorkflow()
+requireNoLinuxDesktopPackaging()
+
+for (const line of workflow.split(/\r?\n/)) {
+  if (line.includes('run: pnpm install') && !line.includes('--frozen-lockfile')) {
+    failures.push(`pnpm install without --frozen-lockfile: ${line.trim()}`)
+  }
+}
+
+for (const line of ciWorkflow.split(/\r?\n/)) {
+  if (line.includes('run: pnpm install') && !line.includes('--frozen-lockfile')) {
+    failures.push(`pnpm install without --frozen-lockfile in ${ciWorkflowPath}: ${line.trim()}`)
+  }
+}
+
+if (failures.length > 0) {
+  console.error('Mainspring release workflow check failed:')
+  for (const failure of failures) console.error(`- ${failure}`)
+  process.exit(1)
+}
+
+console.log('MAINSPRING_RELEASE_WORKFLOW_CHECK_OK')
+
+function requirePackageScript(name) {
+  if (!packageJson.scripts?.[name]) failures.push(`package.json is missing script "${name}"`)
+}
+
+function requireReleaseCheckCommand(command) {
+  const releaseCheck = packageJson.scripts?.['release:check'] ?? ''
+  if (!releaseCheck.includes(command)) {
+    failures.push(`package.json release:check does not include "${command}"`)
+  }
+}
+
+function requireVerifyCommand(command) {
+  const verify = packageJson.scripts?.verify ?? ''
+  if (!verify.includes(command)) {
+    failures.push(`package.json verify does not include "${command}"`)
+  }
+}
+
+function requireJob(name) {
+  const lines = workflow.split(/\r?\n/)
+  const start = lines.findIndex((line) => line === `  ${name}:`)
+  if (start === -1) {
+    failures.push(`${workflowPath} is missing job "${name}"`)
+    return ''
+  }
+
+  let end = lines.length
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[index])) {
+      end = index
+      break
+    }
+  }
+  return lines.slice(start, end).join('\n')
+}
+
+function requireWorkflowTrigger(trigger) {
+  requireWorkflowText(workflowPath, workflow, trigger)
+}
+
+function requireWorkflowText(path, text, expected) {
+  if (!text.includes(expected)) failures.push(`${path} does not include "${expected}"`)
+}
+
+function requireJobCommand(jobName, job, command) {
+  if (!job) return
+  if (!job.includes(command)) failures.push(`${workflowPath} job "${jobName}" does not include "${command}"`)
+}
+
+function requireGatewaySystemsCheck(scriptPath) {
+  if (!gatewaySystems.includes(scriptPath)) {
+    failures.push(`${gatewaySystemsPath} does not include "${scriptPath}"`)
+  }
+}
+
+function requireCiWorkflow() {
+  requireWorkflowText(ciWorkflowPath, ciWorkflow, 'push:')
+  requireWorkflowText(ciWorkflowPath, ciWorkflow, 'pull_request:')
+  requireWorkflowText(ciWorkflowPath, ciWorkflow, 'permissions:')
+  requireWorkflowText(ciWorkflowPath, ciWorkflow, 'contents: read')
+  requireWorkflowText(ciWorkflowPath, ciWorkflow, 'concurrency:')
+  requireWorkflowText(ciWorkflowPath, ciWorkflow, 'group: ci-${{ github.workflow }}-${{ github.ref }}')
+  requireWorkflowText(ciWorkflowPath, ciWorkflow, 'cancel-in-progress: true')
+
+  const ciJob = requireWorkflowJob(ciWorkflowPath, ciWorkflow, 'verify')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'runs-on: ubuntu-latest')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'timeout-minutes: 20')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/checkout@v4')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/setup-node@v4')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'node-version: 20')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: corepack enable')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm install --frozen-lockfile')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm verify')
+}
+
+function requireNoLinuxDesktopPackaging() {
+  const workflowLines = workflow.split(/\r?\n/)
+  let currentJob = ''
+  for (const line of workflowLines) {
+    const jobMatch = line.match(/^  ([A-Za-z0-9_-]+):\s*$/)
+    if (jobMatch) currentJob = jobMatch[1]
+    if (line.includes('pnpm run desktop:pack') && currentJob !== 'desktop-windows') {
+      failures.push(`${workflowPath} runs desktop packaging outside the desktop-windows job`)
+    }
+    if (/(AppImage|appimage|\.deb\b|rpm\b|snap\b|flatpak\b)/.test(line)) {
+      failures.push(`${workflowPath} must not reference Linux desktop package artifacts: ${line.trim()}`)
+    }
+  }
+}
+
+function requireWorkflowJob(path, text, name) {
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex((line) => line === `  ${name}:`)
+  if (start === -1) {
+    failures.push(`${path} is missing job "${name}"`)
+    return ''
+  }
+
+  let end = lines.length
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[index])) {
+      end = index
+      break
+    }
+  }
+  return lines.slice(start, end).join('\n')
+}
+
+function requireWorkflowJobCommand(path, jobName, job, command) {
+  if (!job) return
+  if (!job.includes(command)) failures.push(`${path} job "${jobName}" does not include "${command}"`)
+}

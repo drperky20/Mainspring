@@ -7,16 +7,8 @@
   "types": "dist/index.d.ts",
   "license": "MIT",
   "packageManager": "pnpm@9.15.4",
-  "homepage": "https://github.com/mainspring-oss/mainspring#readme",
-  "bugs": {
-    "url": "https://github.com/mainspring-oss/mainspring/issues"
-  },
   "engines": {
     "node": ">=20.0.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/mainspring-oss/mainspring.git"
   },
   "keywords": [
     "agents",
@@ -33,6 +25,21 @@
   "files": [
     "dist",
     "docker",
+    "docs/README.md",
+    "docs/index.md",
+    "docs/getting-started.md",
+    "docs/architecture.md",
+    "docs/runtime-loop.md",
+    "docs/sdk.md",
+    "docs/security.md",
+    "docs/operations.md",
+    "docs/deployment.md",
+    "docs/examples.md",
+    "docs/roadmap.md",
+    "docs/documentation-guide.md",
+    "docs/current-state.md",
+    "docs/features",
+    "docs/adr",
     "examples",
     "assets/brand",
     "README.md",
@@ -59,9 +66,41 @@
       "types": "./dist/contracts/index.d.ts",
       "import": "./dist/contracts/index.js"
     },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "import": "./dist/adapters/index.js"
+    },
+    "./adapters/sqlite": {
+      "types": "./dist/adapters/sqlite/index.d.ts",
+      "import": "./dist/adapters/sqlite/index.js"
+    },
+    "./adapters/local-blob": {
+      "types": "./dist/adapters/local-blob/index.d.ts",
+      "import": "./dist/adapters/local-blob/index.js"
+    },
+    "./capabilities": {
+      "types": "./dist/capabilities/index.d.ts",
+      "import": "./dist/capabilities/index.js"
+    },
+    "./hosts/runlog": {
+      "types": "./dist/hosts/runlog/index.d.ts",
+      "import": "./dist/hosts/runlog/index.js"
+    },
+    "./compat": {
+      "types": "./dist/compat/index.d.ts",
+      "import": "./dist/compat/index.js"
+    },
     "./gateway": {
       "types": "./dist/gateway/index.d.ts",
       "import": "./dist/gateway/index.js"
+    },
+    "./gateway/browser-safety": {
+      "types": "./dist/gateway/browserSafety.d.ts",
+      "import": "./dist/gateway/browserSafety.js"
     },
     "./gateway/server": {
       "types": "./dist/gateway/server/index.d.ts",
@@ -100,15 +139,55 @@
     "start": "node dist/runner/main.js",
     "console:dev": "pnpm --filter @mainspring/console dev",
     "console:build": "pnpm --filter @mainspring/console build",
+    "console:browser-safety:check": "node scripts/check-console-browser-safety.mjs",
     "console:preview": "pnpm --filter @mainspring/console preview",
     "console:typecheck": "pnpm --filter @mainspring/console typecheck",
+    "desktop:typecheck": "pnpm --filter @mainspring/desktop run typecheck",
+    "desktop:build": "pnpm --filter @mainspring/desktop run build",
+    "desktop:pack": "pnpm --filter @mainspring/desktop run pack",
+    "desktop:packaging:check": "node scripts/check-desktop-packaging.mjs",
+    "desktop:systems:check": "node scripts/check-desktop-systems.mjs",
+    "agentic:check": "pnpm build && node scripts/check-agentic-harness.mjs",
+    "cells:check": "pnpm build && node scripts/check-cells.mjs",
+    "cells:check:integration": "pnpm build && node scripts/check-cells-integration.mjs",
+    "cron:check": "pnpm build && node scripts/check-cron.mjs",
+    "deploy:check": "pnpm build && node scripts/check-deploy.mjs",
+    "secrets:check": "pnpm build && node scripts/check-secrets.mjs",
+    "auth:check": "pnpm build && node scripts/check-auth.mjs",
+    "execution-backends:check": "pnpm build && node scripts/check-execution-backends.mjs",
+    "marketplace:check": "pnpm build && node scripts/check-marketplace.mjs",
+    "gateway:surface:check": "pnpm build && node scripts/check-gateway-response-surface.mjs",
+    "gateway:systems:check": "pnpm build && node scripts/check-gateway-systems.mjs",
+    "budget:check": "pnpm build && node scripts/check-budget-policy.mjs",
+    "pricing:check": "pnpm build && node scripts/check-pricing.mjs",
+    "desktop:assets": "powershell -ExecutionPolicy Bypass -File scripts/generate-desktop-icons.ps1",
     "gateway:dev": "pnpm build && node dist/gateway/server/dev.js",
+    "gateway:dev:help": "pnpm build && node dist/gateway/server/dev.js --help",
+    "example:agency-client-agent": "pnpm build && pnpm example:agency-client-agent:run",
+    "example:agency-client-agent:run": "node examples/agency-client-agent/run.mjs",
+    "example:coding-agent": "pnpm build && pnpm example:coding-agent:run",
+    "example:coding-agent:run": "node examples/coding-agent/run.mjs",
+    "example:local-first-agent": "pnpm build && pnpm example:local-first-agent:run",
+    "example:local-first-agent:run": "node examples/local-first-agent/run.mjs",
+    "example:personal-assistant": "pnpm build && pnpm example:personal-assistant:run",
+    "example:personal-assistant:run": "node examples/personal-assistant/run.mjs",
+    "example:support-agent": "pnpm build && pnpm example:support-agent:run",
+    "example:support-agent:run": "node examples/support-agent/run.mjs",
+    "examples:smoke": "pnpm build && pnpm example:coding-agent:run && pnpm example:personal-assistant:run && pnpm example:support-agent:run && pnpm example:agency-client-agent:run && pnpm example:local-first-agent:run",
     "typecheck": "pnpm exec tsc --noEmit",
-    "test": "pnpm exec vitest run src apps/console/src --passWithNoTests",
+    "test": "pnpm exec vitest run src apps/console/src apps/desktop/src --passWithNoTests",
     "doctor": "node scripts/doctor.mjs",
+    "repo:doctor": "pnpm doctor",
+    "docs:check": "node scripts/check-docs-surface.mjs",
     "security:mainspring": "node scripts/check-mainspring-security.mjs",
+    "security:sensitive-patterns": "node scripts/check-sensitive-patterns.mjs",
+    "security:truth": "node scripts/check-security-truth.mjs && node scripts/check-release-claims.mjs",
+    "optional-verifiers:check": "pnpm build && node scripts/check-optional-verifiers.mjs",
+    "release:workflow:check": "node scripts/check-release-workflow.mjs",
+    "package:check": "pnpm build && node scripts/check-package-surface.mjs",
     "openrouter:e2e": "pnpm build && node scripts/openrouter-e2e.mjs",
-    "verify": "pnpm doctor && pnpm typecheck && pnpm test && pnpm build && pnpm run security:mainspring && pnpm console:typecheck && pnpm console:build"
+    "release:check": "pnpm verify && pnpm security:truth && pnpm gateway:systems:check && pnpm gateway:dev:help && pnpm examples:smoke && pnpm agentic:check && pnpm desktop:systems:check && pnpm release:workflow:check && pnpm optional-verifiers:check && pnpm package:check && pnpm pack --dry-run && npm pack --dry-run && docker compose -f docker/compose.local.yml config",
+    "verify": "pnpm doctor && pnpm typecheck && pnpm test && pnpm build && pnpm run security:mainspring && pnpm run security:sensitive-patterns && pnpm security:truth && pnpm docs:check && pnpm console:typecheck && pnpm console:browser-safety:check && pnpm console:build"
   },
   "dependencies": {
     "better-sqlite3": "12.10.0",

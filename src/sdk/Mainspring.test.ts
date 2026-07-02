@@ -323,6 +323,18 @@ describe('Mainspring SDK', () => {
       providerId: 'openai',
       modelId: 'gpt-5.5',
     })
+    expect(dispatch.intent.clientContext).toMatchObject({
+      route: '/sdk',
+      lane: 'platform',
+      contextPack: {
+        version: 1,
+        strategy: 'latest-message-inline-session-memory',
+        latestMessageBytes: Buffer.byteLength('Route this run.', 'utf8'),
+        toolCount: 1,
+        summaryStrategy: 'metadata-only',
+      },
+    })
+    expect(dispatch.intent.clientContext?.contextPack?.estimatedTokens).toBeGreaterThan(0)
   })
 
   it('routes provider queries through the requested provider and model', async () => {
@@ -366,6 +378,71 @@ describe('Mainspring SDK', () => {
     } finally {
       await mainspring.stop()
     }
+  })
+
+  it('exposes workspace and coding context helpers for a session workspace', () => {
+    const { sessionsRoot, workspaceRoot } = makeTempMainspringPaths('mainspring-sdk-workspace-context-')
+    fs.mkdirSync(path.join(workspaceRoot, 'src', 'agent'), { recursive: true })
+    fs.writeFileSync(path.join(workspaceRoot, 'src', 'agent', 'Context.ts'), 'export const x = 1\n')
+    fs.mkdirSync(path.join(workspaceRoot, 'docs'), { recursive: true })
+    fs.writeFileSync(path.join(workspaceRoot, 'docs', 'guide.md'), 'guide\n')
+
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+
+    const session = mainspring.sessions.create({
+      workspace: { root: workspaceRoot },
+    })
+    const workspaceContext = session.workspace.context()
+    const codingContext = session.workspace.codingContext('agent')
+
+    expect(workspaceContext.exists).toBe(true)
+    expect(workspaceContext.topLevelEntries.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining(['docs', 'src']),
+    )
+    expect(codingContext.suggestedDirectories[0]?.path).toBe('src/agent')
+    expect(codingContext.fileSafety.workspaceOnly).toBe(true)
+  })
+
+  it('exposes a scoped memory context for a session workspace', () => {
+    const { sessionsRoot, workspaceRoot } = makeTempMainspringPaths('mainspring-sdk-memory-context-')
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+
+    const session = mainspring.sessions.create({
+      workspace: { root: workspaceRoot },
+    })
+
+    session.memory.remember({
+      text: 'Workspace note for every later session.',
+      scope: 'workspace',
+      tags: ['workspace'],
+    })
+    session.memory.remember({
+      text: 'Current session note only.',
+      scope: 'session',
+      tags: ['session'],
+    })
+
+    const visible = session.memory.read({ scope: 'all', limit: 10 })
+    expect(visible).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ scope: 'workspace', tags: ['workspace'] }),
+        expect.objectContaining({
+          scope: 'session',
+          sessionId: session.record.sessionId,
+          tags: ['session'],
+        }),
+      ]),
+    )
   })
 
   it('runs the SDK/runtime path with OpenRouter free-router metadata and usage without persisting secrets', async () => {

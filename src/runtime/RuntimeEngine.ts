@@ -1,7 +1,7 @@
 import type { RuntimePolicy } from '#protocol'
 import path from 'node:path'
 import type { RuntimeDiagnostics, RuntimeHealth } from '../contracts/runtime.js'
-import type { AgentProvider } from '../providers/types.js'
+import type { AgentProvider, RuntimeSecretResolver } from '../providers/types.js'
 import { createRuntimeProviderFromEnv } from '../runner/RuntimeProviderConfig.js'
 import { SessionRuntimeSupervisor } from '../runner/SessionRuntimeSupervisor.js'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
@@ -15,6 +15,7 @@ export interface RuntimeEngineOptions {
   sessionsRoot: string
   workspaceRoot: string
   provider?: AgentProvider | ((input: RuntimeProviderInput) => AgentProvider)
+  secretResolver?: RuntimeSecretResolver
   defaultModelId?: string
   tools: RuntimeTool[]
   policy?: RuntimePolicy
@@ -51,6 +52,7 @@ export class RuntimeEngine {
           cwd: ({ sessionId }) => this.workspaceRootForSession(sessionId),
           ...(this.defaultModelId ? { defaultModelId: this.defaultModelId } : {}),
           env: process.env,
+          secretResolver: options.secretResolver,
           tools: options.tools,
           policy: options.policy,
         }),

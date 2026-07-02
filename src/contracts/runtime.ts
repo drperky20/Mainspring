@@ -1,5 +1,10 @@
 import type { AgentProvider, ProviderEvent } from '../providers/types.js'
-import type { MainspringRuntimeProfile, ProviderRateLimitState, RuntimePolicy } from '#protocol'
+import type {
+  MainspringRuntimeProfile,
+  ProviderRateLimitState,
+  RunContextPack,
+  RuntimePolicy,
+} from '#protocol'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
 
 export type EventVisibility = 'public' | 'sensitive' | 'artifact-only'
@@ -9,15 +14,23 @@ export type RunEventType =
   | 'run.completed'
   | 'run.failed'
   | 'run.cancelled'
+  | 'run.awaiting_approval'
   | 'assistant.text.delta'
   | 'assistant.text.done'
   | 'tool.call.requested'
+  | 'tool.call.updated'
   | 'tool.call.completed'
   | 'tool.call.failed'
   | 'tool.call.blocked'
   | 'approval.requested'
   | 'approval.approved'
   | 'approval.denied'
+  | 'artifact.created'
+  | 'browser.updated'
+  | 'browser.screenshot.created'
+  | 'file.changed'
+  | 'memory.updated'
+  | 'skill.updated'
   | 'usage.updated'
   | 'runtime.warning'
   | 'runtime.error'
@@ -34,6 +47,12 @@ export interface ToolCallRequestedRunEventPayload {
   toolCallId: string
   name: string
   input?: unknown
+}
+
+export interface ToolCallUpdatedRunEventPayload {
+  toolCallId: string
+  message: string
+  payload?: unknown
 }
 
 export interface ToolCallCompletedRunEventPayload {
@@ -56,6 +75,37 @@ export interface ToolCallBlockedRunEventPayload {
 }
 
 export type ApprovalRunEventPayload = Record<string, unknown>
+
+export interface ArtifactCreatedRunEventPayload {
+  artifactId: string
+  kind: string
+}
+
+export interface BrowserUpdatedRunEventPayload {
+  action: string
+  payload?: unknown
+}
+
+export interface BrowserScreenshotCreatedRunEventPayload {
+  artifactId?: string
+  url?: string
+}
+
+export interface FileChangedRunEventPayload {
+  path: string
+  action: 'created' | 'updated' | 'deleted' | 'unknown'
+}
+
+export interface MemoryUpdatedRunEventPayload {
+  action: string
+  metadata?: unknown
+}
+
+export interface SkillUpdatedRunEventPayload {
+  skillKey: string
+  action: string
+  metadata?: unknown
+}
 
 export interface UsageUpdatedRunEventPayload {
   provider?: string
@@ -92,6 +142,8 @@ export interface ProviderInitWarningDetail {
   providerSessionId?: string
 }
 
+export type ProviderInitRunContext = ProviderInitWarningDetail
+
 // Public provider-init truth currently flows through sanitized log/warning
 // payload detail. We intentionally do not expose a separate public
 // `provider.init` RunEvent family until the runtime gains a stronger reason
@@ -103,15 +155,23 @@ export interface RunEventPayloadByType {
   'run.completed': RunLifecycleEventPayload
   'run.failed': RunLifecycleEventPayload
   'run.cancelled': RunLifecycleEventPayload
+  'run.awaiting_approval': RunLifecycleEventPayload
   'assistant.text.delta': AssistantTextRunEventPayload
   'assistant.text.done': AssistantTextRunEventPayload
   'tool.call.requested': ToolCallRequestedRunEventPayload
+  'tool.call.updated': ToolCallUpdatedRunEventPayload
   'tool.call.completed': ToolCallCompletedRunEventPayload
   'tool.call.failed': ToolCallFailedRunEventPayload
   'tool.call.blocked': ToolCallBlockedRunEventPayload
   'approval.requested': ApprovalRunEventPayload
   'approval.approved': ApprovalRunEventPayload
   'approval.denied': ApprovalRunEventPayload
+  'artifact.created': ArtifactCreatedRunEventPayload
+  'browser.updated': BrowserUpdatedRunEventPayload
+  'browser.screenshot.created': BrowserScreenshotCreatedRunEventPayload
+  'file.changed': FileChangedRunEventPayload
+  'memory.updated': MemoryUpdatedRunEventPayload
+  'skill.updated': SkillUpdatedRunEventPayload
   'usage.updated': UsageUpdatedRunEventPayload
   'runtime.warning': RuntimeWarningEventPayload
   'runtime.error': RuntimeErrorEventPayload
@@ -160,19 +220,31 @@ export function providerInitDetailFromLogPayload(
 export function providerInitWarningDetailFromRunEvent(
   event: RunEvent,
 ): ProviderInitWarningDetail | null {
+  return providerInitDetailFromRunEvent(event)
+}
+
+export function providerInitDetailFromRunEvent(
+  event: RunEvent,
+): ProviderInitRunContext | null {
   if (event.type !== 'runtime.warning') return null
   const payload = event.payload as RuntimeWarningEventPayload
   return providerInitDetailFromLogPayload(payload.message, payload.payload)
 }
 
-export function latestProviderInitWarningDetailFromRunEvents(
+export function latestProviderInitDetailFromRunEvents(
   events: readonly RunEvent[],
-): ProviderInitWarningDetail | null {
+): ProviderInitRunContext | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
-    const detail = providerInitWarningDetailFromRunEvent(events[index]!)
+    const detail = providerInitDetailFromRunEvent(events[index]!)
     if (detail) return detail
   }
   return null
+}
+
+export function latestProviderInitWarningDetailFromRunEvents(
+  events: readonly RunEvent[],
+): ProviderInitWarningDetail | null {
+  return latestProviderInitDetailFromRunEvents(events)
 }
 
 export interface MainspringSessionRecord {
@@ -203,12 +275,14 @@ export interface UpdateMainspringSessionInput {
 
 export interface StartRunInput {
   input: string
+  resumeRunId?: string
   systemPrompt?: string
   agentId?: string
   ownerId?: string
   workspaceId?: string
   computerId?: string
   providerId?: string
+  credentialRef?: string
   modelId?: string
   runtimeProfile?: MainspringRuntimeProfile
   mode?: 'chat' | 'task'
@@ -216,7 +290,13 @@ export interface StartRunInput {
   allowBrowser?: boolean
   allowMemory?: boolean
   allowedTools?: string[]
+  budget?: RuntimePolicy['budget']
   redaction?: RuntimePolicy['redaction']
+  clientContext?: {
+    route?: string
+    lane?: 'home' | 'platform'
+    contextPack?: RunContextPack
+  }
   metadata?: Record<string, unknown>
 }
 
@@ -269,7 +349,7 @@ export interface MonitoringSnapshot {
       runId: string
       sessionId: string
       name: string
-      status: 'requested' | 'completed' | 'failed' | 'blocked'
+      status: 'requested' | 'updated' | 'completed' | 'failed' | 'blocked'
       timestamp: string
     }>
   }
@@ -339,6 +419,7 @@ export interface CreateMainspringOptions {
   workspaceRoot?: string
   provider?: AgentProvider
   providers?: Record<string, AgentProvider>
+  secretResolver?: import('../providers/types.js').RuntimeSecretResolver
   modelId?: string
   tools?: RuntimeTool[]
   policy?: RuntimePolicy

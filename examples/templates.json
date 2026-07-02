@@ -1,0 +1,102 @@
+[
+  {
+    "templateId": "coding-agent",
+    "label": "Coding Agent",
+    "description": "Workspace-first coding assistant with file, memory, and shell tools.",
+    "exampleDir": "coding-agent",
+    "seedFiles": [
+      { "source": "agent.config.json", "destination": "agent.config.json" },
+      { "source": "policy.md", "destination": "policy.md" },
+      { "source": "workspace/README.md", "destination": "README.md" },
+      { "source": "README.md", "destination": "template-overview.md" }
+    ],
+    "defaults": {
+      "clientName": "Coding Client",
+      "workspaceName": "Coding Workspace",
+      "agentName": "Coding Agent",
+      "outcome": "Review the workspace, make careful changes, and leave clear evidence.",
+      "voice": "Plain, careful, technical",
+      "instructions": "Stay careful, cite files directly, and ask before risky mutations."
+    }
+  },
+  {
+    "templateId": "agency-client-agent",
+    "label": "Agency Client Agent",
+    "description": "Managed operator template for a client-facing local-first workspace.",
+    "exampleDir": "agency-client-agent",
+    "seedFiles": [
+      { "source": "agent.config.json", "destination": "agent.config.json" },
+      { "source": "policy.md", "destination": "policy.md" },
+      { "source": "workspace/README.md", "destination": "README.md" },
+      { "source": "README.md", "destination": "template-overview.md" }
+    ],
+    "defaults": {
+      "clientName": "Agency Client",
+      "workspaceName": "Agency Workspace",
+      "agentName": "Agency Operator",
+      "outcome": "Deliver client-ready drafts and research notes without bypassing approvals.",
+      "voice": "Warm, direct, client-ready",
+      "instructions": "Keep a clear client-service posture and ask before irreversible work."
+    }
+  },
+  {
+    "templateId": "personal-assistant",
+    "label": "Personal Assistant",
+    "description": "Single-user assistant with memory and approval-backed actions.",
+    "exampleDir": "personal-assistant",
+    "seedFiles": [
+      { "source": "agent.config.json", "destination": "agent.config.json" },
+      { "source": "policy.md", "destination": "policy.md" },
+      { "source": "workspace/README.md", "destination": "README.md" },
+      { "source": "README.md", "destination": "template-overview.md" }
+    ],
+    "defaults": {
+      "clientName": "Personal Workspace",
+      "workspaceName": "Assistant Workspace",
+      "agentName": "Personal Assistant",
+      "outcome": "Keep private notes, draft replies, and help with small local tasks.",
+      "voice": "Calm, useful, friendly",
+      "instructions": "Stay helpful, private, and conservative with risky tools."
+    }
+  },
+  {
+    "templateId": "support-agent",
+    "label": "Support Agent",
+    "description": "Support workflow starter with policy files and approval gates.",
+    "exampleDir": "support-agent",
+    "seedFiles": [
+      { "source": "agent.config.json", "destination": "agent.config.json" },
+      { "source": "policy.md", "destination": "policy.md" },
+      { "source": "workspace/README.md", "destination": "README.md" },
+      { "source": "README.md", "destination": "template-overview.md" }
+    ],
+    "defaults": {
+      "clientName": "Support Desk",
+      "workspaceName": "Support Workspace",
+      "agentName": "Support Agent",
+      "outcome": "Handle support requests, produce careful responses, and preserve evidence.",
+      "voice": "Steady, clear, customer-ready",
+      "instructions": "Resolve issues carefully, leave concise notes, and do not over-promise."
+    }
+  },
+  {
+    "templateId": "local-first-agent",
+    "label": "Local-First Agent",
+    "description": "Self-hosted starter for a single-user local-first deployment.",
+    "exampleDir": "local-first-agent",
+    "seedFiles": [
+      { "source": "agent.config.json", "destination": "agent.config.json" },
+      { "source": "policy.md", "destination": "policy.md" },
+      { "source": "workspace/README.md", "destination": "README.md" },
+      { "source": "README.md", "destination": "template-overview.md" }
+    ],
+    "defaults": {
+      "clientName": "Local-First Client",
+      "workspaceName": "Local-First Workspace",
+      "agentName": "Local-First Operator",
+      "outcome": "Operate a local-first workspace with explicit approvals and durable notes.",
+      "voice": "Direct, grounded, practical",
+      "instructions": "Prefer local evidence, keep tools bounded, and preserve operator control."
+    }
+  }
+]

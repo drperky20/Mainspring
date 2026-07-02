@@ -1,17 +1,59 @@
 name: Release Check
 
 on:
+  pull_request:
+  push:
+    branches:
+      - main
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   release-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - run: corepack enable
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+      - run: pnpm gateway:systems:check
+      - run: pnpm gateway:dev:help
+      - run: pnpm run desktop:typecheck
+      - run: pnpm run desktop:build
+      - run: pnpm examples:smoke
+      - run: pnpm agentic:check
+      - run: pnpm release:workflow:check
+      - run: pnpm optional-verifiers:check
+      - run: pnpm package:check
       - run: pnpm pack --dry-run
+      - run: npm pack --dry-run
+      - run: docker compose -f docker/compose.local.yml config
+  desktop-windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run desktop:typecheck
+      - run: pnpm run desktop:build
+      - run: pnpm run desktop:pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mainspring-desktop-windows
+          path: |
+            apps/desktop/release/Mainspring Setup 0.1.0.exe
+            apps/desktop/release/Mainspring Setup 0.1.0.exe.blockmap

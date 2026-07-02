@@ -22,6 +22,11 @@ export const developmentGatewaySnapshotFixture = {
     providerProfiles: 2,
     sessions: 2,
     runs: 3,
+    storedApprovals: 0,
+    artifacts: 0,
+    usageLedgerEntries: 0,
+    auditEvents: 0,
+    memoryEntries: 0,
     pendingApprovals: 1,
   },
   clients: [
@@ -154,6 +159,11 @@ export const developmentGatewaySnapshotFixture = {
       targetKey: 'tool:shell.exec',
     },
   ],
+  approvalMetadata: [],
+  artifacts: [],
+  usageLedger: [],
+  auditEvents: [],
+  memoryEntries: [],
 } satisfies ConsoleGatewaySnapshot
 
 export type DevelopmentGatewayDashboardReadModel = Extract<

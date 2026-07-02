@@ -172,19 +172,24 @@ function providerErrorMessage(prefix: string, responseBody: unknown): string {
   return `${prefix}: ${message}`
 }
 
-function resolveEnvCredential(input: QueryInput): string {
+function resolveProviderCredential(input: QueryInput): string {
   const ref = input.credentialRef
   if (!ref) {
     throw new Error('Provider credential ref is required.')
   }
-  if (ref.kind !== 'env') {
-    throw new Error(`Provider credential ref kind ${ref.kind} cannot be resolved in-process.`)
+  if (ref.kind === 'env') {
+    const value = input.env?.[ref.key] ?? process.env[ref.key]
+    if (!value?.trim()) {
+      throw new Error(`Provider credential env ${ref.key} is not configured.`)
+    }
+    return value
   }
-  const value = input.env?.[ref.key] ?? process.env[ref.key]
-  if (!value?.trim()) {
-    throw new Error(`Provider credential env ${ref.key} is not configured.`)
+
+  const resolved = input.resolveCredential?.(ref)
+  if (!resolved?.trim()) {
+    throw new Error(`Provider credential ref kind ${ref.kind} could not be resolved in-process.`)
   }
-  return value
+  return resolved
 }
 
 function oneShotQuery(
@@ -312,7 +317,7 @@ export class OpenAIResponsesClient implements RuntimeProviderClient {
     input: QueryInput,
     signal: AbortSignal,
   ): Promise<{ text: string; responseId?: string; usage?: ProviderUsage }> {
-    const apiKey = resolveEnvCredential(input)
+    const apiKey = resolveProviderCredential(input)
     const response = await this.fetchImpl(`${this.baseUrl}/responses`, {
       method: 'POST',
       signal,
@@ -541,7 +546,7 @@ export class OpenRouterChatCompletionsClient implements RuntimeProviderClient {
     usage?: ProviderUsage
     toolCalls: OpenRouterToolCall[]
   }> {
-    const apiKey = resolveEnvCredential(input)
+    const apiKey = resolveProviderCredential(input)
     const toolChoice = openRouterToolChoice(input.toolChoice)
     const headers: Record<string, string> = {
       authorization: `Bearer ${apiKey}`,

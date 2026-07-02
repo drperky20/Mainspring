@@ -3,7 +3,7 @@
   "workspaceRoot": "./workspace",
   "providerId": "openrouter",
   "modelId": "openrouter/free",
-  "runtimeProfile": "core-memory",
+  "runtimeProfile": "core-browser-memory",
   "allowedTools": ["file.read", "memory.read", "memory.write"],
   "approvalMode": "balanced"
 }

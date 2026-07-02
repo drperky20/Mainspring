@@ -14,6 +14,7 @@ export interface RuntimePolicyDefaults {
   allowBrowser?: boolean
   allowMemory?: boolean
   allowedTools?: string[]
+  budget?: RuntimePolicy['budget']
   redaction?: RuntimePolicy['redaction']
 }
 
@@ -25,6 +26,7 @@ export interface PolicyDecisionInput {
 }
 
 export interface PolicyDecision {
+  blocked: boolean
   approvalRequired: boolean
   reasons: string[]
   permissionCategories: string[]
@@ -59,6 +61,21 @@ function permissionCategories(manifest: ToolManifest | SkillManifest, input?: un
   return categories
 }
 
+function isWriteFilesystem(value: ToolManifest['permissions']['filesystem']): boolean {
+  return Boolean(value && value !== 'read')
+}
+
+function isCostSensitiveTool(manifest: ToolManifest | SkillManifest, input?: unknown): boolean {
+  const permissions = manifest.permissions
+  return (
+    permissions.shell === true ||
+    permissions.browser === true ||
+    permissions.network === 'open' ||
+    isWriteFilesystem(permissions.filesystem) ||
+    inputRecord(input).sourceMutation === true
+  )
+}
+
 export class RuntimePolicyGuard {
   constructor(readonly policy: RuntimePolicy) {}
 
@@ -68,6 +85,7 @@ export class RuntimePolicyGuard {
       allowBrowser: defaults.allowBrowser ?? false,
       allowMemory: defaults.allowMemory ?? false,
       allowedTools: defaults.allowedTools ?? [],
+      ...(defaults.budget ? { budget: defaults.budget } : {}),
       redaction: defaults.redaction ?? 'strict',
     })
   }
@@ -88,18 +106,68 @@ export class RuntimePolicyGuard {
     RuntimePolicyGuard.assertPermissionDeclaration(manifest)
 
     const categories = permissionCategories(manifest, input.input)
-    if (input.approved) {
-      return { approvalRequired: false, reasons: [], permissionCategories: categories }
-    }
-
     const reasons: string[] = []
+    if (this.policy.budget?.status === 'blocked') {
+      reasons.push(
+        this.policy.budget.reason
+        ?? `budget is blocked${this.policy.budget.label ? `: ${this.policy.budget.label}` : ''}`,
+      )
+      categories.push('budget')
+      return {
+        blocked: true,
+        approvalRequired: false,
+        reasons,
+        permissionCategories: categories,
+      }
+    }
+    const costSensitiveToolPolicy = this.policy.budget?.costSensitiveTools
+    if (
+      input.operation === 'tool.execute' &&
+      costSensitiveToolPolicy?.mode === 'block' &&
+      isCostSensitiveTool(manifest, input.input)
+    ) {
+      reasons.push(
+        costSensitiveToolPolicy.reason
+        ?? this.policy.budget?.reason
+        ?? `cost-sensitive tool execution is blocked by budget policy${this.policy.budget?.label ? `: ${this.policy.budget.label}` : ''}`,
+      )
+      categories.push('budget', 'cost-sensitive-tool')
+      return {
+        blocked: true,
+        approvalRequired: false,
+        reasons,
+        permissionCategories: categories,
+      }
+    }
+    if (input.approved) {
+      return { blocked: false, approvalRequired: false, reasons: [], permissionCategories: categories }
+    }
+    if (this.policy.budget?.status === 'warn' && this.policy.budget.requireApproval) {
+      reasons.push(
+        this.policy.budget.reason
+        ?? `budget warning requires approval${this.policy.budget.label ? `: ${this.policy.budget.label}` : ''}`,
+      )
+      categories.push('budget')
+    }
+    if (
+      input.operation === 'tool.execute' &&
+      costSensitiveToolPolicy?.mode === 'approval' &&
+      isCostSensitiveTool(manifest, input.input)
+    ) {
+      reasons.push(
+        costSensitiveToolPolicy.reason
+        ?? this.policy.budget?.reason
+        ?? `cost-sensitive tool execution requires budget review${this.policy.budget?.label ? `: ${this.policy.budget.label}` : ''}`,
+      )
+      categories.push('budget', 'cost-sensitive-tool')
+    }
     if (this.policy.approvalPolicy === 'ask-first') {
       reasons.push('approval policy requires review')
     }
     if (manifest.approval.required) {
       reasons.push('manifest requires approval')
     }
-    if (manifest.permissions.shell) {
+    if (manifest.permissions.shell && manifest.approval.required) {
       reasons.push('shell execution requires approval')
     }
     if (manifest.permissions.browser && !this.policy.allowBrowser) {
@@ -127,6 +195,7 @@ export class RuntimePolicyGuard {
     }
 
     return {
+      blocked: false,
       approvalRequired: reasons.length > 0,
       reasons,
       permissionCategories: categories,

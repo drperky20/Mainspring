@@ -46,6 +46,43 @@ class RecordingProvider implements AgentProvider {
   }
 }
 
+class UsageBudgetProvider implements AgentProvider {
+  constructor(private readonly usage: ProviderEvent & { type: 'usage' }) {}
+
+  query(input: QueryInput): AgentQuery {
+    return query(
+      (async function* (usageEvent: ProviderEvent & { type: 'usage' }): AsyncIterable<ProviderEvent> {
+        yield {
+          type: 'init',
+          provider: usageEvent.usage.provider,
+          providerSessionId: `provider_${input.prompt}`,
+          modelId: usageEvent.usage.modelId,
+        }
+        yield usageEvent
+        yield { type: 'result', text: input.prompt }
+      })(this.usage),
+    )
+  }
+}
+
+class SecretResolvingProvider implements AgentProvider {
+  readonly resolvedSecrets: Array<string | undefined> = []
+  readonly credentialRefs: Array<QueryInput['credentialRef']> = []
+
+  query(input: QueryInput): AgentQuery {
+    this.credentialRefs.push(input.credentialRef)
+    this.resolvedSecrets.push(
+      input.credentialRef ? input.resolveCredential?.(input.credentialRef) : undefined,
+    )
+    return query(
+      (async function* (): AsyncIterable<ProviderEvent> {
+        yield { type: 'init', providerSessionId: 'provider_secret_resolver' }
+        yield { type: 'result', text: 'resolved secret path' }
+      })(),
+    )
+  }
+}
+
 class StreamingProvider implements AgentProvider {
   readonly prompts: string[] = []
 
@@ -283,6 +320,21 @@ class SensitiveToolCallingProvider implements AgentProvider {
   }
 }
 
+class LargeToolCallingProvider implements AgentProvider {
+  readonly queries: PushQuery[] = []
+
+  query(input: QueryInput): AgentQuery {
+    const query = new PushQuery(input, async function* (q) {
+      yield { type: 'init', providerSessionId: 'provider_large_tool_session' }
+      yield { type: 'tool_call', name: 'file.read', input: { path: 'notes/large.txt' } }
+      await q.waitForPush()
+      yield { type: 'result', text: `tool returned ${q.pushed[0] ?? 'nothing'}` }
+    })
+    this.queries.push(query)
+    return query
+  }
+}
+
 class ApprovalGatedToolProvider implements AgentProvider {
   readonly queries: PushQuery[] = []
 
@@ -351,6 +403,19 @@ function createThrowingFileReadTool(message: string): RuntimeTool {
     execute: () => {
       throw new Error(message)
     },
+  }
+}
+
+function expectedWorkspaceReadOutput(text: string) {
+  return {
+    path: 'notes/input.txt',
+    binary: false,
+    encoding: 'utf8',
+    bytes: Buffer.byteLength(text),
+    truncated: false,
+    extension: '.txt',
+    lineCount: text.length > 0 ? text.split(/\r?\n/).length : 0,
+    text,
   }
 }
 
@@ -430,6 +495,294 @@ describe('RuntimeKernel', () => {
     ])
   })
 
+  it('fails an active run when runtime budget policy is blocked on usage', async () => {
+    const { root, mailbox } = makeSession('default', 'mainspring-runtime-kernel-')
+    const provider = new RecordingProvider()
+    insertInbound({
+      mailbox,
+      id: 'in_budget_blocked',
+      timestamp: new Date('2026-05-16T00:00:01.000Z').toISOString(),
+      body: dispatch({
+        intent: { ...dispatch().intent, message: 'budget blocked run' },
+        policy: {
+          approvalPolicy: 'balanced',
+          allowBrowser: false,
+          allowMemory: false,
+          allowedTools: [],
+          redaction: 'strict',
+          budget: {
+            status: 'blocked',
+            budgetId: 'budget_runtime_block',
+            label: 'Runtime workspace budget',
+            reason: 'Runtime budget exhausted',
+          },
+        },
+      }),
+    })
+
+    await new RuntimeKernel({ mailbox, provider, cwd: root }).runUntilIdle({
+      waitForActiveQueries: true,
+    })
+
+    const rows = readRows(
+      mailbox.paths.eventsDbPath,
+      "SELECT type, payload FROM events_out WHERE type IN ('usage', 'log', 'error', 'run.status') ORDER BY seq ASC",
+    ) as Array<{ type: string; payload: string }>
+    const payloads = rows.map((row) => JSON.parse(row.payload))
+    expect(payloads.filter((payload) => payload.type === 'run.status')).toEqual([
+      expect.objectContaining({ status: 'running', phase: 'provider' }),
+      expect.objectContaining({ status: 'failed', phase: 'provider' }),
+    ])
+    expect(payloads.find((payload) => payload.type === 'usage')).toMatchObject({
+      type: 'usage',
+      runId: 'run_1',
+      usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+    })
+    expect(
+      payloads.find(
+        (payload) => payload.type === 'log' && payload.message === 'Runtime budget exhausted',
+      ),
+    ).toMatchObject({
+      type: 'log',
+      runId: 'run_1',
+      level: 'warning',
+      message: 'Runtime budget exhausted',
+      payload: {
+        category: 'budget',
+        budget: expect.objectContaining({
+          status: 'blocked',
+          budgetId: 'budget_runtime_block',
+        }),
+      },
+    })
+    expect(payloads.find((payload) => payload.type === 'error')).toMatchObject({
+      type: 'error',
+      runId: 'run_1',
+      message: 'Runtime budget exhausted',
+      retryable: false,
+    })
+  })
+
+  it('fails an enforced runtime budget when usage cannot be priced', async () => {
+    const { root, mailbox } = makeSession('default', 'mainspring-runtime-kernel-')
+    const provider = new UsageBudgetProvider({
+      type: 'usage',
+      usage: {
+        provider: 'openai',
+        modelId: 'gpt-unpriced',
+        inputTokens: 100,
+        outputTokens: 100,
+        totalTokens: 200,
+      },
+    })
+    insertInbound({
+      mailbox,
+      id: 'in_budget_unpriced',
+      timestamp: new Date('2026-05-16T00:00:01.000Z').toISOString(),
+      body: dispatch({
+        intent: { ...dispatch().intent, message: 'budget unpriced run' },
+        policy: {
+          approvalPolicy: 'balanced',
+          allowBrowser: false,
+          allowMemory: false,
+          allowedTools: [],
+          redaction: 'strict',
+          budget: {
+            status: 'warn',
+            budgetId: 'budget_runtime_unpriced',
+            label: 'Runtime workspace budget',
+            remainingEstimatedCostUsd: 0.01,
+            requireApproval: false,
+            enforceUsageLimit: true,
+          },
+        },
+      }),
+    })
+
+    await new RuntimeKernel({ mailbox, provider, cwd: root }).runUntilIdle({
+      waitForActiveQueries: true,
+    })
+
+    const payloads = (
+      readRows(
+        mailbox.paths.eventsDbPath,
+        "SELECT payload FROM events_out WHERE type IN ('log', 'error', 'run.status') ORDER BY seq ASC",
+      ) as Array<{ payload: string }>
+    ).map((row) => JSON.parse(row.payload))
+    const message = 'Runtime budget usage is unpriced for gpt-unpriced on openai; cannot enforce budget safely.'
+    expect(payloads.filter((payload) => payload.type === 'run.status')).toEqual([
+      expect.objectContaining({ status: 'running', phase: 'provider' }),
+      expect.objectContaining({ status: 'failed', phase: 'provider' }),
+    ])
+    expect(payloads.find((payload) => payload.type === 'log' && payload.message === message)).toMatchObject({
+      type: 'log',
+      runId: 'run_1',
+      level: 'warning',
+      message,
+      payload: {
+        category: 'budget',
+        pricingStatus: 'unpriced',
+        budget: expect.objectContaining({
+          status: 'warn',
+          budgetId: 'budget_runtime_unpriced',
+          enforceUsageLimit: true,
+        }),
+      },
+    })
+    expect(payloads.find((payload) => payload.type === 'error')).toMatchObject({
+      type: 'error',
+      runId: 'run_1',
+      message,
+      retryable: false,
+    })
+  })
+
+  it('allows enforced runtime budget usage when the model is explicitly priced as free', async () => {
+    const { root, mailbox } = makeSession('default', 'mainspring-runtime-kernel-')
+    const provider = new UsageBudgetProvider({
+      type: 'usage',
+      usage: {
+        provider: 'openrouter',
+        modelId: 'openrouter/free',
+        inputTokens: 100,
+        outputTokens: 100,
+        totalTokens: 200,
+      },
+    })
+    insertInbound({
+      mailbox,
+      id: 'in_budget_free',
+      timestamp: new Date('2026-05-16T00:00:01.000Z').toISOString(),
+      body: dispatch({
+        intent: { ...dispatch().intent, message: 'budget free run' },
+        policy: {
+          approvalPolicy: 'balanced',
+          allowBrowser: false,
+          allowMemory: false,
+          allowedTools: [],
+          redaction: 'strict',
+          budget: {
+            status: 'warn',
+            budgetId: 'budget_runtime_free',
+            label: 'Runtime workspace budget',
+            remainingEstimatedCostUsd: 0.01,
+            requireApproval: false,
+            enforceUsageLimit: true,
+          },
+        },
+      }),
+    })
+
+    await new RuntimeKernel({ mailbox, provider, cwd: root }).runUntilIdle({
+      waitForActiveQueries: true,
+    })
+
+    const payloads = (
+      readRows(
+        mailbox.paths.eventsDbPath,
+        "SELECT payload FROM events_out WHERE type IN ('assistant.text.done', 'error', 'run.status') ORDER BY seq ASC",
+      ) as Array<{ payload: string }>
+    ).map((row) => JSON.parse(row.payload))
+    expect(payloads.find((payload) => payload.type === 'error')).toBeUndefined()
+    expect(payloads.filter((payload) => payload.type === 'run.status')).toEqual([
+      expect.objectContaining({ status: 'running', phase: 'provider' }),
+      expect.objectContaining({ status: 'completed', phase: 'provider' }),
+    ])
+    expect(payloads.find((payload) => payload.type === 'assistant.text.done')).toMatchObject({
+      type: 'assistant.text.done',
+      runId: 'run_1',
+      text: 'budget free run',
+    })
+  })
+
+  it('fails an enforced runtime budget when configured priced usage exceeds remaining estimate', async () => {
+    const { root, mailbox } = makeSession('default', 'mainspring-runtime-kernel-')
+    const provider = new UsageBudgetProvider({
+      type: 'usage',
+      usage: {
+        provider: 'openai',
+        modelId: 'gpt-priced',
+        inputTokens: 0,
+        outputTokens: 20_000,
+        totalTokens: 20_000,
+      },
+    })
+    insertInbound({
+      mailbox,
+      id: 'in_budget_over_limit',
+      timestamp: new Date('2026-05-16T00:00:01.000Z').toISOString(),
+      body: dispatch({
+        intent: { ...dispatch().intent, message: 'budget over limit run' },
+        policy: {
+          approvalPolicy: 'balanced',
+          allowBrowser: false,
+          allowMemory: false,
+          allowedTools: [],
+          redaction: 'strict',
+          budget: {
+            status: 'warn',
+            budgetId: 'budget_runtime_over_limit',
+            label: 'Runtime workspace budget',
+            remainingEstimatedCostUsd: 0.01,
+            requireApproval: false,
+            enforceUsageLimit: true,
+          },
+        },
+      }),
+    })
+
+    await new RuntimeKernel({
+      mailbox,
+      provider,
+      cwd: root,
+      pricingCatalog: [
+        {
+          providerId: 'openai',
+          modelId: 'gpt-priced',
+          inputUsdPerMillion: 1,
+          outputUsdPerMillion: 1_000,
+        },
+      ],
+    }).runUntilIdle({
+      waitForActiveQueries: true,
+    })
+
+    const payloads = (
+      readRows(
+        mailbox.paths.eventsDbPath,
+        "SELECT payload FROM events_out WHERE type IN ('log', 'error', 'run.status') ORDER BY seq ASC",
+      ) as Array<{ payload: string }>
+    ).map((row) => JSON.parse(row.payload))
+    const message = 'Runtime budget exceeded: Runtime workspace budget.'
+    expect(payloads.filter((payload) => payload.type === 'run.status')).toEqual([
+      expect.objectContaining({ status: 'running', phase: 'provider' }),
+      expect.objectContaining({ status: 'failed', phase: 'provider' }),
+    ])
+    expect(payloads.find((payload) => payload.type === 'log' && payload.message === message)).toMatchObject({
+      type: 'log',
+      runId: 'run_1',
+      level: 'warning',
+      message,
+      payload: {
+        category: 'budget',
+        pricingStatus: 'estimated',
+        estimatedCostUsd: 20,
+        cumulativeEstimatedCostUsd: 20,
+        remainingEstimatedCostUsd: 0.01,
+        budget: expect.objectContaining({
+          status: 'warn',
+          budgetId: 'budget_runtime_over_limit',
+        }),
+      },
+    })
+    expect(payloads.find((payload) => payload.type === 'error')).toMatchObject({
+      type: 'error',
+      runId: 'run_1',
+      message,
+      retryable: false,
+    })
+  })
+
   it('recovers stale processing acks on startup so restarted runners can finish pending work', async () => {
     const { root, mailbox } = makeSession('default', 'mainspring-runtime-kernel-')
     const provider = new RecordingProvider()
@@ -504,6 +857,40 @@ describe('RuntimeKernel', () => {
     })
 
     expect(provider.models).toEqual(['openrouter/paid-router'])
+  })
+
+  it('passes the configured secret resolver into provider query input for non-env refs', async () => {
+    const { root, mailbox } = makeSession('default', 'mainspring-runtime-kernel-')
+    const provider = new SecretResolvingProvider()
+    insertInbound({
+      mailbox,
+      id: 'in_secret_resolver',
+      timestamp: new Date('2026-05-16T00:00:01.000Z').toISOString(),
+      body: dispatch({
+        intent: {
+          ...dispatch().intent,
+          message: 'resolve managed credential',
+          runtimeOptions: {
+            credentialRef: 'managed:provider_profile_1',
+          },
+        },
+      }),
+    })
+
+    await new RuntimeKernel({
+      mailbox,
+      provider,
+      cwd: root,
+      secretResolver: (ref) =>
+        ref.kind === 'managed' && ref.key === 'provider_profile_1'
+          ? 'managed-secret-value'
+          : undefined,
+    }).runUntilIdle({
+      waitForActiveQueries: true,
+    })
+
+    expect(provider.resolvedSecrets).toEqual(['managed-secret-value'])
+    expect(provider.credentialRefs).toEqual([{ kind: 'managed', key: 'provider_profile_1' }])
   })
 
   it('forces the single allowed task tool as the provider tool choice', async () => {
@@ -784,12 +1171,17 @@ describe('RuntimeKernel', () => {
         role: 'tool',
         toolCallId: expect.stringMatching(/^file\.read_/),
         name: 'file.read',
-        content: '{"path":"notes/input.txt","text":"runtime tool data"}',
+        content: JSON.stringify(expectedWorkspaceReadOutput('runtime tool data')),
       },
       {
         role: 'assistant',
         content:
-          'tool returned {"type":"tool_result","name":"file.read","status":"completed","output":{"path":"notes/input.txt","text":"runtime tool data"}}',
+          `tool returned ${JSON.stringify({
+            type: 'tool_result',
+            name: 'file.read',
+            status: 'completed',
+            output: expectedWorkspaceReadOutput('runtime tool data'),
+          })}`,
       },
     ])
   })
@@ -973,10 +1365,7 @@ describe('RuntimeKernel', () => {
         type: 'tool_result',
         name: 'file.read',
         status: 'completed',
-        output: {
-          path: 'notes/input.txt',
-          text: 'runtime tool data',
-        },
+        output: expectedWorkspaceReadOutput('runtime tool data'),
       }),
     ])
     const eventRows = readRows(
@@ -1002,10 +1391,7 @@ describe('RuntimeKernel', () => {
       runId: 'run_1',
       toolCallId: expect.stringMatching(/^file\.read_/),
       name: 'file.read',
-      output: {
-        path: 'notes/input.txt',
-        text: 'runtime tool data',
-      },
+      output: expectedWorkspaceReadOutput('runtime tool data'),
       status: 'completed',
     })
     expect(toolResultEvent.toolCallId).toBe(toolCallEvent.toolCallId)
@@ -1016,10 +1402,7 @@ describe('RuntimeKernel', () => {
         type: 'tool_result',
         name: 'file.read',
         status: 'completed',
-        output: {
-          path: 'notes/input.txt',
-          text: 'runtime tool data',
-        },
+        output: expectedWorkspaceReadOutput('runtime tool data'),
       })}`,
     })
   })
@@ -1087,6 +1470,73 @@ describe('RuntimeKernel', () => {
       { path: 'notes/two.txt' },
     ])
     expect(toolResults.map((result) => result.output)).toEqual([{ text: 'one' }, { text: 'two' }])
+  })
+
+  it('spills large runtime tool results into workspace-backed summaries before replaying them', async () => {
+    const { root, mailbox } = makeSession('default', 'mainspring-runtime-kernel-')
+    const workspaceRoot = path.join(root, 'workspace')
+    fs.mkdirSync(workspaceRoot, { recursive: true })
+    const provider = new LargeToolCallingProvider()
+    insertInbound({
+      mailbox,
+      id: 'in_large_tool',
+      timestamp: new Date('2026-05-16T00:00:01.000Z').toISOString(),
+      body: dispatch({
+        intent: { ...dispatch().intent, message: 'read large note' },
+        policy: {
+          approvalPolicy: 'balanced',
+          allowBrowser: false,
+          allowMemory: false,
+          allowedTools: ['file.read'],
+          redaction: 'strict',
+        },
+      }),
+    })
+
+    await new RuntimeKernel({
+      mailbox,
+      provider,
+      cwd: workspaceRoot,
+      tools: [
+        {
+          manifest: {
+            key: 'file.read',
+            name: 'Large File Read',
+            description: 'Returns a large text payload for spillover coverage.',
+            version: '1.0.0',
+            source: 'built-in',
+            permissions: { filesystem: 'read' },
+            approval: {},
+            toolType: 'file',
+          },
+          execute: () => ({ path: 'notes/large.txt', text: 'x'.repeat(12_000) }),
+        },
+      ],
+    }).runUntilIdle({ waitForActiveQueries: true })
+
+    const pushed = JSON.parse(provider.queries[0]?.pushed[0] ?? '{}') as {
+      output?: Record<string, unknown>
+    }
+    expect(pushed).toMatchObject({
+      type: 'tool_result',
+      name: 'file.read',
+      status: 'completed',
+      output: {
+        storage: 'workspace-file',
+        path: expect.stringMatching(/^\.mainspring\/tool-results\/run_1\/tool_result_/),
+        summary: {
+          path: 'notes/large.txt',
+        },
+      },
+    })
+
+    const relativePath = String(pushed.output?.path ?? '').replace(/\//g, path.sep)
+    const storedPath = path.join(workspaceRoot, relativePath)
+    expect(fs.existsSync(storedPath)).toBe(true)
+    expect(JSON.parse(fs.readFileSync(storedPath, 'utf8'))).toMatchObject({
+      path: 'notes/large.txt',
+      text: 'x'.repeat(12_000),
+    })
   })
 
   it('emits structured approval before provider prose for approval-required single-tool tasks', async () => {
@@ -1495,10 +1945,7 @@ describe('RuntimeKernel', () => {
       type: 'tool_result',
       name: 'file.read',
       status: 'completed',
-      output: {
-        path: 'notes/input.txt',
-        text: 'approval file data',
-      },
+      output: expectedWorkspaceReadOutput('approval file data'),
     })
 
     const toolResultRows = readRows(
@@ -1510,10 +1957,7 @@ describe('RuntimeKernel', () => {
       runId: 'run_1',
       name: 'file.read',
       status: 'completed',
-      output: {
-        path: 'notes/input.txt',
-        text: 'approval file data',
-      },
+      output: expectedWorkspaceReadOutput('approval file data'),
     })
   })
 
