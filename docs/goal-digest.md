@@ -8392,3 +8392,36 @@ Verification in this slice:
 Next recommended milestone:
 
 - Migrate `local-first-agent` if RunLog memory tools can preserve the current memory write/read walkthrough, or switch to cleanup/research/review artifacts if the memory example still depends on mailbox-only behavior.
+
+## 2026-07-02 RunLog Local-First Memory Example Slice
+
+Goal:
+
+- Move the local-first runnable example from the compatibility mailbox runtime onto the canonical RunLog SDK host while preserving memory write/read coverage.
+
+Changes:
+
+- Rewrote `examples/local-first-agent/run.mjs` to use `createRunLogMainspring`, `RunIntent`, explicit `createMemoryTools()`, approval-gated `memory.write`, `memory.read`, scoped RunLog approval receipts, and `RunLogProjection`.
+- Added a pre-approval assertion that no memory file is created before the RunLog receipt is approved.
+- Updated the local-first README, sample run, and expected events to use RunLog event names and lifecycle.
+- Updated examples, getting-started, operations, current-state, migration, and backlog docs so all runnable examples are now described as RunLog-native.
+
+What this proves:
+
+- A no-key local memory workflow can pause before persistent behavior mutation, approve the exact `memory.write` request, resume through `ToolRegistry`, scan/write memory, read it back, and complete with a post-tool assistant result.
+- The RunLog path records `policy.decision.recorded` states for memory write approval, approved resume, and memory read.
+- The example reports relative workspace paths and keeps memory persistence scoped to the local workspace `.mainspring` store.
+
+Still honest:
+
+- This proves an approval-gated local memory write/read walkthrough, not automatic memory injection into model context, remote memory sync, hosted review trust, subagents, browser automation, or live provider behavior.
+- Persistent memory can mutate future behavior. The current write path is policy-gated and provenance-scanned, but broader taint labeling for web/email/file-derived content remains future work.
+- The old `createMainspring`, mailbox, `SessionRuntimeSupervisor`, and `RuntimeKernel` path remains reachable for legacy SDK/gateway compatibility and tests; it is no longer needed by runnable examples.
+
+Verification in this slice:
+
+- `pnpm example:local-first-agent`: passed with `runtimePath: "runlog"`, one approved receipt, checkpoint kinds `approval`, `tool`, `tool`, `tool`, and policy decisions `requires_approval`, `allow`, `allow`.
+
+Next recommended milestone:
+
+- Add taint labels beyond scan findings for web/email/file-derived memory and skill mutations, or continue retiring legacy mailbox/gateway surfaces now that runnable examples use the RunLog SDK host.

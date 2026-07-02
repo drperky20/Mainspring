@@ -22,6 +22,6 @@ pnpm examples:check
 | `personal-assistant` | RunLog-native local note-reading assistant using `file.read`. |
 | `support-agent` | RunLog-native support workflow reading approved FAQ files through `file.read`. |
 | `agency-client-agent` | RunLog-native client deliverable workflow with approval-gated `file.write`. |
-| `local-first-agent` | Local memory workflow. |
+| `local-first-agent` | RunLog-native local memory workflow with approval-gated `memory.write` and `memory.read`. |
 
-`provider-run`, `tool-approval`, `coding-agent`, `personal-assistant`, `support-agent`, and `agency-client-agent` use `createRunLogMainspring` and the canonical RunLog path. `local-first-agent` currently uses the compatibility SDK host to keep memory workflow coverage while migration continues. The examples do not provide containment; host tool examples inherit the normal local runtime limits.
+All runnable examples use `createRunLogMainspring` and the canonical RunLog path. The examples do not provide containment; host tool examples inherit the normal local runtime limits.

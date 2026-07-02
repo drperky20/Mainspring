@@ -27,4 +27,4 @@ Run the local no-paid-key walkthrough:
 pnpm example:local-first-agent
 ```
 
-It uses `MockProvider`, runs through the real SDK/runtime path, writes one approval-backed memory entry under the workspace `.mainspring` store, reads it back through `memory.read`, prints a JSON summary, and then cleans up its local runtime state.
+It uses `createRunLogMainspring`, `MockProvider`, the `memory.write` and `memory.read` tools, scoped RunLog approval receipts, and `RunLogProjection`. It writes one approval-backed memory entry under the workspace `.mainspring` store, reads it back through `memory.read`, prints a JSON summary, and then cleans up its local runtime state.
