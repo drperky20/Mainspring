@@ -10,8 +10,11 @@ describe('mainspring package identity', () => {
       productName: 'Mainspring',
       owner: 'Mainspring OSS',
       implementation: 'typescript-agentic-runtime',
+      canonicalRuntime: 'runlog-fabric',
       transport: 'mailbox',
+      compatibilityTransport: 'per-session-sqlite-mailbox',
     })
+    expect(MAINSPRING_RUNTIME_IDENTITY.canonicalRuntime).toBe('runlog-fabric')
     expect(MAINSPRING_RUNTIME_IDENTITY.transport).toBe('mailbox')
   })
 

@@ -17,6 +17,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `src/hosts/runlog` for host-facing run projections.
   - `src/compat` for migration exports.
 - Package subpaths now expose `mainspring/core`, `mainspring/adapters`, `mainspring/adapters/sqlite`, `mainspring/adapters/local-blob`, `mainspring/capabilities`, `mainspring/hosts/runlog`, and `mainspring/compat`.
+- `docs/migration-runlog.md` records the legacy mailbox/`RuntimeKernel` retirement map and `pnpm runlog:migration:check` keeps that map tied to existing source files, package exports, and release checks.
 - Focused tests prove provider-only runs, tool calls, approval pauses, approval/denial decisions, SQLite-backed approval resume, SQLite restart recovery, cron-created runs, lazy workspace materialization, and 1000 idle agents stored as data.
 - RunLog approval resume now has scoped signed receipts:
   - approval requests persist private run/tool/input/workspace/policy/tool-manifest/provider snapshots in SQLite.
@@ -95,6 +96,7 @@ Focused RunLog verification:
 pnpm exec vitest run src/core/RunLogKernel.test.ts src/package-exports.test.ts
 pnpm exec vitest run src/core src/tools src/policy
 pnpm exec vitest run src/security src/policy src/tools src/core
+pnpm runlog:migration:check
 pnpm exec tsc --noEmit
 ```
 

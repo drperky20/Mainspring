@@ -7331,6 +7331,42 @@ At the start of each continuation:
 
 Do not mark broad product features complete because scaffolds or docs exist. Be explicit about partial work.
 
+## 2026-07-02 RunLog Migration Map Slice
+
+Recorded and guarded the RunLog canonicalization / legacy retirement map.
+
+- Added `docs/migration-runlog.md`.
+- Added `scripts/check-runlog-migration.mjs`.
+- Added `pnpm runlog:migration:check`.
+- Added the migration check to `pnpm verify` and `pnpm release:check`.
+- Added `docs/migration-runlog.md` to package files and package-surface expectations.
+- Updated `MAINSPRING_RUNTIME_IDENTITY` to name `runlog-fabric` as the canonical runtime while preserving the current SDK transport as mailbox compatibility.
+- Updated current-state, docs index, and backlog docs.
+
+Repo-grounded finding:
+
+- The public SDK/gateway path still enters `createMainspring -> SqliteMainspringStorage -> MainspringMailbox -> RuntimeEngine -> SessionRuntimeSupervisor -> RuntimeKernel`.
+- The canonical RunLog path exists under `src/core`, `src/adapters/sqlite`, and `src/hosts/runlog`, and package subpaths expose it.
+- The next implementation step is to move SDK/gateway run creation to `RunIntent` and `RunLogProjection`, not to delete the mailbox path first.
+
+Preserved runtime seams:
+
+`createMainspring -> SqliteMainspringStorage -> MainspringMailbox -> RuntimeEngine -> SessionRuntimeSupervisor -> RuntimeKernel -> AgentProvider.query -> ToolRegistry / RuntimePolicyGuard -> mailbox events/outbound rows` remains documented as compatibility while the canonical target stays `RunLogKernel -> RunLogScheduler -> RunLogExecutor -> ProviderRouter -> ToolRegistry / RuntimePolicyGuard -> SQLite WAL events + checkpoints -> RunLogProjection / hosts`.
+
+Verification for the focused slice:
+
+- `pnpm runlog:migration:check`: passed with `MAINSPRING_RUNLOG_MIGRATION_CHECK_OK`.
+- `pnpm exec vitest run src/index.test.ts src/package-exports.test.ts`: passed, 2 files / 7 tests.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm exec tsc --noEmit`: passed.
+
+Remaining risk:
+
+- This slice is a migration contract and release guard, not the full SDK/gateway RunLog backend migration.
+- `RuntimeKernel` and per-session mailbox remain live compatibility paths.
+
 ## 2026-07-02 Memory, Skill, And Template Provenance Slice
 
 Implemented the first code-backed provenance and staged-review layer for memory, skills, and local templates.

@@ -5,6 +5,7 @@
 - [Getting Started](getting-started.md)
 - [Architecture](architecture.md)
 - [Runtime Loop](runtime-loop.md)
+- [RunLog Migration](migration-runlog.md)
 - [SDK](sdk.md)
 - [Operations](operations.md)
 - [Security](security.md)

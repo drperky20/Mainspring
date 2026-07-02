@@ -123,6 +123,7 @@ const expectedFiles = [
   'docs/security.md',
   'docs/operations.md',
   'docs/deployment.md',
+  'docs/migration-runlog.md',
   'docs/examples.md',
   'docs/skills-security.md',
   'docs/roadmap.md',

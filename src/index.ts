@@ -2,7 +2,9 @@ export const MAINSPRING_RUNTIME_IDENTITY = {
   productName: 'Mainspring',
   owner: 'Mainspring OSS',
   implementation: 'typescript-agentic-runtime',
+  canonicalRuntime: 'runlog-fabric',
   transport: 'mailbox',
+  compatibilityTransport: 'per-session-sqlite-mailbox',
 } as const
 
 export type MainspringRuntimeIdentity = typeof MAINSPRING_RUNTIME_IDENTITY
