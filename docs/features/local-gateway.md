@@ -39,11 +39,14 @@ Browser-facing gateway data must omit secrets, host paths, database paths, provi
 
 Hosted browser-access URLs are short-lived local bearer URLs for artifact preview/download and SSE reads. They are minted only after normal gateway auth, and ticketed reads reject extra auth-like query parameters such as session-token or OAuth token fields.
 
+Hosted-auth bootstrap and login are still local operator flows, but browser-origin requests now use an explicit localhost/loopback allowlist instead of wildcard CORS. Requests without an `Origin` header remain available for CLI and server-side local tooling; browser requests from non-local origins are rejected before route handling.
+
 ## What It Does Not Do
 
 - It does not provide hosted SaaS tenancy.
 - It does not provide enterprise SSO.
 - It does not provide secure desktop identity.
+- It does not accept arbitrary browser origins for hosted-auth bootstrap/login.
 - It does not execute tools or providers outside the runtime.
 - It does not prove remote skill marketplace trust or third-party reputation.
 - Browser DTO sanitization is not a replacement for gateway-side auth, OS permissions, or artifact access checks.

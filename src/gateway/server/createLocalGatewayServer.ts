@@ -107,6 +107,18 @@ type BrowserAccessTicket = {
 }
 
 const BROWSER_ACCESS_TICKET_TTL_MS = 1000 * 60 * 5
+const LOCAL_BROWSER_ORIGIN_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
+
+function isAllowedLocalBrowserOrigin(origin: string | undefined): boolean {
+  if (!origin) return true
+  try {
+    const parsed = new URL(origin)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    return LOCAL_BROWSER_ORIGIN_HOSTS.has(parsed.hostname)
+  } catch {
+    return false
+  }
+}
 
 export class LocalGatewayHttpServer {
   private readonly host: string
@@ -167,7 +179,10 @@ export class LocalGatewayHttpServer {
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    this.applyCors(response)
+    if (!this.applyCors(request, response)) {
+      this.writeJson(response, 403, { error: 'Origin is not allowed.' })
+      return
+    }
     if (!request.url) {
       this.writeJson(response, 400, { error: 'Missing request URL.' })
       return
@@ -1132,12 +1147,25 @@ export class LocalGatewayHttpServer {
     return JSON.parse(raw)
   }
 
-  private applyCors(response: ServerResponse): void {
-    response.setHeader('Access-Control-Allow-Origin', '*')
+  private applyCors(request: IncomingMessage, response: ServerResponse): boolean {
+    const origin = request.headers.origin
+    if (Array.isArray(origin)) {
+      return false
+    }
+    if (!isAllowedLocalBrowserOrigin(origin)) {
+      response.setHeader('Vary', 'Origin')
+      response.setHeader('Cache-Control', 'no-store')
+      return false
+    }
+    if (origin) {
+      response.setHeader('Access-Control-Allow-Origin', origin)
+      response.setHeader('Vary', 'Origin')
+    }
     response.setHeader('Access-Control-Allow-Headers', 'content-type, authorization')
     response.setHeader('Access-Control-Expose-Headers', 'x-mainspring-auth-token')
     response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
     response.setHeader('Cache-Control', 'no-store')
+    return true
   }
 
   private writeJson(

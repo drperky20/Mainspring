@@ -8466,3 +8466,42 @@ Verification in this slice:
 Next recommended milestone:
 
 - Harden the local gateway browser-origin/auth boundary, then require explicit RunLog approval signing keys outside local-dev/test profiles.
+
+## 2026-07-02 Local Gateway Browser-Origin Auth Hardening Slice
+
+Goal:
+
+- Close the accepted review finding that the local gateway used wildcard CORS around a localhost hosted-auth operator lane.
+
+Changes:
+
+- Updated `src/gateway/server/createLocalGatewayServer.ts` so CORS no longer returns `Access-Control-Allow-Origin: *`.
+- Added an explicit local browser-origin allowlist for `localhost`, `127.0.0.1`, and `::1` over HTTP/HTTPS.
+- Kept requests with no `Origin` header available for CLI and server-side local tooling.
+- Rejected hostile browser origins with `403` before route handling, including hosted-auth bootstrap/login preflights.
+- Extended `src/gateway/server/createLocalGatewayServer.test.ts` to prove hostile origins cannot bootstrap or preflight login, while local console origins can bootstrap/login and receive reflected CORS headers.
+- Updated `docs/security.md`, `docs/features/local-gateway.md`, and `docs/implementation-backlog.md` with the new implemented behavior and remaining limits.
+
+What this proves:
+
+- A malicious non-local browser origin can no longer rely on wildcard CORS to drive the local hosted-auth bootstrap/login lane.
+- Normal local console origins still work.
+- CLI/server-side local fetches without browser `Origin` headers still work for development tooling.
+
+Still honest:
+
+- This is local browser-origin hardening, not enterprise SSO, hosted identity, secure desktop identity, or tenant-scoped authorization.
+- Local gateway hosted auth is still a local/operator slice.
+- Host execution and browser/localStorage provider auth limitations are unchanged.
+
+Verification in this slice:
+
+- `pnpm exec vitest run src/gateway/server/createLocalGatewayServer.test.ts`: passed, 13 tests.
+- `pnpm typecheck`: passed.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 436 tests plus build, security, sensitive-patterns, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end, including gateway systems, examples smoke, agentic harness, desktop systems, optional verifier diagnostics, package dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Require explicit RunLog approval signing keys outside local-dev/test profiles.

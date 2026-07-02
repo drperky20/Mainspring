@@ -441,15 +441,28 @@ describe('LocalGatewayHttpServer', () => {
       const started = await server.start()
       const hostedHealth = await fetch(`${started.url}/health`).then((response) => response.json())
       const unauthorizedSnapshot = await fetch(`${started.url}/snapshot`)
+      const hostileOriginBootstrap = await fetch(`${started.url}/auth/bootstrap`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+        body: JSON.stringify({ username: 'Mallory', password: 'NorthlinePass123' }),
+      })
+      const hostileOriginPreflight = await fetch(`${started.url}/auth/login`, {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'https://evil.example',
+          'access-control-request-method': 'POST',
+          'access-control-request-headers': 'content-type',
+        },
+      })
       const bootstrapResponse = await fetch(`${started.url}/auth/bootstrap`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:5173' },
         body: JSON.stringify({ username: 'Admin', password: 'NorthlinePass123' }),
       })
       const bootstrapBody = await bootstrapResponse.json()
       const loginResponse = await fetch(`${started.url}/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' },
         body: JSON.stringify({ username: 'Admin', password: 'NorthlinePass123' }),
       })
       const loginBody = await loginResponse.json()
@@ -565,7 +578,12 @@ describe('LocalGatewayHttpServer', () => {
       expect(JSON.stringify(hostedHealth)).not.toContain('lastTickAt')
       expect(JSON.stringify(hostedHealth)).not.toContain(workspaceRoot)
       expect(unauthorizedSnapshot.status).toBe(401)
+      expect(hostileOriginBootstrap.status).toBe(403)
+      expect(hostileOriginBootstrap.headers.get('access-control-allow-origin')).toBeNull()
+      expect(hostileOriginPreflight.status).toBe(403)
+      expect(hostileOriginPreflight.headers.get('access-control-allow-origin')).toBeNull()
       expect(bootstrapResponse.status).toBe(201)
+      expect(bootstrapResponse.headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:5173')
       expect(bootstrapBody).toMatchObject({
         user: {
           username: 'admin',
@@ -573,6 +591,7 @@ describe('LocalGatewayHttpServer', () => {
         },
       })
       expect(loginResponse.status).toBe(200)
+      expect(loginResponse.headers.get('access-control-allow-origin')).toBe('http://localhost:5173')
       expect(loginBody).toMatchObject({
         user: {
           username: 'admin',

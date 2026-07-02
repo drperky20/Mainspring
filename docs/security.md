@@ -16,6 +16,7 @@ Mainspring treats agents as untrusted workers.
 - managed local provider secrets
 - local gateway hosted-auth mode
 - local-only gateway binding
+- local gateway browser-origin allowlist for localhost/loopback console origins; hostile browser origins are rejected before hosted auth bootstrap/login
 - short-lived hosted browser-access tickets for local artifact and SSE reads, with auth-like query parameters rejected on ticketed URLs
 - console-side local gateway URL validation that rejects embedded `user:password@host` credentials
 - console-side response tripwires that reject browser-unsafe secret/path fields, common provider key environment markers, and common Windows drive-letter, UNC, and Unix host absolute paths in successful JSON responses
@@ -36,6 +37,7 @@ Mainspring treats agents as untrusted workers.
 - Provider keys must not be stored in browser localStorage.
 - The desktop shell is not a secret vault.
 - Local hosted auth is not enterprise SSO.
+- Local browser-origin checks reduce cross-site localhost risk, but they are not a hosted identity system.
 - Local budget enforcement is not payment billing.
 - RunLog cron grants are scheduling authority checks, not process containment.
 
