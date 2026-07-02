@@ -434,6 +434,7 @@ describe('projectConsoleDashboard', () => {
         cellCount: 1,
         cellLeaseCount: 1,
         cellSnapshotCount: 1,
+        runLogRunCount: 0,
         estimatedCostUsd: 0.004,
         approvals: [
           {
@@ -618,6 +619,7 @@ describe('projectConsoleDashboard', () => {
             updatedAt: '2026-06-27T13:25:30.000Z',
           },
         ],
+        runLogRuns: [],
       },
       {
         clientId: 'client_empty',
@@ -633,6 +635,7 @@ describe('projectConsoleDashboard', () => {
         cellCount: 0,
         cellLeaseCount: 0,
         cellSnapshotCount: 0,
+        runLogRunCount: 0,
         estimatedCostUsd: 0,
         approvals: [],
         sessions: [],
@@ -641,6 +644,7 @@ describe('projectConsoleDashboard', () => {
         artifacts: [],
         usageEntries: [],
         toolCalls: [],
+        runLogRuns: [],
       },
     ])
     expect(projection.activeRuns.map((run) => run.runId)).toEqual([
@@ -895,6 +899,52 @@ describe('projectConsoleDashboard', () => {
       activeRunCount: 3,
       pendingApprovalCount: 2,
       status: 'needs-approval',
+    })
+    expect(projection.clientDetails[0]?.runLogRuns).toEqual([
+      {
+        runId: 'runlog_waiting',
+        sessionId: 'session_1',
+        status: 'awaiting_approval',
+        workspaceId: 'workspace_acme',
+        workspaceName: 'Acme Workspace',
+        agentId: 'agent_research',
+        agentName: 'Research Agent',
+        providerId: 'openrouter',
+        providerLabel: 'OpenRouter',
+        modelId: 'anthropic/claude-sonnet-4',
+        eventCount: 9,
+        pendingApprovalCount: 1,
+        approvalDecisionCount: 1,
+        toolCallCount: 1,
+        checkpointCount: 1,
+        policyDecisionCount: 1,
+        errorCount: 0,
+        artifactCount: 0,
+        updatedAt: '2026-06-27T14:07:00.000Z',
+        checkpoints: [
+          {
+            eventId: 'event_checkpoint_runlog_1',
+            seq: 8,
+            kind: 'approval',
+          },
+        ],
+        policyDecisions: [
+          {
+            decisionId: 'decision_runlog_1',
+            state: 'requires_approval',
+            surface: 'tool',
+            targetKey: 'tool:shell.exec',
+            toolCallId: 'tool_call_runlog_1',
+          },
+        ],
+        errors: [],
+      },
+    ])
+    expect(projection.clientDetails[0]?.toolCalls[0]).toMatchObject({
+      toolCallId: 'tool_call_runlog_1',
+      toolName: 'shell.exec',
+      status: 'requested',
+      runId: 'runlog_waiting',
     })
   })
 })

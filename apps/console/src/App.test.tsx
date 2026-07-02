@@ -509,6 +509,7 @@ describe('selected client and agent labels', () => {
           cellCount: 1,
           cellLeaseCount: 1,
           cellSnapshotCount: 1,
+          runLogRunCount: 1,
           estimatedCostUsd: 0,
           artifacts: [
             {
@@ -595,6 +596,47 @@ describe('selected client and agent labels', () => {
               status: 'completed',
               createdAt: '2026-06-27T17:58:30.000Z',
               updatedAt: '2026-06-27T17:58:40.000Z',
+            },
+          ],
+          runLogRuns: [
+            {
+              runId: 'runlog_1',
+              sessionId: 'session_1',
+              status: 'awaiting_approval',
+              workspaceId: 'workspace_1',
+              workspaceName: 'Northline Workspace',
+              agentId: 'agent_1',
+              agentName: 'Front desk assistant',
+              providerId: 'openrouter',
+              providerLabel: 'OpenRouter',
+              modelId: 'anthropic/claude-sonnet-4',
+              eventCount: 9,
+              pendingApprovalCount: 1,
+              approvalDecisionCount: 0,
+              toolCallCount: 1,
+              checkpointCount: 1,
+              policyDecisionCount: 1,
+              errorCount: 1,
+              artifactCount: 1,
+              updatedAt: '2026-06-27T17:59:30.000Z',
+              checkpoints: [{ eventId: 'event_checkpoint_1', seq: 7, kind: 'approval' }],
+              policyDecisions: [
+                {
+                  decisionId: 'decision_1',
+                  state: 'requires_approval',
+                  surface: 'tool',
+                  targetKey: 'tool:browser.screenshot',
+                  toolCallId: 'tool_call_1',
+                },
+              ],
+              errors: [
+                {
+                  eventId: 'event_error_1',
+                  seq: 8,
+                  type: 'runtime.error',
+                  message: 'Provider interrupted',
+                },
+              ],
             },
           ],
         }}
@@ -692,6 +734,10 @@ describe('selected client and agent labels', () => {
     expect(markup).toContain('Open approval trace')
     expect(markup).toContain('Linked sessions')
     expect(markup).toContain('Open session trace')
+    expect(markup).toContain('RunLog detail')
+    expect(markup).toContain('Checkpoints')
+    expect(markup).toContain('Policy decisions')
+    expect(markup).toContain('Provider interrupted')
   })
 
   it('renders live dashboard queues for active runs and pending approvals', () => {

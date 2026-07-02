@@ -8162,3 +8162,37 @@ Verification in this slice:
 Next recommended milestone:
 
 - Add dedicated console run-detail panels for RunLog checkpoints, policy decisions, artifacts, and errors, or migrate `openrouter:e2e` to a RunLog-native live-provider path once the live projection contract is equivalent.
+
+## 2026-07-02 Console RunLog Detail Panel Slice
+
+Goal:
+
+- Make the sanitized RunLog checkpoint/error/policy summaries visible in the operator console selected-client detail view.
+
+Changes:
+
+- Extended `ConsoleDashboardClientDetail` with client-scoped RunLog run rows.
+- Included RunLog tool calls in the selected-client tool-call list.
+- Counted artifacts associated with RunLog run ids in client detail rows.
+- Added a selected-client `RunLog detail` panel showing each RunLog run's status, provider/model, event count, checkpoint count, policy decision count, error count, artifact count, and sanitized checkpoint/policy/error summaries.
+- Updated focused projection and React render tests for the new panel and DTO fields.
+- Updated current-state, migration, and backlog docs to mark the operator-visible RunLog detail panel complete.
+
+What this proves:
+
+- Operators can inspect RunLog checkpoint, policy decision, error, tool-call, and artifact summaries from the browser console without raw event payloads.
+- RunLog run detail is tied into the existing selected-client dashboard projection rather than a second console state spine.
+
+Still honest:
+
+- This is not checkpoint replay, retry-from-checkpoint, artifact authorization, browser trace capture, subagent lineage UI, or live-provider RunLog E2E.
+- The panel displays sanitized summaries only; trusted server/SDK projection remains the place for full raw RunLog events.
+
+Verification in this slice:
+
+- `pnpm typecheck`: passed.
+- `pnpm exec vitest run apps/console/src/dashboardProjection.test.ts apps/console/src/App.test.tsx apps/console/src/consoleReadModelPipeline.test.ts apps/console/src/dashboardViewModel.test.ts`: passed, 4 files / 29 tests.
+
+Next recommended milestone:
+
+- Move `openrouter:e2e` to a RunLog-native live-provider path once live-provider projection coverage is equivalent, or add taint labels beyond scan findings for web/email/file-derived memory and skill mutations.

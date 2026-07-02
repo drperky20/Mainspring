@@ -32,6 +32,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `LocalMainspringGateway.snapshot()` can include an optional sanitized RunLog read model for runs known to gateway app-state metadata.
   - `gatewaySnapshotToConsoleState()` projects RunLog runs, pending approvals, tool calls, checkpoint summaries, policy decision summaries, and error summaries without exposing raw private event fields.
   - The React console data-source summary and dashboard projection count RunLog active runs and pending approvals beside legacy compatibility runs.
+  - The selected-client console detail panel now shows RunLog run summaries with checkpoint, policy decision, error, tool-call, and artifact counts from sanitized DTO fields.
 - Package subpaths now expose `mainspring/core`, `mainspring/adapters`, `mainspring/adapters/sqlite`, `mainspring/adapters/local-blob`, `mainspring/capabilities`, `mainspring/hosts/runlog`, and `mainspring/compat`.
 - `docs/migration-runlog.md` records the legacy mailbox/`RuntimeKernel` retirement map and `pnpm runlog:migration:check` keeps that map tied to existing source files, package exports, and release checks.
 - Focused tests prove provider-only runs, tool calls, approval pauses, approval/denial decisions, SQLite-backed approval resume, SQLite restart recovery, cron-created runs, lazy workspace materialization, and 1000 idle agents stored as data.

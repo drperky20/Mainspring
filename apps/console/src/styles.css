@@ -375,6 +375,24 @@ button {
   background: rgba(255, 255, 255, 0.32);
 }
 
+.gateway-runlog-inspector-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.gateway-runlog-inspector-grid > div {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.gateway-runlog-inspector-grid h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
 .gateway-artifact-preview,
 .gateway-artifact-preview-frame,
 .gateway-artifact-media-player {

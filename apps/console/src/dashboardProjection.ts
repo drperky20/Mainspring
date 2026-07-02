@@ -170,6 +170,52 @@ export interface ConsoleDashboardClientToolCallRow {
   updatedAt: string
 }
 
+export interface ConsoleDashboardClientRunLogCheckpointRow {
+  eventId: string
+  seq: number
+  kind?: string
+}
+
+export interface ConsoleDashboardClientRunLogPolicyDecisionRow {
+  decisionId: string
+  state: string
+  surface: string
+  targetKey: string
+  toolCallId?: string
+}
+
+export interface ConsoleDashboardClientRunLogErrorRow {
+  eventId: string
+  seq: number
+  type: 'runtime.error' | 'run.failed'
+  message?: string
+}
+
+export interface ConsoleDashboardClientRunLogRunRow {
+  runId: string
+  sessionId: string
+  status: NonNullable<ConsoleGatewaySnapshot['runLog']>['runs'][number]['status']
+  workspaceId?: string
+  workspaceName?: string
+  agentId?: string
+  agentName?: string
+  providerId?: string
+  providerLabel?: string
+  modelId?: string
+  eventCount: number
+  pendingApprovalCount: number
+  approvalDecisionCount: number
+  toolCallCount: number
+  checkpointCount: number
+  policyDecisionCount: number
+  errorCount: number
+  artifactCount: number
+  updatedAt: string
+  checkpoints: ConsoleDashboardClientRunLogCheckpointRow[]
+  policyDecisions: ConsoleDashboardClientRunLogPolicyDecisionRow[]
+  errors: ConsoleDashboardClientRunLogErrorRow[]
+}
+
 export interface ConsoleDashboardClientDetail {
   clientId: string
   name: string
@@ -184,6 +230,7 @@ export interface ConsoleDashboardClientDetail {
   cellCount: number
   cellLeaseCount: number
   cellSnapshotCount: number
+  runLogRunCount: number
   estimatedCostUsd: number
   artifacts: ConsoleDashboardClientArtifactRow[]
   usageEntries: ConsoleDashboardClientUsageRow[]
@@ -192,6 +239,7 @@ export interface ConsoleDashboardClientDetail {
   approvals: ConsoleDashboardClientApprovalRow[]
   sessions: ConsoleDashboardClientSessionRow[]
   toolCalls: ConsoleDashboardClientToolCallRow[]
+  runLogRuns: ConsoleDashboardClientRunLogRunRow[]
 }
 
 export interface ConsoleDashboardProjection {
@@ -480,6 +528,12 @@ function projectClientDetail({
       (run.agentId && agentIds.has(run.agentId)),
   )
   const runById = new Map(runs.map((run) => [run.runId, run] as const))
+  const runLogRuns = (snapshot.runLog?.runs ?? []).filter(
+    (run) =>
+      (run.workspaceId && workspaceIds.has(run.workspaceId)) ||
+      (run.agentId && agentIds.has(run.agentId)),
+  )
+  const runLogRunById = new Map(runLogRuns.map((run) => [run.runId, run] as const))
   const sessions = snapshot.sessions
     .filter(
       (session) =>
@@ -506,16 +560,22 @@ function projectClientDetail({
     .filter(
       (artifact) =>
         (artifact.workspaceId && workspaceIds.has(artifact.workspaceId)) ||
-        runById.has(artifact.runId),
+        runById.has(artifact.runId) ||
+        runLogRunById.has(artifact.runId),
     )
     .map((artifact) => {
       const run = runById.get(artifact.runId)
+      const runLogRun = runLogRunById.get(artifact.runId)
       const workspace = artifact.workspaceId
         ? workspaceById.get(artifact.workspaceId)
         : run?.workspaceId
           ? workspaceById.get(run.workspaceId)
+          : runLogRun?.workspaceId
+            ? workspaceById.get(runLogRun.workspaceId)
           : undefined
-      const agent = run?.agentId ? agentById.get(run.agentId) : undefined
+      const agent =
+        (run?.agentId ? agentById.get(run.agentId) : undefined)
+        ?? (runLogRun?.agentId ? agentById.get(runLogRun.agentId) : undefined)
       return {
         artifactId: artifact.artifactId,
         runId: artifact.runId,
@@ -534,18 +594,25 @@ function projectClientDetail({
     .filter(
       (entry) =>
         (entry.workspaceId && workspaceIds.has(entry.workspaceId)) ||
-        runById.has(entry.runId),
+        runById.has(entry.runId) ||
+        runLogRunById.has(entry.runId),
     )
     .map((entry) => {
       const run = runById.get(entry.runId)
+      const runLogRun = runLogRunById.get(entry.runId)
       const workspace = entry.workspaceId
         ? workspaceById.get(entry.workspaceId)
         : run?.workspaceId
           ? workspaceById.get(run.workspaceId)
+          : runLogRun?.workspaceId
+            ? workspaceById.get(runLogRun.workspaceId)
           : undefined
-      const agent = run?.agentId ? agentById.get(run.agentId) : undefined
+      const agent =
+        (run?.agentId ? agentById.get(run.agentId) : undefined)
+        ?? (runLogRun?.agentId ? agentById.get(runLogRun.agentId) : undefined)
       const provider =
         (run?.providerProfileId ? providerByProfileId.get(run.providerProfileId) : undefined)
+        ?? (runLogRun?.providerId ? providerById.get(runLogRun.providerId) : undefined)
         ?? (entry.providerId ? providerById.get(entry.providerId) : undefined)
       return {
         entryId: entry.entryId,
@@ -674,6 +741,53 @@ function projectClientDetail({
       }
     })
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  const runLogToolCalls = runLogRuns.flatMap((run) => {
+    const workspace = run.workspaceId ? workspaceById.get(run.workspaceId) : undefined
+    const agent = run.agentId ? agentById.get(run.agentId) : undefined
+    return run.toolCalls.map((toolCall, index) => ({
+      toolCallId: toolCall.toolCallId ?? `${run.runId}:tool:${index}`,
+      runId: run.runId,
+      sessionId: run.sessionId,
+      ...(workspace ? { workspaceId: workspace.workspaceId, workspaceName: workspace.name } : {}),
+      ...(agent ? { agentId: agent.agentId, agentName: agent.name } : {}),
+      toolName: toolCall.name ?? 'tool.call',
+      status: toolCall.status,
+      createdAt: run.updatedAt,
+      updatedAt: run.updatedAt,
+    }))
+  })
+  const allToolCalls = [...toolCalls, ...runLogToolCalls]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  const runLogRunRows = runLogRuns
+    .map((run) => {
+      const workspace = run.workspaceId ? workspaceById.get(run.workspaceId) : undefined
+      const agent = run.agentId ? agentById.get(run.agentId) : undefined
+      const provider = run.providerId ? providerById.get(run.providerId) : undefined
+      const runArtifacts = artifacts.filter((artifact) => artifact.runId === run.runId)
+      return {
+        runId: run.runId,
+        sessionId: run.sessionId,
+        status: run.status,
+        ...(workspace ? { workspaceId: workspace.workspaceId, workspaceName: workspace.name } : {}),
+        ...(agent ? { agentId: agent.agentId, agentName: agent.name } : {}),
+        ...(run.providerId ? { providerId: run.providerId } : {}),
+        ...(provider ? { providerLabel: provider.label } : {}),
+        ...(run.modelId ? { modelId: run.modelId } : {}),
+        eventCount: run.eventCount,
+        pendingApprovalCount: run.pendingApprovalCount,
+        approvalDecisionCount: run.approvalDecisionCount,
+        toolCallCount: run.toolCallCount,
+        checkpointCount: run.checkpointCount,
+        policyDecisionCount: run.policyDecisionCount,
+        errorCount: run.errorCount,
+        artifactCount: runArtifacts.length,
+        updatedAt: run.updatedAt,
+        checkpoints: run.checkpoints,
+        policyDecisions: run.policyDecisions,
+        errors: run.errors,
+      }
+    })
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 
   const deploymentTargets = (snapshot.deploymentTargets ?? []).filter(
     (target) => target.workspaceId && workspaceIds.has(target.workspaceId),
@@ -716,6 +830,7 @@ function projectClientDetail({
     cellCount: cells.length,
     cellLeaseCount: cellLeases.length,
     cellSnapshotCount: cellSnapshots.length,
+    runLogRunCount: runLogRunRows.length,
     estimatedCostUsd: sumEstimatedCost(usageEntries),
     artifacts,
     usageEntries,
@@ -723,7 +838,8 @@ function projectClientDetail({
     memoryEntries,
     approvals,
     sessions,
-    toolCalls,
+    toolCalls: allToolCalls,
+    runLogRuns: runLogRunRows,
   }
 }
 

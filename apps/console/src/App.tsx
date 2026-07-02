@@ -3610,6 +3610,9 @@ export function GatewayClientDetailPanel({
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | undefined>(
     detail.approvals[0]?.approvalId,
   )
+  const [selectedRunLogRunId, setSelectedRunLogRunId] = useState<string | undefined>(
+    detail.runLogRuns[0]?.runId,
+  )
   const selectedUsageEntry =
     detail.usageEntries.find((entry) => entry.entryId === selectedUsageEntryId)
     ?? detail.usageEntries[0]
@@ -3654,6 +3657,9 @@ export function GatewayClientDetailPanel({
   const selectedApproval =
     detail.approvals.find((approval) => approval.approvalId === selectedApprovalId)
     ?? detail.approvals[0]
+  const selectedRunLogRun =
+    detail.runLogRuns.find((run) => run.runId === selectedRunLogRunId)
+    ?? detail.runLogRuns[0]
   const selectedArtifactPresentation = selectedArtifact
     ? artifactPresentation({
         mediaType: selectedArtifact.mediaType,
@@ -3677,6 +3683,7 @@ export function GatewayClientDetailPanel({
           <span>{detail.toolCallCount} tool call{detail.toolCallCount === 1 ? '' : 's'}</span>
           <span>{detail.deploymentTargetCount} deployment target{detail.deploymentTargetCount === 1 ? '' : 's'}</span>
           <span>{detail.cellCount} cell{detail.cellCount === 1 ? '' : 's'}</span>
+          <span>{detail.runLogRunCount} RunLog run{detail.runLogRunCount === 1 ? '' : 's'}</span>
           {detail.estimatedCostUsd > 0 ? <span>est ${detail.estimatedCostUsd.toFixed(3)}</span> : null}
         </div>
       </div>
@@ -3957,6 +3964,95 @@ export function GatewayClientDetailPanel({
                 <span>{detail.cellLeaseCount} cell lease{detail.cellLeaseCount === 1 ? '' : 's'}</span>
                 <span>{detail.cellSnapshotCount} cell snapshot{detail.cellSnapshotCount === 1 ? '' : 's'}</span>
               </div>
+            </>
+          )}
+        </div>
+        <div className="gateway-detail-section gateway-runlog-detail-section">
+          <h2>RunLog detail</h2>
+          {detail.runLogRuns.length === 0 ? (
+            <p>No RunLog run summaries projected yet.</p>
+          ) : (
+            <>
+              {detail.runLogRuns.slice(0, 5).map((run) => (
+                <button
+                  className={`gateway-detail-row ${selectedRunLogRun?.runId === run.runId ? 'gateway-detail-row-active' : ''}`}
+                  key={run.runId}
+                  onClick={() => setSelectedRunLogRunId(run.runId)}
+                  type="button"
+                >
+                  <strong>{run.agentName ?? run.runId}</strong>
+                  <small>
+                    {[run.status, run.providerLabel ?? run.providerId, run.modelId, formatDetailTimestamp(run.updatedAt)]
+                      .filter((value): value is string => Boolean(value))
+                      .join(' | ')}
+                  </small>
+                  <small>
+                    {[
+                      `${run.eventCount} events`,
+                      `${run.checkpointCount} checkpoints`,
+                      `${run.policyDecisionCount} policy decisions`,
+                      `${run.errorCount} errors`,
+                      `${run.artifactCount} artifacts`,
+                    ].join(' | ')}
+                  </small>
+                </button>
+              ))}
+              {selectedRunLogRun ? (
+                <div className="gateway-detail-inspector">
+                  <h2>RunLog run</h2>
+                  <KeyValue label="Run" value={selectedRunLogRun.runId} />
+                  <KeyValue label="Session" value={selectedRunLogRun.sessionId} />
+                  <KeyValue label="Status" value={selectedRunLogRun.status} />
+                  <KeyValue label="Agent" value={selectedRunLogRun.agentName ?? 'Unassigned'} />
+                  <KeyValue label="Workspace" value={selectedRunLogRun.workspaceName ?? 'Unassigned'} />
+                  <KeyValue label="Provider" value={selectedRunLogRun.providerLabel ?? selectedRunLogRun.providerId ?? 'Pending'} />
+                  <KeyValue label="Model" value={selectedRunLogRun.modelId ?? 'Unknown'} />
+                  <KeyValue label="Events" value={String(selectedRunLogRun.eventCount)} />
+                  <KeyValue label="Pending approvals" value={String(selectedRunLogRun.pendingApprovalCount)} />
+                  <KeyValue label="Approval decisions" value={String(selectedRunLogRun.approvalDecisionCount)} />
+                  <KeyValue label="Tool calls" value={String(selectedRunLogRun.toolCallCount)} />
+                  <KeyValue label="Artifacts" value={String(selectedRunLogRun.artifactCount)} />
+                  <KeyValue label="Updated" value={formatDetailTimestamp(selectedRunLogRun.updatedAt)} />
+                  <div className="gateway-runlog-inspector-grid">
+                    <div>
+                      <h3>Checkpoints</h3>
+                      {selectedRunLogRun.checkpoints.length === 0 ? (
+                        <small>No checkpoints projected.</small>
+                      ) : (
+                        selectedRunLogRun.checkpoints.slice(0, 5).map((checkpoint) => (
+                          <small key={`${checkpoint.eventId}:${checkpoint.seq}`}>
+                            #{checkpoint.seq} {checkpoint.kind ?? 'checkpoint'} ({checkpoint.eventId})
+                          </small>
+                        ))
+                      )}
+                    </div>
+                    <div>
+                      <h3>Policy decisions</h3>
+                      {selectedRunLogRun.policyDecisions.length === 0 ? (
+                        <small>No policy decisions projected.</small>
+                      ) : (
+                        selectedRunLogRun.policyDecisions.slice(0, 5).map((decision) => (
+                          <small key={decision.decisionId}>
+                            {decision.state}: {decision.surface}/{decision.targetKey}
+                          </small>
+                        ))
+                      )}
+                    </div>
+                    <div>
+                      <h3>Errors</h3>
+                      {selectedRunLogRun.errors.length === 0 ? (
+                        <small>No errors projected.</small>
+                      ) : (
+                        selectedRunLogRun.errors.slice(0, 5).map((error) => (
+                          <small key={`${error.eventId}:${error.seq}`}>
+                            #{error.seq} {error.type}{error.message ? `: ${error.message}` : ''}
+                          </small>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </>
           )}
         </div>
