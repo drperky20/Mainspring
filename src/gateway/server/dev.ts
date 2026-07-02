@@ -1,8 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { EchoProvider } from '../../providers/EchoProvider.js'
-import { createRuntimeProviderFromEnv } from '../../runner/RuntimeProviderConfig.js'
+import {
+  createRuntimeProviderFromEnv,
+  type RuntimeProviderSelection,
+} from '../../runner/RuntimeProviderConfig.js'
 import { createMainspring } from '../../sdk/Mainspring.js'
+import { createRunLogMainspring } from '../../sdk/RunLogMainspring.js'
 import {
   createLocalMainspringGateway,
   createSqliteLocalGatewayAppStateStore,
@@ -56,6 +60,10 @@ Environment:
   MAINSPRING_SESSIONS_ROOT=.mainspring/sessions
   MAINSPRING_WORKSPACE_ROOT=.mainspring/workspaces
   MAINSPRING_GATEWAY_APP_DB=.mainspring/gateway-app.sqlite
+  MAINSPRING_RUNLOG_ROOT=.mainspring/runlog
+  MAINSPRING_RUNLOG_DB=.mainspring/runlog/runlog.sqlite
+  MAINSPRING_RUNLOG_WORKSPACE_ROOT=.mainspring/runlog/workspaces
+  MAINSPRING_RUNLOG_APPROVAL_KEY=
   MAINSPRING_GATEWAY_MANAGED_SECRET_KEY=.mainspring/gateway-app.sqlite.managed-key
   MAINSPRING_GATEWAY_MANAGED_SECRET_STORE=auto
   MAINSPRING_GATEWAY_MANAGED_SECRET_CREDENTIAL_NAME=
@@ -85,6 +93,13 @@ async function main(): Promise<void> {
   const sessionsRoot = path.resolve(process.env.MAINSPRING_SESSIONS_ROOT || '.mainspring/sessions')
   const workspaceRoot = path.resolve(process.env.MAINSPRING_WORKSPACE_ROOT || '.mainspring/workspaces')
   const appDbPath = path.resolve(process.env.MAINSPRING_GATEWAY_APP_DB || '.mainspring/gateway-app.sqlite')
+  const runLogRoot = path.resolve(process.env.MAINSPRING_RUNLOG_ROOT || '.mainspring/runlog')
+  const runLogDbPath = path.resolve(
+    process.env.MAINSPRING_RUNLOG_DB || path.join(runLogRoot, 'runlog.sqlite'),
+  )
+  const runLogWorkspaceRoot = path.resolve(
+    process.env.MAINSPRING_RUNLOG_WORKSPACE_ROOT || path.join(runLogRoot, 'workspaces'),
+  )
   const managedSecretKeyPath = path.resolve(
     process.env.MAINSPRING_GATEWAY_MANAGED_SECRET_KEY || `${appDbPath}.managed-key`,
   )
@@ -107,10 +122,15 @@ async function main(): Promise<void> {
     process.env.MAINSPRING_GATEWAY_CELL_MAX_ACTIVE_LEASES_PER_CELL,
   )
   fs.mkdirSync(path.dirname(appDbPath), { recursive: true })
+  fs.mkdirSync(path.dirname(runLogDbPath), { recursive: true })
   fs.mkdirSync(sessionsRoot, { recursive: true })
   fs.mkdirSync(workspaceRoot, { recursive: true })
+  fs.mkdirSync(runLogWorkspaceRoot, { recursive: true })
 
-  const envProviderSelection = createRuntimeProviderFromEnv(process.env)
+  const envProviderSelection = resolveDevRuntimeProvider(process.env)
+  const provider = envProviderSelection?.provider ?? new EchoProvider()
+  const providerId = envProviderSelection?.providerId ?? 'echo'
+  const modelId = envProviderSelection?.modelId ?? 'echo/default'
   const appState = createSqliteLocalGatewayAppStateStore({
     dbPath: appDbPath,
     managedSecretKeyPath,
@@ -120,7 +140,7 @@ async function main(): Promise<void> {
   const runtime = createMainspring({
     sessionsRoot,
     workspaceRoot,
-    provider: envProviderSelection?.provider ?? new EchoProvider(),
+    provider,
     ...(envProviderSelection?.modelId ? { modelId: envProviderSelection.modelId } : {}),
     secretResolver: (ref) =>
       ref.kind === 'env'
@@ -128,13 +148,29 @@ async function main(): Promise<void> {
         : appState.resolveSecretRef(`${ref.kind}:${ref.key}`) ?? undefined,
     pollIntervalMs: 100,
   })
+  const runLog = createRunLogMainspring({
+    rootPath: runLogRoot,
+    dbPath: runLogDbPath,
+    workspaceRoot: runLogWorkspaceRoot,
+    provider,
+    defaultProviderId: providerId,
+    agent: {
+      agentId: 'gateway-dev-runlog-agent',
+      instructions: 'You are a concise Mainspring RunLog gateway agent.',
+      providerId,
+      modelId,
+      capabilities: ['provider'],
+    },
+    approvalReceiptKey: process.env.MAINSPRING_RUNLOG_APPROVAL_KEY,
+    workerId: 'gateway-dev',
+  })
   await runtime.start()
   bootstrapGatewayAppState({
     runtime,
     appState,
     workspaceRoot,
-    providerId: envProviderSelection?.providerId ?? 'echo',
-    defaultModelId: envProviderSelection?.modelId ?? 'echo/default',
+    providerId,
+    defaultModelId: modelId,
     secretRef:
       envProviderSelection?.providerId === 'openrouter'
         ? 'env:OPENROUTER_API_KEY'
@@ -145,6 +181,7 @@ async function main(): Promise<void> {
   const gateway = createLocalMainspringGateway({
     runtime,
     appState,
+    runLog,
     cron: {
       enabled: cronEnabled,
       pollIntervalMs:
@@ -166,12 +203,30 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     await server.stop()
+    runLog.close()
     appState.close()
     await runtime.stop()
     process.exit(0)
   }
   process.on('SIGINT', () => void shutdown())
   process.on('SIGTERM', () => void shutdown())
+}
+
+function resolveDevRuntimeProvider(
+  env: Record<string, string | undefined>,
+): RuntimeProviderSelection | undefined {
+  return hasConfiguredProviderCredential(env) ? createRuntimeProviderFromEnv(env) : undefined
+}
+
+function hasConfiguredProviderCredential(env: Record<string, string | undefined>): boolean {
+  const credentialRef = env.MAINSPRING_CREDENTIAL_REF?.trim()
+  if (credentialRef?.startsWith('env:')) {
+    return Boolean(env[credentialRef.slice('env:'.length)]?.trim())
+  }
+  if (credentialRef) return false
+  const providerId = env.MAINSPRING_PROVIDER?.trim().toLowerCase() === 'openai' ? 'openai' : 'openrouter'
+  const envKey = providerId === 'openai' ? 'OPENAI_API_KEY' : 'OPENROUTER_API_KEY'
+  return Boolean(env[envKey]?.trim())
 }
 
 function bootstrapGatewayAppState(input: {

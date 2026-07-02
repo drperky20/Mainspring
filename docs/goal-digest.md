@@ -7830,3 +7830,39 @@ Verification in this slice:
 Next recommended milestone:
 
 - Configure the local gateway dev server with a RunLog host by default once provider/profile and examples are covered, or migrate gateway cron scheduling to RunLog cron grants.
+
+## 2026-07-02 Local Gateway Dev RunLog Default Slice
+
+Goal:
+
+- Make the normal `pnpm gateway:dev` bring-up construct a RunLog host so default HTTP `/runs/start` traffic exercises the canonical RunIntent path in local development, not only in tests.
+
+Changes:
+
+- Updated `src/gateway/server/dev.ts` to create a `RunLogMainspring` host backed by `.mainspring/runlog/runlog.sqlite` and `.mainspring/runlog/workspaces`.
+- Passed that RunLog host into `createLocalMainspringGateway`, so the already-migrated default `/runs/start` handler uses RunLog during local dev.
+- Preserved the legacy `createMainspring` runtime in the dev server as the current compatibility spine for sessions, app-state bootstrap, and migration surfaces.
+- Corrected local provider fallback: live OpenRouter/OpenAI providers are selected only when an env credential is present; otherwise local dev uses `EchoProvider`.
+- Documented the remaining provider-secret limitation: managed/non-env provider profile secret resolution is not yet wired into RunLog provider calls.
+
+What this proves:
+
+- The main local gateway command now exercises RunLog-backed run creation by default.
+- Source checkout bring-up still works without paid provider keys.
+- The change does not market managed provider-profile secrets or host execution as solved security boundaries.
+
+Verification in this slice:
+
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run src/gateway/server/createLocalGatewayServer.test.ts src/sdk/RunLogMainspring.test.ts src/gateway/ConsoleSnapshotAdapter.test.ts`: passed, 3 files / 27 tests.
+- `pnpm gateway:dev:help`: passed and prints the new RunLog root/db/workspace envs.
+- Built dev server smoke on `http://127.0.0.1:8791`: passed. With no provider env keys, `POST /runs/start` completed through EchoProvider and `/snapshot.runLog.runs[0]` showed `providerId: "echo"`, `status: "completed"`, `latestSeq: 10`.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm runlog:migration:check`: passed with `MAINSPRING_RUNLOG_MIGRATION_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 424 tests plus build, security, skill provenance, RunLog migration, docs, and console checks.
+- `pnpm release:check`: passed end to end, including gateway systems, compiled `gateway:dev:help`, examples smoke, agentic harness, desktop systems, optional verifiers, package surface, package/npm dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Move gateway cron scheduling to RunLog cron grants, or add RunLog provider secret resolution for managed/non-env provider profile secrets.

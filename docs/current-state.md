@@ -26,6 +26,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `/runlog/runs/start` creates `RunIntent` records and returns sanitized `RunLogProjection` responses.
   - `/runlog/runs/:runId/events` tails the same projection.
   - `/runlog/approvals/:approvalId/resolve` approves or denies through scoped RunLog receipts and returns the updated projection.
+  - `pnpm gateway:dev` now constructs a local RunLog host by default, backed by `.mainspring/runlog/runlog.sqlite` and `.mainspring/runlog/workspaces`.
 - Console-facing RunLog projection:
   - `LocalMainspringGateway.snapshot()` can include an optional sanitized RunLog read model for runs known to gateway app-state metadata.
   - `gatewaySnapshotToConsoleState()` projects RunLog runs, pending approvals, tool calls, and policy decision summaries without exposing raw private event fields.
@@ -63,7 +64,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Prototype Or Migration Surfaces
 
 - The old mailbox/runtime path is still present and still important for existing `createMainspring` SDK/gateway behavior.
-- The default gateway `/runs/start` route is RunLog-backed only when the gateway is configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways without a RunLog host remain mailbox-compatible.
+- The default gateway `/runs/start` route is RunLog-backed in the local dev server and in gateways configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways constructed without a RunLog host remain mailbox-compatible for migration tests and older embedders.
 - Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, legacy gateway cron scheduling, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
@@ -72,7 +73,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Not Implemented Yet
 
 - Full replacement of `RuntimeKernel` and per-session mailbox execution with RunLog execution.
-- Default gateway/API/console run creation through RunLog for gateway configurations that do not yet provide a RunLog host. Direct SDK embedding, explicit `/runlog` gateway routes, conditional default `/runs/start` RunLog ingress, and console-visible RunLog projections exist.
+- RunLog provider secret resolution for managed/non-env provider profile secrets. Local dev RunLog provider selection currently uses env-backed live providers only, otherwise EchoProvider.
 - Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Memory retrieval adapter connected to RunLog context assembly.

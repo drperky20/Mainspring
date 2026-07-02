@@ -28,7 +28,7 @@ The older per-session SQLite legacy mailbox and `RuntimeKernel` path still exist
 - Canonical RunLog Fabric core with SQLite WAL events, scheduler leases, checkpoints, provider routing, tool-call handling, policy checks, and host projections.
 - Legacy per-session SQLite mailbox and `RuntimeKernel` compatibility path while SDK/gateway migration continues.
 - Built-in file, shell, terminal, browser-adapter, web, memory, skill, and diagnostics tools.
-- Local gateway development host with app-state SQLite for clients, workspaces, agents, provider profiles, budgets, usage, cron, marketplace templates, deployments, and audit rows.
+- Local gateway development host with RunLog-backed default run creation, app-state SQLite for clients, workspaces, agents, provider profiles, budgets, usage, cron, marketplace templates, deployments, and audit rows.
 - Vite console with prototype local state plus explicit `local-gateway-dev` transport for live local gateway workflows.
 - Experimental Electron shell for the console, with verified Windows packaging.
 - Runnable example agents and a trusted local template catalog.
@@ -57,6 +57,8 @@ Run the local gateway and console:
 pnpm gateway:dev
 pnpm console:dev
 ```
+
+`pnpm gateway:dev` stores local RunLog state under `.mainspring/runlog` and falls back to `EchoProvider` when no OpenRouter/OpenAI env credential is configured.
 
 Open the console with:
 
