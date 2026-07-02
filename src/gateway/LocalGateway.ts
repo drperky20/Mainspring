@@ -11,6 +11,14 @@ import type {
 import { latestProviderInitDetailFromRunEvents } from '../contracts/runtime.js'
 import { MainspringMailbox, type InboundMessage } from '../mailbox/SqliteMailbox.js'
 import type { Mainspring } from '../sdk/Mainspring.js'
+import type { RunLogMainspring } from '../sdk/RunLogMainspring.js'
+import type {
+  AgentSpec,
+  RunLogCapability,
+  RunLogEvent,
+  RunRecord as RunLogRunRecord,
+} from '../core/types.js'
+import type { RunLogRunProjection } from '../hosts/runlog/RunLogProjection.js'
 import { estimateUsageCost } from '../usage/UsageAccounting.js'
 import {
   describeModelPricingCatalog,
@@ -86,6 +94,7 @@ import type {
 
 export interface CreateLocalMainspringGatewayOptions {
   runtime: Mainspring
+  runLog?: RunLogMainspring
   appState?: LocalGatewayAppStateStore
   cron?: {
     enabled?: boolean
@@ -260,6 +269,11 @@ export interface LocalGatewayApprovalResponseInput {
   approvalId: string
   reason?: string
   response?: unknown
+}
+
+export interface LocalGatewayRunLogStartResult {
+  run: RunLogRunRecord
+  projection: RunLogRunProjection
 }
 
 export type LocalGatewayAppStateRunInput = LocalGatewayStartRunInput & {
@@ -610,6 +624,27 @@ function approvalIdFromEvent(event: RunEvent): string | null {
   return null
 }
 
+function runLogCapabilitiesFromGatewayInput(input: LocalGatewayStartRunInput): RunLogCapability[] {
+  const capabilities = new Set<RunLogCapability>(['provider'])
+  const allowedTools = input.allowedTools ?? []
+  if (allowedTools.length > 0) capabilities.add('tools')
+  if (allowedTools.some((tool) => tool.includes('file'))) capabilities.add('files')
+  if (input.runtimeProfile?.includes('browser')) capabilities.add('browser')
+  if (input.runtimeProfile?.includes('memory') || input.allowMemory) capabilities.add('memory')
+  if (input.workspaceId) capabilities.add('workspace')
+  return [...capabilities]
+}
+
+function approvalPolicyFromGatewayMode(value: unknown): RuntimePolicy['approvalPolicy'] | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.toLowerCase()
+  if (normalized.includes('ask')) return 'ask-first'
+  if (normalized.includes('manual')) return 'ask-first'
+  if (normalized.includes('auto')) return 'balanced'
+  if (normalized.includes('balanced')) return 'balanced'
+  return undefined
+}
+
 function usageEntryIdForEvent(event: RunEvent): string {
   return `usage_${event.eventId}`
 }
@@ -723,6 +758,7 @@ export class LocalMainspringGateway {
     private readonly runtime: Mainspring,
     options: CreateLocalMainspringGatewayOptions = { runtime },
   ) {
+    this.runLogRuntime = options.runLog
     this.appState = options.appState
     this.cronEnabled = options.cron?.enabled ?? false
     this.cronPollIntervalMs = Math.max(1_000, options.cron?.pollIntervalMs ?? 30_000)
@@ -764,6 +800,8 @@ export class LocalMainspringGateway {
       this.startCronScheduler()
     }
   }
+
+  private readonly runLogRuntime?: RunLogMainspring
 
   readonly sessions = {
     list: (): LocalGatewaySessionProjection[] =>
@@ -938,6 +976,130 @@ export class LocalMainspringGateway {
         sessionId: input.sessionId,
       })
     },
+  }
+
+  readonly runLog = {
+    available: (): boolean => Boolean(this.runLogRuntime),
+    runs: {
+      start: async (input: LocalGatewayStartRunInput): Promise<LocalGatewayRunLogStartResult> => {
+        const runtime = this.requireRunLogRuntime()
+        const session = this.runtime.storage.stateStore.getSession(input.sessionId)
+        if (!session) throw new Error(`Unknown session: ${input.sessionId}`)
+        const budgetEvaluations = this.assertRunBudgetAllowed(input, session)
+        const agentId = input.agentId ?? runtime.defaultAgentId
+        this.ensureRunLogAgent(input, agentId)
+        const workspaceRoot = input.workspaceId
+          ? this.appState?.workspaces.get(input.workspaceId)?.root
+          : session.workspaceRoot
+        const handle = runtime.runs.start({
+          agentId,
+          input: input.input,
+          sessionId: input.sessionId,
+          workspaceId: input.workspaceId,
+          ...(workspaceRoot ? { workspaceRoot } : {}),
+          providerId: input.providerId,
+          modelId: input.modelId,
+          allowedTools: input.allowedTools ?? [],
+          requestedCapabilities: runLogCapabilitiesFromGatewayInput(input),
+          metadata: {
+            gatewaySurface: 'runlog',
+            ...(input.computerId ? { computerId: input.computerId } : {}),
+            ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+          },
+        })
+        await handle.drainUntilIdle()
+        this.persistRunLogMetadata(handle.record, input, budgetEvaluations)
+        this.appState?.auditEvents.create({
+          category: 'gateway',
+          action: 'runlog.run.enqueued',
+          actor: 'local-gateway',
+          targetType: 'run',
+          targetId: handle.record.runId,
+          runId: handle.record.runId,
+          sessionId: input.sessionId,
+        })
+        return { run: runtime.store.getRun(handle.record.runId) ?? handle.record, projection: handle.projection() }
+      },
+      project: (runId: string): RunLogRunProjection => this.requireRunLogRuntime().project(runId),
+      events: (input: { runId: string; afterSeq?: number; limit?: number }): RunLogEvent[] =>
+        this.requireRunLogRuntime().store.listEvents(input),
+    },
+    approvals: {
+      approve: async (input: LocalGatewayApprovalResponseInput): Promise<RunLogRunProjection> => {
+        const runtime = this.requireRunLogRuntime()
+        runtime.approvals.approve({
+          approvalId: input.approvalId,
+          actor: input.reason ?? 'local-gateway',
+        })
+        await runtime.drainUntilIdle()
+        this.recordGatewayApprovalDecision(input, 'approved')
+        return runtime.project(input.runId)
+      },
+      deny: async (input: LocalGatewayApprovalResponseInput): Promise<RunLogRunProjection> => {
+        const runtime = this.requireRunLogRuntime()
+        runtime.approvals.deny({
+          approvalId: input.approvalId,
+          actor: input.reason ?? 'local-gateway',
+        })
+        this.recordGatewayApprovalDecision(input, 'denied')
+        return runtime.project(input.runId)
+      },
+    },
+  }
+
+  private requireRunLogRuntime(): RunLogMainspring {
+    if (!this.runLogRuntime) throw new Error('RunLog gateway runtime is not configured.')
+    return this.runLogRuntime
+  }
+
+  private ensureRunLogAgent(input: LocalGatewayStartRunInput, agentId: string): void {
+    const runtime = this.requireRunLogRuntime()
+    if (runtime.store.getAgent(agentId)) return
+    const appAgent = input.agentId ? this.appState?.agents.get(input.agentId) : undefined
+    const metadata = appAgent?.metadata && typeof appAgent.metadata === 'object'
+      ? appAgent.metadata as Record<string, unknown>
+      : {}
+    const spec: AgentSpec = {
+      agentId,
+      instructions:
+        typeof metadata.instructions === 'string'
+          ? metadata.instructions
+          : appAgent?.name
+            ? `You are ${appAgent.name}.`
+            : 'You are a Mainspring RunLog gateway agent.',
+      providerId: input.providerId,
+      modelId: input.modelId ?? appAgent?.defaultModelId,
+      tools: input.allowedTools ?? [],
+      approvalPolicy: approvalPolicyFromGatewayMode(metadata.approvalMode),
+      capabilities: runLogCapabilitiesFromGatewayInput(input),
+      metadata: {
+        gatewayAgent: true,
+        ...(appAgent?.workspaceId ? { workspaceId: appAgent.workspaceId } : {}),
+      },
+    }
+    runtime.agents.put(spec)
+  }
+
+  private persistRunLogMetadata(
+    run: RunLogRunRecord,
+    input: LocalGatewayStartRunInput,
+    budgetEvaluations: LocalGatewayBudgetEvaluation[],
+  ): void {
+    this.appState?.runs.upsert({
+      runId: run.runId,
+      sessionId: input.sessionId,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.modelId ? { modelId: input.modelId } : {}),
+      ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+      metadata: {
+        runtime: 'runlog',
+        ...(budgetEvaluations.length > 0
+          ? { budgetEvaluationIds: budgetEvaluations.map((evaluation) => evaluation.budgetId) }
+          : {}),
+      },
+    })
   }
 
   private recordGatewayApprovalDecision(

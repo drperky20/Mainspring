@@ -7729,3 +7729,44 @@ Verification in this slice:
 Next recommended milestone:
 
 - Add gateway/API RunLog intake that writes `RunIntent`, tails `RunLogProjection`, and resumes approvals through the public API while preserving existing gateway DTO tests.
+
+## 2026-07-02 Explicit Gateway RunLog API Slice
+
+Goal:
+
+- Add a gateway/API RunLog lane without breaking the existing mailbox-compatible `/runs/start` route.
+
+Changes:
+
+- Added optional `CreateLocalMainspringGatewayOptions.runLog`.
+- Added `LocalMainspringGateway.runLog` helpers for RunLog start, event projection, and approval resolution.
+- Added HTTP routes:
+  - `POST /runlog/runs/start`
+  - `GET /runlog/runs/:runId/events`
+  - `POST /runlog/approvals/:approvalId/resolve`
+- Added sanitized RunLog projection response helpers in the gateway server.
+- Added a gateway server test that starts a RunLog run, observes `approval.requested`, resolves the approval through the RunLog API, and verifies approved-tool completion.
+- Updated local gateway docs, SDK docs, current-state, migration map, and implementation backlog.
+
+What this proves:
+
+- Gateway/API consumers can now create RunLog-backed runs through an explicit route.
+- The API can return RunLog events/projection state without exposing raw workspace roots in the response.
+- Approval resolution through the RunLog API uses the existing scoped RunLog receipt path and completes the run after approved tool execution.
+- The default `/runs/start` route remains mailbox-compatible until its current DTO and example surface can be migrated safely.
+
+Verification in this slice:
+
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run src/gateway/server/createLocalGatewayServer.test.ts src/sdk/RunLogMainspring.test.ts`: passed, 2 files / 11 tests.
+- `pnpm exec vitest run src/gateway/server/createLocalGatewayServer.test.ts src/sdk/RunLogMainspring.test.ts src/package-exports.test.ts`: passed, 3 files / 17 tests.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm runlog:migration:check`: passed with `MAINSPRING_RUNLOG_MIGRATION_CHECK_OK`.
+- `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 422 tests plus build, security, skill provenance, RunLog migration, docs, and console checks.
+- `pnpm release:check`: passed end to end, including `verify`, gateway systems, examples smoke, agentic harness, desktop systems, release workflow, optional verifiers, package surface, package and npm dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Teach console snapshot/state to consume the explicit RunLog gateway projection, then decide when default `/runs/start` can flip to RunLog.

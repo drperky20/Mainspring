@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { MockProvider } from '../../providers/MockProvider.js'
 import type { AgentProvider, AgentQuery, QueryInput } from '../../providers/types.js'
 import { createMainspring } from '../../sdk/Mainspring.js'
+import { createRunLogMainspring } from '../../sdk/RunLogMainspring.js'
 import { executionBackendCapabilities } from '../../tools/ExecutionBackend.js'
+import { builtinManifest, type RuntimeTool } from '../../tools/ToolRegistry.js'
 import {
   createLocalMainspringGateway,
   createSqliteLocalGatewayAppStateStore,
@@ -44,6 +46,23 @@ function makeTempRoot(prefix: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
   tempRoots.push(root)
   return root
+}
+
+function approvalTool(executions: { count: number }): RuntimeTool {
+  return {
+    manifest: builtinManifest({
+      key: 'tool.reviewed',
+      name: 'Reviewed Tool',
+      description: 'Requires approval before execution.',
+      permissions: { filesystem: 'workspace-write' },
+      approval: { required: true },
+      toolType: 'file',
+    }),
+    execute: ({ input }) => {
+      executions.count += 1
+      return { ok: true, input, executions: executions.count }
+    },
+  }
 }
 
 async function waitFor<T>(predicate: () => T | Promise<T>, label: string): Promise<T> {
@@ -1861,6 +1880,128 @@ describe('LocalGatewayHttpServer', () => {
       })
     } finally {
       await server.stop()
+    }
+  })
+
+  it('routes RunLog run start, event projection, and approval resolution through explicit RunLog endpoints', async () => {
+    const root = makeTempRoot('mainspring-gateway-runlog-route-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const executions = { count: 0 }
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'legacy idle' } }]),
+      pollIntervalMs: 10,
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'session_runlog_gateway',
+      workspace: { root: workspaceRoot },
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider((input) => {
+        const toolMessage = input.messages?.find((message) => message.role === 'tool')
+        if (toolMessage) {
+          return [
+            {
+              type: 'event',
+              event: {
+                type: 'result',
+                text: `gateway-approved:${toolMessage.content.includes('"executions":1')}`,
+              },
+            },
+          ]
+        }
+        return [
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: 'tool.reviewed',
+              toolCallId: 'call_gateway_runlog',
+              input: { sourceMutation: true },
+            },
+          },
+        ]
+      }),
+      tools: [approvalTool(executions)],
+      agent: {
+        agentId: 'agent_gateway_runlog',
+        instructions: 'Use reviewed tools only through RunLog approval.',
+        tools: ['tool.reviewed'],
+        approvalPolicy: 'balanced',
+        capabilities: ['provider', 'tools'],
+      },
+      approvalReceiptKey: 'gateway-runlog-route-test-key',
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    const started = await server.start()
+    try {
+      const startedRun = await fetch(`${started.url}/runlog/runs/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.record.sessionId,
+          input: 'Use the reviewed tool from the RunLog route.',
+          mode: 'chat',
+          allowedTools: ['tool.reviewed'],
+        }),
+      }).then((response) => response.json())
+
+      expect(startedRun).toMatchObject({
+        run: {
+          sessionId: session.record.sessionId,
+          agentId: 'agent_gateway_runlog',
+          status: 'awaiting_approval',
+        },
+        status: 'awaiting_approval',
+      })
+      expect(startedRun.pendingApprovals).toHaveLength(1)
+      expect(executions.count).toBe(0)
+
+      const runId = startedRun.run.runId as string
+      const approvalId = startedRun.pendingApprovals[0].approvalId as string
+      const events = await fetch(`${started.url}/runlog/runs/${encodeURIComponent(runId)}/events`).then(
+        (response) => response.json(),
+      )
+      expect(events.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'run.created' }),
+          expect.objectContaining({ type: 'approval.requested' }),
+        ]),
+      )
+      expect(JSON.stringify(events)).not.toContain('workspaceRoot')
+
+      const resolved = await fetch(
+        `${started.url}/runlog/approvals/${encodeURIComponent(approvalId)}/resolve`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: session.record.sessionId,
+            runId,
+            decision: 'approved',
+            reason: 'gateway runlog approval test',
+          }),
+        },
+      ).then((response) => response.json())
+
+      expect(resolved).toMatchObject({
+        run: {
+          runId,
+          sessionId: session.record.sessionId,
+          status: 'completed',
+        },
+        assistantText: 'gateway-approved:true',
+      })
+      expect(resolved.pendingApprovals).toHaveLength(0)
+      expect(executions.count).toBe(1)
+    } finally {
+      await server.stop()
+      runLog.close()
     }
   })
 

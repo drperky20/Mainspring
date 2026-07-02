@@ -65,8 +65,8 @@ The compatibility path is not a second product architecture. It is the migration
 
 ## Next Canonicalization Slices
 
-1. Add gateway run creation that writes `RunIntent` and tails `RunLogProjection`.
-2. Surface approved-tool continuation through the gateway/API using scoped RunLog receipts.
-3. Move gateway cron scheduling to RunLog cron grants.
-4. Move examples and README quickstarts from `createMainspring` to `createRunLogMainspring` where gateway compatibility is not required.
+1. Decide when the default `/runs/start` route can move from mailbox-compatible SDK runs to RunLog-backed runs.
+2. Move gateway cron scheduling to RunLog cron grants.
+3. Move examples and README quickstarts from `createMainspring` to `createRunLogMainspring` where gateway compatibility is not required.
+4. Teach console state to consume the RunLog gateway projection without exposing raw private event fields.
 5. Retire mailbox event projection once SDK/gateway/console no longer need it.

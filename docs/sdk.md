@@ -133,3 +133,13 @@ const followUp = session.runs.start({
 - `mainspring/gateway/server`
 
 Use the local gateway when you need clients, workspaces, agents, provider profiles, budgets, cron, marketplace, deployments, or console snapshots.
+
+When `createLocalMainspringGateway` receives a `runLog` host, the HTTP server also
+exposes explicit RunLog routes:
+
+- `POST /runlog/runs/start`
+- `GET /runlog/runs/:runId/events`
+- `POST /runlog/approvals/:approvalId/resolve`
+
+The legacy `/runs/start` route remains mailbox-compatible until its existing DTO and
+example coverage can move safely.

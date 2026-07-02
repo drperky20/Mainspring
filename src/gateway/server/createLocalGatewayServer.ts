@@ -28,6 +28,8 @@ import {
 } from '../index.js'
 import type { LocalMainspringGateway } from '../LocalGateway.js'
 import type { RunEvent } from '../../contracts/runtime.js'
+import type { RunLogEvent, RunRecord as RunLogRunRecord } from '../../core/types.js'
+import type { RunLogRunProjection } from '../../hosts/runlog/RunLogProjection.js'
 import { GatewayHttpError, asGatewayHttpError } from './errors.js'
 import { HostedGatewayAuthManager } from './HostedAuth.js'
 import {
@@ -613,6 +615,17 @@ export class LocalGatewayHttpServer {
         return
       }
 
+      if (request.method === 'POST' && path === '/runlog/runs/start') {
+        if (!this.options.gateway.runLog.available()) {
+          throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
+        }
+        const body = await this.readJson(request)
+        const parsed = StartRunRequestSchema.parse(body)
+        const result = await this.options.gateway.runLog.runs.start(parsed)
+        this.writeJson(response, 202, sanitizeGatewayResponse(runLogProjectionResponse(result.projection)))
+        return
+      }
+
       if (request.method === 'GET' && path.startsWith('/runs/') && path.endsWith('/events')) {
         const runId = decodeURIComponent(path.slice('/runs/'.length, -'/events'.length))
         const sessionId = url.searchParams.get('sessionId') ?? this.lookupSessionIdForRun(runId)
@@ -632,12 +645,37 @@ export class LocalGatewayHttpServer {
         return
       }
 
+      if (request.method === 'GET' && path.startsWith('/runlog/runs/') && path.endsWith('/events')) {
+        if (!this.options.gateway.runLog.available()) {
+          throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
+        }
+        const runId = decodeURIComponent(path.slice('/runlog/runs/'.length, -'/events'.length))
+        const projection = this.options.gateway.runLog.runs.project(runId)
+        this.writeJson(response, 200, sanitizeGatewayResponse(runLogProjectionResponse(projection)))
+        return
+      }
+
       if (request.method === 'POST' && path.startsWith('/approvals/') && path.endsWith('/resolve')) {
         const approvalId = decodeURIComponent(path.slice('/approvals/'.length, -'/resolve'.length))
         const body = await this.readJson(request)
         const parsed = ResolveApprovalRequestSchema.parse(body)
         this.resolveApproval(approvalId, parsed)
         this.writeJson(response, 200, { approvalId, status: parsed.decision })
+        return
+      }
+
+      if (request.method === 'POST' && path.startsWith('/runlog/approvals/') && path.endsWith('/resolve')) {
+        if (!this.options.gateway.runLog.available()) {
+          throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
+        }
+        const approvalId = decodeURIComponent(path.slice('/runlog/approvals/'.length, -'/resolve'.length))
+        const body = await this.readJson(request)
+        const parsed = ResolveApprovalRequestSchema.parse(body)
+        const projection =
+          parsed.decision === 'approved'
+            ? await this.options.gateway.runLog.approvals.approve({ ...parsed, approvalId })
+            : await this.options.gateway.runLog.approvals.deny({ ...parsed, approvalId })
+        this.writeJson(response, 200, sanitizeGatewayResponse(runLogProjectionResponse(projection)))
         return
       }
 
@@ -1143,6 +1181,51 @@ function approvalIdForSse(event: RunEvent): string | undefined {
   if (typeof payload.id === 'string') return payload.id
   if (typeof payload.approvalId === 'string') return payload.approvalId
   return undefined
+}
+
+function runLogRunDispatch(record: RunLogRunRecord) {
+  return {
+    runId: record.runId,
+    sessionId: record.sessionId,
+    agentId: record.agentId,
+    status: record.status,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}),
+    ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+    ...(record.providerId ? { providerId: record.providerId } : {}),
+    ...(record.modelId ? { modelId: record.modelId } : {}),
+  }
+}
+
+function runLogEventPublic(event: RunLogEvent) {
+  return {
+    eventId: event.eventId,
+    seq: event.seq,
+    runId: event.runId,
+    sessionId: event.sessionId,
+    agentId: event.agentId,
+    type: event.type,
+    timestamp: event.timestamp,
+    visibility: event.visibility,
+    ...(event.payload !== undefined ? { payload: event.payload } : {}),
+  }
+}
+
+function runLogProjectionResponse(projection: RunLogRunProjection) {
+  return {
+    run: runLogRunDispatch(projection.run),
+    status: projection.status,
+    assistantText: projection.assistantText,
+    pendingApprovals: projection.pendingApprovals,
+    approvalDecisions: projection.approvalDecisions,
+    toolCalls: projection.toolCalls,
+    policyDecisions: projection.policyDecisions,
+    artifacts: projection.artifacts,
+    usage: projection.usage,
+    latestSeq: projection.latestSeq,
+    events: projection.events.map(runLogEventPublic),
+  }
 }
 
 export function createLocalGatewayServer(

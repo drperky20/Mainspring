@@ -18,7 +18,14 @@ It provides:
 - deployment target/run metadata
 - optional hosted-auth mode
 
-The gateway can enqueue runs and project events, but actual work still flows through the mailbox/runtime/tool/policy spine.
+The default `/runs/start` route still enqueues mailbox-compatible SDK runs. The explicit
+`/runlog/runs/start`, `/runlog/runs/:runId/events`, and
+`/runlog/approvals/:approvalId/resolve` routes use the optional RunLog SDK host when
+configured, create `RunIntent` records, drain through `RunLogKernel`, and return
+`RunLogProjection`-based responses.
+
+Gateway RunLog routes are local development surfaces. They do not create a hosted worker
+pool, do not change host execution limits, and do not create a multi-tenant control plane.
 
 Browser-facing gateway data must omit secrets, host paths, database paths, provider key environment markers, and backend internals. Gateway JSON/SSE sanitization redacts common browser-unsafe field markers, provider key environment markers, and host absolute paths embedded in free text before writing browser responses.
 
