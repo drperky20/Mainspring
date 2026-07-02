@@ -8544,3 +8544,41 @@ Verification in this slice:
 Next recommended milestone:
 
 - Revalidate browser adapter URLs after redirects/navigation, or add taint labels for memory and skill mutations.
+
+## 2026-07-02 Browser Adapter URL Revalidation Slice
+
+Goal:
+
+- Close the accepted review finding that `browser.open` checked only the initial URL while redirect or later browser state could drift into local/private targets.
+
+Changes:
+
+- Extended `BrowserRuntimeAdapter` with optional `currentUrl()`.
+- Updated browser tools to revalidate adapter-reported current URL after open and before/after snapshot, click, type, and screenshot operations when `currentUrl()` is available.
+- Kept existing initial `browser.open` public HTTP(S) target validation.
+- Added `ToolRegistry` tests proving approved browser operations reject redirect/current-page drift to `127.0.0.1` and metadata IP targets before or after adapter actions.
+- Extended the local-agent security regression corpus to prove approved private initial browser opens do not reach the adapter and redirect-like current URL drift is rejected after open.
+- Updated security red-team, tools, security, backlog, and goal-digest docs with the new browser adapter boundary.
+
+What this proves:
+
+- Browser-capable runs cannot rely only on approval to reach local/private URLs when the browser adapter reports its current page URL.
+- Browser URL enforcement now covers initial opens plus pre-action and post-action adapter state checks for adapters that expose `currentUrl()`.
+
+Still honest:
+
+- Browser automation is not a security boundary.
+- Enforcement depends on the adapter exposing `currentUrl()`.
+- This does not implement a lazy browser lease adapter, browser trace artifacts, or production browser isolation.
+
+Verification in this slice:
+
+- `pnpm exec vitest run src/tools/ToolRegistry.test.ts src/security/agent-security-regression.test.ts`: passed, 2 files / 35 tests.
+- `pnpm typecheck`: passed.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 439 tests plus build, security, sensitive-patterns, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end, including verify, security truth, gateway systems, gateway help, examples smoke, agentic harness, desktop systems, release workflow, optional verifiers, package surface, package dry-runs, npm dry-run, and Docker Compose config.
+
+Next recommended milestone:
+
+- Add taint labels for memory and skill mutations, or continue RunLog child-run/subagent attenuation.

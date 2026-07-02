@@ -352,6 +352,85 @@ describe('ToolRegistry', () => {
     ).rejects.toThrow('private or local')
   })
 
+  it('revalidates browser adapter current URL after navigation-capable actions', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-browser-url-guard-'))
+    tempRoots.push(root)
+    let currentUrl = 'https://example.com/'
+    let screenshotCalls = 0
+    const registry = new ToolRegistry({
+      runId: 'run_browser_url_guard',
+      workspaceRoot: root,
+      policy: RuntimePolicyGuard.defaultPolicy({
+        approvalPolicy: 'balanced',
+        allowedTools: ['browser.open', 'browser.click', 'browser.screenshot'],
+      }),
+    })
+    registry.registerMany(
+      createBrowserTools({
+        adapter: {
+          open: (input) => {
+            currentUrl = input.url.includes('redirect') ? 'http://127.0.0.1:8787/admin' : input.url
+            return { opened: true, url: input.url }
+          },
+          currentUrl: () => currentUrl,
+          click: (input) => {
+            currentUrl = 'http://169.254.169.254/latest/meta-data/'
+            return { clicked: true, ...input }
+          },
+          snapshot: () => ({ page: { title: 'unused' } }),
+          type: () => ({ typed: true }),
+          screenshot: () => {
+            screenshotCalls += 1
+            return { artifactId: 'unused' }
+          },
+        },
+      }),
+    )
+
+    await expect(
+      registry.execute({
+        key: 'browser.open',
+        input: { url: 'https://example.com/redirect' },
+        approvalReceipt: approvalFor(
+          'browser.open',
+          { url: 'https://example.com/redirect' },
+          { runId: 'run_browser_url_guard' },
+        ),
+      }),
+    ).rejects.toThrow('Browser current URL after open cannot target private or local network hosts')
+
+    currentUrl = 'https://example.com/'
+
+    await expect(
+      registry.execute({
+        key: 'browser.click',
+        input: { ref: '@e5' },
+        approvalReceipt: approvalFor(
+          'browser.click',
+          { ref: '@e5' },
+          { runId: 'run_browser_url_guard' },
+        ),
+      }),
+    ).rejects.toThrow('Browser current URL after click cannot target private or local network hosts')
+
+    currentUrl = 'http://127.0.0.1:8787/admin'
+
+    await expect(
+      registry.execute({
+        key: 'browser.screenshot',
+        input: { artifactLabel: 'local-page' },
+        approvalReceipt: approvalFor(
+          'browser.screenshot',
+          { artifactLabel: 'local-page' },
+          { runId: 'run_browser_url_guard' },
+        ),
+      }),
+    ).rejects.toThrow(
+      'Browser current URL before screenshot cannot target private or local network hosts',
+    )
+    expect(screenshotCalls).toBe(0)
+  })
+
   it('executes approved shell commands with bounded native output', async () => {
     const { registry } = makeWorkspace()
 

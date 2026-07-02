@@ -210,6 +210,57 @@ describe('local agent security regression corpus', () => {
     ).rejects.toThrow(/private or local network/i)
   })
 
+  it('blocks approved browser navigation when the adapter lands on local or metadata targets', async () => {
+    const root = tempRoot()
+    let currentUrl = 'https://example.com/'
+    let openCount = 0
+    const toolRegistry = registry({
+      root,
+      allowBrowser: true,
+      tools: [
+        ...createBrowserTools({
+          adapter: {
+            open: (input) => {
+              openCount += 1
+              currentUrl = input.url.includes('redirect')
+                ? 'http://127.0.0.1:8787/admin'
+                : input.url
+              return { opened: true }
+            },
+            currentUrl: () => currentUrl,
+            snapshot: () => ({ page: { title: 'unused' } }),
+            click: () => ({ clicked: true }),
+            type: () => ({ typed: true }),
+            screenshot: () => ({ artifactId: 'unused' }),
+          },
+        }),
+      ],
+      allowedTools: ['browser.open'],
+    })
+
+    await expect(
+      toolRegistry.execute({
+        key: 'browser.open',
+        input: { url: 'http://127.0.0.1:8787/admin' },
+        approvalReceipt: approvalFor('browser.open', {
+          url: 'http://127.0.0.1:8787/admin',
+        }),
+      }),
+    ).rejects.toThrow(/private or local network/i)
+    expect(openCount).toBe(0)
+
+    await expect(
+      toolRegistry.execute({
+        key: 'browser.open',
+        input: { url: 'https://example.com/redirect' },
+        approvalReceipt: approvalFor('browser.open', {
+          url: 'https://example.com/redirect',
+        }),
+      }),
+    ).rejects.toThrow(/private or local network/i)
+    expect(openCount).toBe(1)
+  })
+
   it('requires approval for memory persistence and skill catalog writes', async () => {
     const memory = await registry().execute({
       key: 'memory.write',

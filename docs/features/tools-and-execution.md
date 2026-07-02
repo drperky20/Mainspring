@@ -15,6 +15,8 @@ Tool areas:
 - skills
 - diagnostics
 
+Browser tools validate initial `browser.open` targets as public HTTP(S) URLs and, when the adapter exposes `currentUrl`, re-check the adapter-reported page URL after open and before/after click, type, snapshot, and screenshot actions. This reduces localhost/metadata drift after redirects or in-page navigation, but it is still browser automation, not a security boundary.
+
 Process tools can target:
 
 | Backend | Meaning | Truth |

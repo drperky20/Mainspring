@@ -18,6 +18,7 @@ Mainspring treats agents as untrusted workers.
 - local gateway hosted-auth mode
 - local-only gateway binding
 - local gateway browser-origin allowlist for localhost/loopback console origins; hostile browser origins are rejected before hosted auth bootstrap/login
+- browser adapter public-target checks for initial opens plus adapter-reported current URLs after open and before/after page interaction/read actions
 - short-lived hosted browser-access tickets for local artifact and SSE reads, with auth-like query parameters rejected on ticketed URLs
 - console-side local gateway URL validation that rejects embedded `user:password@host` credentials
 - console-side response tripwires that reject browser-unsafe secret/path fields, common provider key environment markers, and common Windows drive-letter, UNC, and Unix host absolute paths in successful JSON responses
@@ -35,6 +36,7 @@ Mainspring treats agents as untrusted workers.
 - Process execution must not be marketed as secure containment.
 - WSL/Docker routing is not a full VM isolation product.
 - Renderer localStorage provider auth is prototype-only.
+- Browser automation is not a security boundary.
 - Provider keys must not be stored in browser localStorage.
 - The desktop shell is not a secret vault.
 - Local hosted auth is not enterprise SSO.
