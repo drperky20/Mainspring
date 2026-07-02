@@ -10,6 +10,8 @@ import type {
   ListRunEventsInput,
   RunCheckpoint,
   RunIntent,
+  RunLogApprovalReceipt,
+  RunLogApprovalRequestSnapshot,
   RunLogEvent,
   RunLogStore,
   RunRecord,
@@ -94,6 +96,55 @@ function mapCronJob(row: Record<string, unknown>): RunLogCronJob {
   return job
 }
 
+function mapApprovalRequest(row: Record<string, unknown>): RunLogApprovalRequestSnapshot {
+  return parseJson<RunLogApprovalRequestSnapshot>(String(row.snapshot_json ?? ''), {
+    approvalId: String(row.approval_id),
+    runId: String(row.run_id),
+    agentId: '',
+    sessionId: '',
+    toolCallId: String(row.tool_call_id),
+    toolName: '',
+    toolInput: undefined,
+    toolInputHash: '',
+    cwd: '',
+    workspaceId: '',
+    workspaceHash: '',
+    policyHash: '',
+    toolManifestHash: '',
+    providerContextHash: '',
+    riskSnapshotHash: '',
+    requestedAt: String(row.created_at),
+  })
+}
+
+function mapApprovalReceipt(row: Record<string, unknown>): RunLogApprovalReceipt {
+  return parseJson<RunLogApprovalReceipt>(String(row.receipt_json ?? ''), {
+    version: 1,
+    receiptId: String(row.receipt_id),
+    approvalId: String(row.approval_id),
+    runId: String(row.run_id),
+    agentId: '',
+    sessionId: '',
+    toolCallId: '',
+    toolName: '',
+    decision: row.decision as RunLogApprovalReceipt['decision'],
+    actor: '',
+    requestedAt: '',
+    decidedAt: String(row.created_at),
+    expiresAt: '',
+    toolInputHash: '',
+    workspaceHash: '',
+    policyHash: '',
+    toolManifestHash: '',
+    providerContextHash: '',
+    riskSnapshotHash: '',
+    nonce: '',
+    idempotencyKey: '',
+    keyId: '',
+    signature: '',
+  })
+}
+
 export interface SqliteRunLogStoreOptions {
   dbPath: string
 }
@@ -171,6 +222,34 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
 
       CREATE INDEX IF NOT EXISTS idx_run_checkpoints_latest
         ON run_checkpoints(run_id, seq DESC);
+
+      CREATE TABLE IF NOT EXISTS run_approval_requests (
+        approval_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES runs(run_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_run_approval_requests_run
+        ON run_approval_requests(run_id);
+
+      CREATE TABLE IF NOT EXISTS run_approval_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        approval_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        used_at TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES runs(run_id)
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_run_approval_receipts_approval_decision
+        ON run_approval_receipts(approval_id, decision);
+      CREATE INDEX IF NOT EXISTS idx_run_approval_receipts_run_decision_used
+        ON run_approval_receipts(run_id, decision, used_at);
 
       CREATE TABLE IF NOT EXISTS run_cron_jobs (
         cron_id TEXT PRIMARY KEY,
@@ -431,6 +510,97 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       .prepare('SELECT * FROM run_checkpoints WHERE run_id = ? ORDER BY seq DESC LIMIT 1')
       .get(runId) as Record<string, unknown> | undefined
     return row ? mapCheckpoint(row) : null
+  }
+
+  putApprovalRequest(snapshot: RunLogApprovalRequestSnapshot): void {
+    this.handle()
+      .prepare(
+        `
+          INSERT INTO run_approval_requests (
+            approval_id, run_id, tool_call_id, snapshot_json, created_at
+          )
+          VALUES (@approvalId, @runId, @toolCallId, @snapshotJson, @createdAt)
+          ON CONFLICT(approval_id) DO UPDATE SET
+            snapshot_json = excluded.snapshot_json
+        `,
+      )
+      .run({
+        approvalId: snapshot.approvalId,
+        runId: snapshot.runId,
+        toolCallId: snapshot.toolCallId,
+        snapshotJson: JSON.stringify(snapshot),
+        createdAt: snapshot.requestedAt,
+      })
+  }
+
+  getApprovalRequest(approvalId: string): RunLogApprovalRequestSnapshot | null {
+    const row = this.handle()
+      .prepare('SELECT * FROM run_approval_requests WHERE approval_id = ?')
+      .get(approvalId) as Record<string, unknown> | undefined
+    return row ? mapApprovalRequest(row) : null
+  }
+
+  putApprovalReceipt(receipt: RunLogApprovalReceipt): void {
+    this.handle()
+      .prepare(
+        `
+          INSERT INTO run_approval_receipts (
+            receipt_id, approval_id, run_id, decision, receipt_json, used_at, created_at
+          )
+          VALUES (
+            @receiptId, @approvalId, @runId, @decision, @receiptJson, NULL, @createdAt
+          )
+          ON CONFLICT(approval_id, decision) DO UPDATE SET
+            receipt_json = excluded.receipt_json,
+            created_at = excluded.created_at
+        `,
+      )
+      .run({
+        receiptId: receipt.receiptId,
+        approvalId: receipt.approvalId,
+        runId: receipt.runId,
+        decision: receipt.decision,
+        receiptJson: JSON.stringify(receipt),
+        createdAt: receipt.decidedAt,
+      })
+  }
+
+  getApprovalReceipt(receiptId: string): RunLogApprovalReceipt | null {
+    const row = this.handle()
+      .prepare('SELECT * FROM run_approval_receipts WHERE receipt_id = ?')
+      .get(receiptId) as Record<string, unknown> | undefined
+    return row ? mapApprovalReceipt(row) : null
+  }
+
+  getApprovedUnusedReceipt(runId: string): RunLogApprovalReceipt | null {
+    const row = this.handle()
+      .prepare(
+        `
+          SELECT * FROM run_approval_receipts
+          WHERE run_id = ? AND decision = 'approved' AND used_at IS NULL
+          ORDER BY created_at ASC
+          LIMIT 1
+        `,
+      )
+      .get(runId) as Record<string, unknown> | undefined
+    return row ? mapApprovalReceipt(row) : null
+  }
+
+  markApprovalReceiptUsed(receiptId: string, runId: string): boolean {
+    const result = this.handle()
+      .prepare(
+        `
+          UPDATE run_approval_receipts
+          SET used_at = @usedAt
+          WHERE receipt_id = @receiptId AND run_id = @runId AND used_at IS NULL
+        `,
+      )
+      .run({
+        receiptId,
+        runId,
+        usedAt: nowIso(),
+      })
+    return result.changes === 1
   }
 
   putCronJob(job: RunLogCronJob): void {

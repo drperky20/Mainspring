@@ -10,6 +10,12 @@ export interface RunLogRunProjection {
     toolCallId?: string
     payload: unknown
   }>
+  approvalDecisions: Array<{
+    approvalId?: string
+    receiptId?: string
+    decision: 'approved' | 'denied'
+    payload: unknown
+  }>
   toolCalls: Array<{
     toolCallId?: string
     name?: string
@@ -37,6 +43,8 @@ export function projectRunLogRun(input: {
   const events = input.store.listEvents({ runId: input.runId, limit: input.limit ?? 1_000 })
   let assistantText = ''
   const pendingApprovals: RunLogRunProjection['pendingApprovals'] = []
+  const approvalDecisions: RunLogRunProjection['approvalDecisions'] = []
+  const resolvedApprovals = new Set<string>()
   const toolCalls: RunLogRunProjection['toolCalls'] = []
   const artifacts: unknown[] = []
   const usage: unknown[] = []
@@ -53,6 +61,16 @@ export function projectRunLogRun(input: {
       pendingApprovals.push({
         approvalId: typeof payload.approvalId === 'string' ? payload.approvalId : undefined,
         toolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : undefined,
+        payload: event.payload,
+      })
+    }
+    if (event.type === 'approval.approved' || event.type === 'approval.denied') {
+      const approvalId = typeof payload.approvalId === 'string' ? payload.approvalId : undefined
+      if (approvalId) resolvedApprovals.add(approvalId)
+      approvalDecisions.push({
+        approvalId,
+        receiptId: typeof payload.receiptId === 'string' ? payload.receiptId : undefined,
+        decision: event.type === 'approval.approved' ? 'approved' : 'denied',
         payload: event.payload,
       })
     }
@@ -77,7 +95,10 @@ export function projectRunLogRun(input: {
     events,
     status: run.status,
     assistantText,
-    pendingApprovals,
+    pendingApprovals: pendingApprovals.filter(
+      (approval) => !approval.approvalId || !resolvedApprovals.has(approval.approvalId),
+    ),
+    approvalDecisions,
     toolCalls,
     artifacts,
     usage,

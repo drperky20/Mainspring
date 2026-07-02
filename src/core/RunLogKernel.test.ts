@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SqliteRunLogStore } from '../adapters/sqlite/SqliteRunLogStore.js'
 import { LocalWorkspaceAdapter } from '../capabilities/workspace/LocalWorkspaceAdapter.js'
@@ -36,6 +37,51 @@ function echoTool(options: { approvalRequired?: boolean } = {}): RuntimeTool {
       toolType: 'file',
     }),
     execute: ({ input }) => ({ ok: true, input }),
+  }
+}
+
+function approvalTool(executions: { count: number }, options: { approvalRequired?: boolean } = {}): RuntimeTool {
+  return {
+    manifest: builtinManifest({
+      key: 'tool.approval',
+      name: 'Approval Tool',
+      description: 'Records approved execution for RunLog receipt tests.',
+      permissions: { filesystem: 'workspace-write' },
+      approval: options.approvalRequired ? { required: true } : {},
+      toolType: 'file',
+    }),
+    execute: ({ input }) => {
+      executions.count += 1
+      return { ok: true, input, executions: executions.count }
+    },
+  }
+}
+
+function approvalIdFor(store: SqliteRunLogStore, runId: string): string {
+  const approvalId = projectRunLogRun({ store, runId }).pendingApprovals[0]?.approvalId
+  if (!approvalId) throw new Error('Expected pending approval id')
+  return approvalId
+}
+
+function mutateApprovalSnapshot(
+  dbPath: string,
+  approvalId: string,
+  mutate: (snapshot: Record<string, unknown>) => void,
+): void {
+  const db = new Database(dbPath)
+  try {
+    const row = db
+      .prepare('SELECT snapshot_json FROM run_approval_requests WHERE approval_id = ?')
+      .get(approvalId) as { snapshot_json: string } | undefined
+    if (!row) throw new Error(`Missing approval request row: ${approvalId}`)
+    const snapshot = JSON.parse(row.snapshot_json) as Record<string, unknown>
+    mutate(snapshot)
+    db.prepare('UPDATE run_approval_requests SET snapshot_json = ? WHERE approval_id = ?').run(
+      JSON.stringify(snapshot),
+      approvalId,
+    )
+  } finally {
+    db.close()
   }
 }
 
@@ -174,7 +220,344 @@ describe('RunLogKernel', () => {
     expect(summary?.status).toBe('awaiting_approval')
     expect(projection.status).toBe('awaiting_approval')
     expect(projection.pendingApprovals).toHaveLength(1)
+    expect(projection.pendingApprovals[0]?.approvalId).toBeTruthy()
     expect(projection.events.map((event) => event.type)).toContain('run.awaiting_approval')
+  })
+
+  it('approves a paused tool run and resumes it after SQLite-backed restart', async () => {
+    const root = tempRoot()
+    const dbPath = path.join(root, 'runlog.sqlite')
+    const executions = { count: 0 }
+    const firstStore = new SqliteRunLogStore({ dbPath })
+    stores.push(firstStore)
+    const firstKernel = new RunLogKernel({
+      store: firstStore,
+      tools: [approvalTool(executions, { approvalRequired: true })],
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: 'tool.approval',
+              toolCallId: 'call_restart_approval',
+              input: { value: 42 },
+            },
+          },
+        ]),
+      ),
+    })
+    firstKernel.putAgent({
+      agentId: 'agent_approval_resume',
+      instructions: 'Resume approved tools.',
+      tools: ['tool.approval'],
+      approvalPolicy: 'balanced',
+      capabilities: ['provider', 'tools'],
+    })
+    const run = firstKernel.startRun({ agentId: 'agent_approval_resume', input: 'needs approval' })
+    expect((await firstKernel.drainUntilIdle())[0]?.status).toBe('awaiting_approval')
+    const approvalId = approvalIdFor(firstStore, run.runId)
+    firstStore.close()
+
+    const secondStore = new SqliteRunLogStore({ dbPath })
+    stores.push(secondStore)
+    const secondKernel = new RunLogKernel({
+      store: secondStore,
+      tools: [approvalTool(executions, { approvalRequired: true })],
+      providerRouter: new SingleProviderRouter(new MockProvider([])),
+    })
+    const receipt = secondKernel.approveRunLogApproval({
+      approvalId,
+      actor: 'test-operator',
+      expiresInMs: 60_000,
+    })
+    expect(receipt.decision).toBe('approved')
+    const [summary] = await secondKernel.drainUntilIdle()
+    const projection = projectRunLogRun({ store: secondStore, runId: run.runId })
+
+    expect(summary?.status).toBe('completed')
+    expect(executions.count).toBe(1)
+    expect(projection.pendingApprovals).toHaveLength(0)
+    expect(projection.approvalDecisions[0]?.decision).toBe('approved')
+    expect(projection.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(['approval.approved', 'approval.receipt.used', 'tool.call.completed']),
+    )
+    expect(await secondKernel.drainOnce()).toBeNull()
+    expect(executions.count).toBe(1)
+    expect(secondStore.markApprovalReceiptUsed(receipt.receiptId, run.runId)).toBe(false)
+    expect(() => secondKernel.approveRunLogApproval({ approvalId })).toThrow(/cannot be decided/)
+    expect(executions.count).toBe(1)
+  })
+
+  it('denies a paused RunLog approval durably without executing the tool', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const executions = { count: 0 }
+    const kernel = new RunLogKernel({
+      store,
+      tools: [approvalTool(executions, { approvalRequired: true })],
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: 'tool.approval',
+              toolCallId: 'call_denied',
+              input: { value: 'nope' },
+            },
+          },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_deny',
+      instructions: 'Deny approvals.',
+      tools: ['tool.approval'],
+      approvalPolicy: 'balanced',
+      capabilities: ['provider', 'tools'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_deny', input: 'deny me' })
+    await kernel.drainUntilIdle()
+    const approvalId = approvalIdFor(store, run.runId)
+    const receipt = kernel.denyRunLogApproval({ approvalId, actor: 'test-operator' })
+    const projection = projectRunLogRun({ store, runId: run.runId })
+
+    expect(receipt.decision).toBe('denied')
+    expect(store.getRun(run.runId)?.status).toBe('failed')
+    expect(executions.count).toBe(0)
+    expect(projection.pendingApprovals).toHaveLength(0)
+    expect(projection.approvalDecisions[0]?.decision).toBe('denied')
+    expect(await kernel.drainOnce()).toBeNull()
+  })
+
+  it('rejects approved resume when the stored tool input snapshot is mutated', async () => {
+    const root = tempRoot()
+    const dbPath = path.join(root, 'runlog.sqlite')
+    const store = new SqliteRunLogStore({ dbPath })
+    stores.push(store)
+    const executions = { count: 0 }
+    const kernel = new RunLogKernel({
+      store,
+      tools: [approvalTool(executions, { approvalRequired: true })],
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: 'tool.approval',
+              toolCallId: 'call_mutated',
+              input: { value: 1 },
+            },
+          },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_mutated',
+      instructions: 'Reject mutation.',
+      tools: ['tool.approval'],
+      approvalPolicy: 'balanced',
+      capabilities: ['provider', 'tools'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_mutated', input: 'mutate request' })
+    await kernel.drainUntilIdle()
+    const approvalId = approvalIdFor(store, run.runId)
+    kernel.approveRunLogApproval({ approvalId, expiresInMs: 60_000 })
+    store.close()
+    mutateApprovalSnapshot(dbPath, approvalId, (snapshot) => {
+      snapshot.toolInput = { value: 2 }
+    })
+
+    const resumedStore = new SqliteRunLogStore({ dbPath })
+    stores.push(resumedStore)
+    const resumedKernel = new RunLogKernel({
+      store: resumedStore,
+      tools: [approvalTool(executions, { approvalRequired: true })],
+      providerRouter: new SingleProviderRouter(new MockProvider([])),
+    })
+    const [summary] = await resumedKernel.drainUntilIdle()
+
+    expect(summary?.status).toBe('failed')
+    expect(executions.count).toBe(0)
+    expect(
+      projectRunLogRun({ store: resumedStore, runId: run.runId }).events
+        .filter((event) => event.type === 'runtime.error')
+        .at(-1)?.payload,
+    ).toMatchObject({ message: expect.stringContaining('toolInputHash') })
+  })
+
+  it('rejects approved resume when the workspace root changes', async () => {
+    const root = tempRoot()
+    const dbPath = path.join(root, 'runlog.sqlite')
+    const store = new SqliteRunLogStore({ dbPath })
+    stores.push(store)
+    const executions = { count: 0 }
+    const originalWorkspace = path.join(root, 'workspace-a')
+    const kernel = new RunLogKernel({
+      store,
+      defaultWorkspaceRoot: path.join(root, 'workspaces'),
+      tools: [approvalTool(executions, { approvalRequired: true })],
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: 'tool.approval',
+              toolCallId: 'call_workspace_changed',
+              input: { value: 1 },
+            },
+          },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_workspace_mutation',
+      instructions: 'Reject workspace changes.',
+      tools: ['tool.approval'],
+      approvalPolicy: 'balanced',
+      capabilities: ['provider', 'tools', 'workspace'],
+    })
+    const run = kernel.startRun({
+      agentId: 'agent_workspace_mutation',
+      input: 'workspace mutation',
+      workspaceRoot: originalWorkspace,
+    })
+    await kernel.drainUntilIdle()
+    const approvalId = approvalIdFor(store, run.runId)
+    kernel.approveRunLogApproval({ approvalId, expiresInMs: 60_000 })
+    store.close()
+
+    const db = new Database(dbPath)
+    db.prepare('UPDATE runs SET workspace_root = ? WHERE run_id = ?').run(
+      path.join(root, 'workspace-b'),
+      run.runId,
+    )
+    db.close()
+
+    const resumedStore = new SqliteRunLogStore({ dbPath })
+    stores.push(resumedStore)
+    const resumedKernel = new RunLogKernel({
+      store: resumedStore,
+      tools: [approvalTool(executions, { approvalRequired: true })],
+      providerRouter: new SingleProviderRouter(new MockProvider([])),
+    })
+    const [summary] = await resumedKernel.drainUntilIdle()
+
+    expect(summary?.status).toBe('failed')
+    expect(executions.count).toBe(0)
+    expect(
+      projectRunLogRun({ store: resumedStore, runId: run.runId }).events
+        .filter((event) => event.type === 'runtime.error')
+        .at(-1)?.payload,
+    ).toMatchObject({ message: expect.stringContaining('workspaceHash') })
+  })
+
+  it('rejects expired approval receipts without executing the tool', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const executions = { count: 0 }
+    const kernel = new RunLogKernel({
+      store,
+      tools: [approvalTool(executions, { approvalRequired: true })],
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: 'tool.approval',
+              toolCallId: 'call_expired',
+              input: { value: 1 },
+            },
+          },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_expired',
+      instructions: 'Reject expired receipts.',
+      tools: ['tool.approval'],
+      approvalPolicy: 'balanced',
+      capabilities: ['provider', 'tools'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_expired', input: 'expire me' })
+    await kernel.drainUntilIdle()
+    const approvalId = approvalIdFor(store, run.runId)
+    kernel.approveRunLogApproval({
+      approvalId,
+      expiresAt: new Date(Date.now() - 1_000).toISOString(),
+    })
+    const [summary] = await kernel.drainUntilIdle()
+
+    expect(summary?.status).toBe('failed')
+    expect(executions.count).toBe(0)
+    expect(
+      projectRunLogRun({ store, runId: run.runId }).events
+        .filter((event) => event.type === 'runtime.error')
+        .at(-1)?.payload,
+    ).toMatchObject({ message: expect.stringContaining('expired') })
+  })
+
+  it('rejects approved resume when policy or tool manifest changes before execution', async () => {
+    const root = tempRoot()
+    const dbPath = path.join(root, 'runlog.sqlite')
+    const store = new SqliteRunLogStore({ dbPath })
+    stores.push(store)
+    const executions = { count: 0 }
+    const tool = approvalTool(executions, { approvalRequired: true })
+    const kernel = new RunLogKernel({
+      store,
+      tools: [tool],
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: 'tool.approval',
+              toolCallId: 'call_manifest_changed',
+              input: { value: 1 },
+            },
+          },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_manifest_change',
+      instructions: 'Reject changed execution contracts.',
+      tools: ['tool.approval'],
+      approvalPolicy: 'balanced',
+      capabilities: ['provider', 'tools'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_manifest_change', input: 'change manifest' })
+    await kernel.drainUntilIdle()
+    const approvalId = approvalIdFor(store, run.runId)
+    kernel.approveRunLogApproval({ approvalId, expiresInMs: 60_000 })
+    store.close()
+
+    const changedTool: RuntimeTool = {
+      ...tool,
+      manifest: { ...tool.manifest, description: 'Changed after approval.' },
+    }
+    const resumedStore = new SqliteRunLogStore({ dbPath })
+    stores.push(resumedStore)
+    const resumedKernel = new RunLogKernel({
+      store: resumedStore,
+      tools: [changedTool],
+      providerRouter: new SingleProviderRouter(new MockProvider([])),
+    })
+    const [summary] = await resumedKernel.drainUntilIdle()
+
+    expect(summary?.status).toBe('failed')
+    expect(executions.count).toBe(0)
+    expect(
+      projectRunLogRun({ store: resumedStore, runId: run.runId }).events
+        .filter((event) => event.type === 'runtime.error')
+        .at(-1)?.payload,
+    ).toMatchObject({ message: expect.stringContaining('toolManifestHash') })
   })
 
   it('recovers queued runs from SQLite after process-level object restart', async () => {

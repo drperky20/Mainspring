@@ -17,7 +17,12 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `src/hosts/runlog` for host-facing run projections.
   - `src/compat` for migration exports.
 - Package subpaths now expose `mainspring/core`, `mainspring/adapters`, `mainspring/adapters/sqlite`, `mainspring/adapters/local-blob`, `mainspring/capabilities`, `mainspring/hosts/runlog`, and `mainspring/compat`.
-- Focused tests prove provider-only runs, tool calls, approval pauses, SQLite restart recovery, cron-created runs, lazy workspace materialization, and 1000 idle agents stored as data.
+- Focused tests prove provider-only runs, tool calls, approval pauses, approval/denial decisions, SQLite-backed approval resume, SQLite restart recovery, cron-created runs, lazy workspace materialization, and 1000 idle agents stored as data.
+- RunLog approval resume now has scoped signed receipts:
+  - approval requests persist private run/tool/input/workspace/policy/tool-manifest/provider snapshots in SQLite.
+  - approval and denial decisions append durable RunLog events.
+  - approved receipts can resume a paused tool after SQLite-backed restart, validate the original snapshot, mark the receipt used, and execute only through `ToolRegistry`.
+  - mutation, expiry, tool-manifest drift, workspace drift, and replay attempts fail closed in focused tests.
 
 ## Prototype Or Migration Surfaces
 
@@ -33,7 +38,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Memory retrieval adapter connected to RunLog context assembly.
-- Resuming an approval-paused RunLog run with a cryptographic receipt.
+- Continuing a resumed approval run back into the provider loop after the approved tool result; the current RunLog resume slice executes and completes the approved tool boundary.
 - Child-run/subagent helper APIs beyond the parent-run data model.
 - Not implemented: hosted multi-tenant auth, real billing, remote marketplace trust, VM isolation, or secure desktop credential vault.
 
@@ -43,6 +48,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Tool side effects go through `ToolRegistry`.
 - Risk decisions go through `RuntimePolicyGuard` and approval receipts.
 - Durable events remain the public trace boundary.
+- RunLog approval decisions must keep using scoped signed receipts and one-time-use receipt rows.
 - Host projections must sanitize browser-facing DTOs.
 - Compatibility exports should be temporary and should not become a second architecture.
 
@@ -61,6 +67,7 @@ Focused RunLog verification:
 
 ```bash
 pnpm exec vitest run src/core/RunLogKernel.test.ts src/package-exports.test.ts
+pnpm exec vitest run src/core src/tools src/policy
 pnpm exec tsc --noEmit
 ```
 

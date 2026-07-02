@@ -3,11 +3,18 @@ import type { RuntimePolicy } from '#protocol'
 import type { ProviderEvent, QueryInput } from '../providers/types.js'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
 import { ToolRegistry, type RuntimeTool } from '../tools/ToolRegistry.js'
+import {
+  assertRunLogApprovalReceipt,
+  createRunLogApprovalRequestSnapshot,
+  legacyApprovalReceiptFromRunLog,
+} from './RunLogApprovalReceipt.js'
 import type {
   AgentSpec,
   RunCheckpoint,
   RunExecutionSummary,
   RunExecutorOptions,
+  RunLogApprovalReceipt,
+  RunLogApprovalRequestSnapshot,
   RunLogEvent,
   RunLogStore,
   RunRecord,
@@ -54,6 +61,13 @@ function providerQueryInput(input: {
   }
 }
 
+function publicApprovalRequestSnapshot(
+  snapshot: RunLogApprovalRequestSnapshot,
+): Omit<RunLogApprovalRequestSnapshot, 'toolInput'> {
+  const { toolInput: _toolInput, ...publicSnapshot } = snapshot
+  return publicSnapshot
+}
+
 export class RunLogExecutor {
   private readonly store: RunLogStore
   private readonly tools: RuntimeTool[]
@@ -84,53 +98,68 @@ export class RunLogExecutor {
 
       workspaceLease = await this.leaseWorkspace(run, agent)
       const selectedTools = toolSchemaSubset(this.tools, agent)
-      const provider = this.options.providerRouter.resolve({ run, agent })
-      const query = provider.query(
-        providerQueryInput({
-          run,
-          agent,
-          workspaceRoot: workspaceLease.root,
-          tools: selectedTools,
-        }),
-      )
-      const toolRegistry = new ToolRegistry({
-        runId: run.runId,
-        sessionId: run.sessionId,
-        workspaceRoot: workspaceLease.root,
-        policy: defaultPolicy(agent, this.options.policy),
-        emitEvent: () => {},
-        readRecentEvents: ({ limit }) => this.store.listEvents({ runId: run.runId, limit }),
-      })
-      toolRegistry.registerMany(selectedTools)
+      const policy = defaultPolicy(agent, this.options.policy)
+      const approvedReceipt = this.store.getApprovedUnusedReceipt(run.runId)
 
-      for await (const event of query.events) {
-        await this.recordProviderEvent({
+      if (approvedReceipt) {
+        checkpointsAppended += await this.resumeApprovedTool({
           run,
           agent,
-          event,
-          query,
-          toolRegistry,
+          receipt: approvedReceipt,
+          workspaceLease,
+          selectedTools,
+          policy,
         })
-        if (event.type === 'tool_call') {
-          checkpointsAppended += this.checkpoint(run.runId, 'tool', {
-            toolName: event.name,
-            toolCallId: event.toolCallId,
-          })
-        }
-        if (event.type === 'usage') {
-          checkpointsAppended += this.checkpoint(run.runId, 'provider', { usage: event.usage })
-        }
-        const latest = this.store.getRun(run.runId)
-        if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') break
-      }
-
-      const latest = this.store.getRun(run.runId)
-      if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') {
-        finalStatus = latest.status
+        finalStatus = this.store.getRun(run.runId)?.status ?? 'failed'
       } else {
-        finalStatus = 'completed'
-        this.store.updateRunStatus(run.runId, 'completed')
-        this.store.appendEvent({ runId: run.runId, type: 'run.completed', payload: {} })
+        const provider = this.options.providerRouter.resolve({ run, agent })
+        const query = provider.query(
+          providerQueryInput({
+            run,
+            agent,
+            workspaceRoot: workspaceLease.root,
+            tools: selectedTools,
+          }),
+        )
+        const toolRegistry = this.createToolRegistry({
+          run,
+          workspaceRoot: workspaceLease.root,
+          policy,
+          tools: selectedTools,
+        })
+
+        for await (const event of query.events) {
+          await this.recordProviderEvent({
+            run,
+            agent,
+            event,
+            query,
+            toolRegistry,
+            selectedTools,
+            workspaceRoot: workspaceLease.root,
+            policy,
+          })
+          if (event.type === 'tool_call') {
+            checkpointsAppended += this.checkpoint(run.runId, 'tool', {
+              toolName: event.name,
+              toolCallId: event.toolCallId,
+            })
+          }
+          if (event.type === 'usage') {
+            checkpointsAppended += this.checkpoint(run.runId, 'provider', { usage: event.usage })
+          }
+          const latest = this.store.getRun(run.runId)
+          if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') break
+        }
+
+        const latest = this.store.getRun(run.runId)
+        if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') {
+          finalStatus = latest.status
+        } else {
+          finalStatus = 'completed'
+          this.store.updateRunStatus(run.runId, 'completed')
+          this.store.appendEvent({ runId: run.runId, type: 'run.completed', payload: {} })
+        }
       }
     } catch (error) {
       finalStatus = 'failed'
@@ -214,6 +243,9 @@ export class RunLogExecutor {
     event: ProviderEvent
     query: { push(message: string): void }
     toolRegistry: ToolRegistry
+    selectedTools: RuntimeTool[]
+    workspaceRoot: string
+    policy: RuntimePolicy
   }): Promise<RunLogEvent | null> {
     const { run, event, query, toolRegistry } = input
     switch (event.type) {
@@ -276,7 +308,16 @@ export class RunLogExecutor {
           },
         })
       case 'tool_call':
-        return await this.executeToolCall({ run, event, query, toolRegistry })
+        return await this.executeToolCall({
+          run: input.run,
+          agent: input.agent,
+          event,
+          query: input.query,
+          toolRegistry: input.toolRegistry,
+          selectedTools: input.selectedTools,
+          workspaceRoot: input.workspaceRoot,
+          policy: input.policy,
+        })
       default:
         return null
     }
@@ -284,9 +325,13 @@ export class RunLogExecutor {
 
   private async executeToolCall(input: {
     run: RunRecord
+    agent: AgentSpec
     event: Extract<ProviderEvent, { type: 'tool_call' }>
     query: { push(message: string): void }
     toolRegistry: ToolRegistry
+    selectedTools: RuntimeTool[]
+    workspaceRoot: string
+    policy: RuntimePolicy
   }): Promise<RunLogEvent> {
     const toolCallId = input.event.toolCallId ?? `${input.event.name}_${Date.now()}`
     this.store.appendEvent({
@@ -303,16 +348,41 @@ export class RunLogExecutor {
       input: input.event.input,
     })
     if (result.status === 'approval_required') {
+      const tool = input.selectedTools.find((candidate) => candidate.manifest.key === input.event.name)
+      if (!tool) throw new Error(`Approval requested for unregistered tool: ${input.event.name}`)
+      const snapshot = createRunLogApprovalRequestSnapshot({
+        approvalId: result.approval.id,
+        run: input.run,
+        agent: input.agent,
+        tool,
+        toolCallId,
+        toolInput: input.event.input,
+        cwd: input.workspaceRoot,
+        policy: input.policy,
+      })
+      this.store.putApprovalRequest(snapshot)
       this.store.updateRunStatus(input.run.runId, 'awaiting_approval')
       this.store.appendEvent({
         runId: input.run.runId,
         type: 'approval.requested',
-        payload: result.approval,
+        payload: {
+          approvalId: result.approval.id,
+          toolCallId,
+          targetKey: result.approval.targetKey,
+          reasons: result.approval.reasons,
+          permissionCategories: result.approval.permissionCategories,
+          request: publicApprovalRequestSnapshot(snapshot),
+        },
+      })
+      this.checkpoint(input.run.runId, 'approval', {
+        approvalId: result.approval.id,
+        toolCallId,
+        targetKey: result.approval.targetKey,
       })
       return this.store.appendEvent({
         runId: input.run.runId,
         type: 'run.awaiting_approval',
-        payload: { approvalId: result.approval.id, toolCallId },
+        payload: { approvalId: result.approval.id, toolCallId, targetKey: result.approval.targetKey },
       })
     }
     if (result.status === 'policy_blocked') {
@@ -339,5 +409,126 @@ export class RunLogExecutor {
         output: result.output,
       },
     })
+  }
+
+  private createToolRegistry(input: {
+    run: RunRecord
+    workspaceRoot: string
+    policy: RuntimePolicy
+    tools: RuntimeTool[]
+  }): ToolRegistry {
+    const toolRegistry = new ToolRegistry({
+      runId: input.run.runId,
+      sessionId: input.run.sessionId,
+      workspaceRoot: input.workspaceRoot,
+      policy: input.policy,
+      emitEvent: () => {},
+      readRecentEvents: ({ limit }) => this.store.listEvents({ runId: input.run.runId, limit }),
+    })
+    toolRegistry.registerMany(input.tools)
+    return toolRegistry
+  }
+
+  private async resumeApprovedTool(input: {
+    run: RunRecord
+    agent: AgentSpec
+    receipt: RunLogApprovalReceipt
+    workspaceLease: WorkspaceLease
+    selectedTools: RuntimeTool[]
+    policy: RuntimePolicy
+  }): Promise<number> {
+    const request = this.store.getApprovalRequest(input.receipt.approvalId)
+    if (!request) throw new Error(`Missing approval request snapshot: ${input.receipt.approvalId}`)
+    const tool = input.selectedTools.find((candidate) => candidate.manifest.key === request.toolName)
+    if (!tool) throw new Error(`Approved tool is no longer registered: ${request.toolName}`)
+    const currentRequest = createRunLogApprovalRequestSnapshot({
+      approvalId: request.approvalId,
+      run: input.run,
+      agent: input.agent,
+      tool,
+      toolCallId: request.toolCallId,
+      toolInput: request.toolInput,
+      cwd: input.workspaceLease.root,
+      policy: input.policy,
+      requestedAt: request.requestedAt,
+    })
+    assertRunLogApprovalReceipt({
+      receipt: input.receipt,
+      request: currentRequest,
+      key: this.options.approvalReceiptKey,
+    })
+    const marked = this.store.markApprovalReceiptUsed(input.receipt.receiptId, input.run.runId)
+    if (!marked) throw new Error(`RunLog approval receipt was already used: ${input.receipt.receiptId}`)
+    this.store.appendEvent({
+      runId: input.run.runId,
+      type: 'approval.receipt.used',
+      payload: {
+        receiptId: input.receipt.receiptId,
+        approvalId: input.receipt.approvalId,
+        toolCallId: input.receipt.toolCallId,
+      },
+      idempotencyKey: `approval.receipt.used:${input.receipt.receiptId}`,
+    })
+    const toolRegistry = this.createToolRegistry({
+      run: input.run,
+      workspaceRoot: input.workspaceLease.root,
+      policy: input.policy,
+      tools: input.selectedTools,
+    })
+    const result = await toolRegistry.execute({
+      key: request.toolName,
+      input: request.toolInput,
+      approvalReceipt: legacyApprovalReceiptFromRunLog(input.receipt, currentRequest),
+    })
+    if (result.status === 'completed') {
+      this.store.appendEvent({
+        runId: input.run.runId,
+        type: 'tool.call.completed',
+        payload: {
+          toolCallId: request.toolCallId,
+          name: request.toolName,
+          output: result.output,
+          source: 'approved-resume',
+        },
+      })
+      const checkpoints = this.checkpoint(input.run.runId, 'tool', {
+        toolName: request.toolName,
+        toolCallId: request.toolCallId,
+        resumedFromApproval: input.receipt.approvalId,
+      })
+      this.store.updateRunStatus(input.run.runId, 'completed')
+      this.store.appendEvent({
+        runId: input.run.runId,
+        type: 'run.completed',
+        payload: { resumedFromApproval: input.receipt.approvalId },
+      })
+      return checkpoints
+    }
+    if (result.status === 'policy_blocked') {
+      this.store.updateRunStatus(input.run.runId, 'failed')
+      this.store.appendEvent({
+        runId: input.run.runId,
+        type: 'tool.call.blocked',
+        payload: {
+          toolCallId: request.toolCallId,
+          name: request.toolName,
+          reasons: result.reasons,
+          permissionCategories: result.permissionCategories,
+        },
+      })
+      this.store.appendEvent({
+        runId: input.run.runId,
+        type: 'run.failed',
+        payload: { message: 'Approved tool was blocked by policy during resume.' },
+      })
+      return 0
+    }
+    this.store.updateRunStatus(input.run.runId, 'failed')
+    this.store.appendEvent({
+      runId: input.run.runId,
+      type: 'run.failed',
+      payload: { message: 'Approved tool requested a second approval during resume.' },
+    })
+    return 0
   }
 }

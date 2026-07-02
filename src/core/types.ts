@@ -82,6 +82,9 @@ export type RunLogEventType =
   | 'tool.call.failed'
   | 'tool.call.blocked'
   | 'approval.requested'
+  | 'approval.approved'
+  | 'approval.denied'
+  | 'approval.receipt.used'
   | 'run.awaiting_approval'
   | 'checkpoint.saved'
   | 'artifact.created'
@@ -120,6 +123,53 @@ export interface RunCheckpoint {
   state: Record<string, unknown>
 }
 
+export interface RunLogApprovalRequestSnapshot {
+  approvalId: string
+  runId: string
+  agentId: string
+  sessionId: string
+  parentRunId?: string
+  toolCallId: string
+  toolName: string
+  toolInput: unknown
+  toolInputHash: string
+  cwd: string
+  workspaceId: string
+  workspaceHash: string
+  policyHash: string
+  toolManifestHash: string
+  providerContextHash: string
+  riskSnapshotHash: string
+  requestedAt: string
+}
+
+export interface RunLogApprovalReceipt {
+  version: 1
+  receiptId: string
+  approvalId: string
+  runId: string
+  agentId: string
+  sessionId: string
+  parentRunId?: string
+  toolCallId: string
+  toolName: string
+  decision: 'approved' | 'denied'
+  actor: string
+  requestedAt: string
+  decidedAt: string
+  expiresAt: string
+  toolInputHash: string
+  workspaceHash: string
+  policyHash: string
+  toolManifestHash: string
+  providerContextHash: string
+  riskSnapshotHash: string
+  nonce: string
+  idempotencyKey: string
+  keyId: string
+  signature: string
+}
+
 export interface AppendRunEventInput<TPayload = unknown> {
   runId: string
   type: RunLogEventType
@@ -153,6 +203,12 @@ export interface RunLogStore {
   listEvents(input?: ListRunEventsInput): RunLogEvent[]
   appendCheckpoint(input: Omit<RunCheckpoint, 'checkpointId' | 'timestamp'>): RunCheckpoint
   latestCheckpoint(runId: string): RunCheckpoint | null
+  putApprovalRequest(snapshot: RunLogApprovalRequestSnapshot): void
+  getApprovalRequest(approvalId: string): RunLogApprovalRequestSnapshot | null
+  putApprovalReceipt(receipt: RunLogApprovalReceipt): void
+  getApprovalReceipt(receiptId: string): RunLogApprovalReceipt | null
+  getApprovedUnusedReceipt(runId: string): RunLogApprovalReceipt | null
+  markApprovalReceiptUsed(receiptId: string, runId: string): boolean
 }
 
 export interface ProviderRouter {
@@ -211,6 +267,7 @@ export interface RunExecutorOptions {
   workspace?: WorkspaceAdapter
   defaultWorkspaceRoot?: string
   policy?: RuntimePolicy
+  approvalReceiptKey?: string
   maxToolIterations?: number
 }
 

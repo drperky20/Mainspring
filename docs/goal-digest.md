@@ -1,6 +1,6 @@
 # Mainspring Goal Digest
 
-Last updated: 2026-06-27.
+Last updated: 2026-07-01.
 
 This is the durable digest for continuing the full Mainspring product/architecture brief in repo-grounded milestones. Future work should read this file and `docs/current-state.md` before choosing the next milestone.
 
@@ -7330,6 +7330,49 @@ At the start of each continuation:
    - blockers, if any
 
 Do not mark broad product features complete because scaffolds or docs exist. Be explicit about partial work.
+
+## 2026-07-01 Durable RunLog Approval Receipt Resume Slice
+
+Implemented the scoped receipt-resume milestone for the TypeScript-native RunLog Fabric.
+
+What changed:
+
+- Added RunLog-native approval request snapshots and signed approval receipts.
+- Added SQLite persistence for approval request snapshots and receipt decisions.
+- Added one-time-use receipt marking so approved tool resumes cannot replay a side effect through the normal scheduler path.
+- Added `RunLogKernel.approveRunLogApproval()` and `RunLogKernel.denyRunLogApproval()`.
+- Updated `RunLogExecutor` so approved receipts resume a paused tool after SQLite-backed restart, validate the run/tool/input/workspace/policy/tool-manifest/provider snapshot, then execute through `ToolRegistry` with a legacy `ApprovalReceipt` bridge.
+- Updated RunLog projection so approved or denied requests stop appearing as pending and approval decisions are visible to hosts.
+- Updated `docs/current-state.md`, `docs/security-truth-matrix.md`, and `docs/implementation-backlog.md`.
+
+Verification:
+
+- `pnpm exec vitest run src/core/RunLogKernel.test.ts`: passed, 13 tests.
+- `pnpm exec vitest run src/core src/tools src/policy`: passed, 4 files / 45 tests.
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm verify`: passed, including 57 test files / 395 tests, build, security guards, docs check, console typecheck, console browser-safety check, and console build.
+- `pnpm release:check`: passed end to end, including verify, security truth, gateway systems, gateway help, examples smoke, agentic harness, desktop systems, release workflow, optional verifiers, package surface, package dry-runs, npm dry-run, and Docker Compose config.
+
+What this proves:
+
+- A RunLog tool call that requires approval pauses durably.
+- A new process/store object can approve the pending request and resume it through SQLite.
+- Denied approvals fail the run without executing the tool.
+- Mutated tool input, changed workspace root, expired receipt, changed tool manifest, and replay attempts fail closed.
+- Approved execution still goes through `ToolRegistry`, `RuntimePolicyGuard`, and approval receipt validation.
+
+Remaining risks:
+
+- The current resume slice executes and completes the approved tool boundary. It does not yet feed the approved tool result back into a second provider turn.
+- RunLog browser, memory retrieval, child-run helpers, Postgres/object-store/queue adapters, and remote execution adapters remain future work.
+- Host shell execution remains unsandboxed.
+- Provider keys must not be stored in renderer localStorage.
+- Do not claim secure isolation, HyperCells, billing, operator roles, remote marketplace trust, or secure desktop secrets from this slice.
+
+Next recommended milestone:
+
+- Continue approved RunLog tool results back into the provider loop while preserving idempotency and no-duplicate-side-effect guarantees.
+- Add canonical policy decision records for side-effecting surfaces after provider continuation is green.
 
 ## 2026-07-01 RunLog Fabric Implementation Slice
 
