@@ -124,6 +124,7 @@ const expectedFiles = [
   'docs/operations.md',
   'docs/deployment.md',
   'docs/examples.md',
+  'docs/skills-security.md',
   'docs/roadmap.md',
   'docs/documentation-guide.md',
   'docs/current-state.md',

@@ -8,6 +8,11 @@ import {
 } from '#protocol'
 import { assertPathContained } from '#protocol/node'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
+import {
+  assertScanCanProceed,
+  scanSkillManifest,
+  stageProvenanceReview,
+} from '../provenance/ProvenanceReview.js'
 import { builtinManifest, inputRecord, type RuntimeTool } from './ToolRegistry.js'
 
 const SKILLS_DIR = '.mainspring/skills'
@@ -52,7 +57,49 @@ function persistManifest(input: {
   runId: string
   workspaceRoot: string
   emitEvent: (event: MainspringEvent) => void
+  reviewMode?: 'stage' | 'apply'
 }): unknown {
+  const scan = scanSkillManifest(input.manifest)
+  assertScanCanProceed(scan)
+  if (input.reviewMode === 'stage' || scan.status === 'review') {
+    const review = stageProvenanceReview({
+      workspaceRoot: input.workspaceRoot,
+      runId: input.runId,
+      source: `skills.${input.action}`,
+      mutation: {
+        kind: 'skill',
+        action: input.action,
+        manifest: input.manifest,
+      },
+      scan,
+    })
+    input.emitEvent({
+      type: 'skill.event',
+      runId: input.runId,
+      skillKey: input.manifest.key,
+      action: 'review.staged',
+      metadata: {
+        source: input.manifest.source,
+        version: input.manifest.version,
+        reviewId: review.reviewId,
+        scanStatus: scan.status,
+      },
+    })
+    return sanitizeRuntimeResponse({
+      skillKey: input.manifest.key,
+      action: input.action,
+      persisted: false,
+      staged: true,
+      reviewId: review.reviewId,
+      source: input.manifest.source,
+      version: input.manifest.version,
+      scan: {
+        status: scan.status,
+        contentHash: scan.contentHash,
+        findings: scan.findings,
+      },
+    })
+  }
   const filePath = skillManifestPath(input.workspaceRoot, input.manifest.key)
   const previous = readExistingManifest(filePath)
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
@@ -66,6 +113,8 @@ function persistManifest(input: {
       source: input.manifest.source,
       version: input.manifest.version,
       previousVersion: previous?.version,
+      scanStatus: scan.status,
+      contentHash: scan.contentHash,
     },
   })
   return sanitizeRuntimeResponse({
@@ -75,6 +124,10 @@ function persistManifest(input: {
     source: input.manifest.source,
     version: input.manifest.version,
     previousVersion: previous?.version,
+    provenance: {
+      status: scan.status,
+      contentHash: scan.contentHash,
+    },
   })
 }
 
@@ -88,14 +141,17 @@ export function createSkillInstallTool(): RuntimeTool {
       approval: { required: true },
       toolType: 'builtin',
     }),
-    execute: ({ input, runId, workspaceRoot, emitEvent }) =>
-      persistManifest({
+    execute: ({ input, runId, workspaceRoot, emitEvent }) => {
+      const record = inputRecord(input)
+      return persistManifest({
         action: 'installed',
         manifest: manifestFromInput(input),
         runId,
         workspaceRoot,
         emitEvent,
-      }),
+        reviewMode: record.reviewMode === 'stage' ? 'stage' : 'apply',
+      })
+    },
   }
 }
 
@@ -109,14 +165,17 @@ export function createSkillUpdateTool(): RuntimeTool {
       approval: { required: true },
       toolType: 'builtin',
     }),
-    execute: ({ input, runId, workspaceRoot, emitEvent }) =>
-      persistManifest({
+    execute: ({ input, runId, workspaceRoot, emitEvent }) => {
+      const record = inputRecord(input)
+      return persistManifest({
         action: 'updated',
         manifest: manifestFromInput(input),
         runId,
         workspaceRoot,
         emitEvent,
-      }),
+        reviewMode: record.reviewMode === 'stage' ? 'stage' : 'apply',
+      })
+    },
   }
 }
 

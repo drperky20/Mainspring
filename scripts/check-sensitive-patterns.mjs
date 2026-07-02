@@ -139,6 +139,7 @@ function isAllowedHit(hit) {
       || hit.path === 'src/runner/RuntimeKernel.ts'
       || hit.path === 'src/providers/HttpProviderClient.ts'
       || hit.path === 'src/gateway/TemplateMarketplace.ts'
+      || hit.path === 'src/provenance/ProvenanceReview.ts'
       || hit.path === 'apps/console/src/developmentGatewaySnapshotFixture.ts'
       || hit.path.startsWith('scripts/')
     )

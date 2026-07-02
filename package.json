@@ -35,6 +35,7 @@
     "docs/operations.md",
     "docs/deployment.md",
     "docs/examples.md",
+    "docs/skills-security.md",
     "docs/roadmap.md",
     "docs/documentation-guide.md",
     "docs/current-state.md",
@@ -182,12 +183,13 @@
     "security:mainspring": "node scripts/check-mainspring-security.mjs",
     "security:sensitive-patterns": "node scripts/check-sensitive-patterns.mjs",
     "security:truth": "node scripts/check-security-truth.mjs && node scripts/check-release-claims.mjs",
+    "skills:check": "pnpm build && node scripts/check-skill-provenance.mjs",
     "optional-verifiers:check": "pnpm build && node scripts/check-optional-verifiers.mjs",
     "release:workflow:check": "node scripts/check-release-workflow.mjs",
     "package:check": "pnpm build && node scripts/check-package-surface.mjs",
     "openrouter:e2e": "pnpm build && node scripts/openrouter-e2e.mjs",
-    "release:check": "pnpm verify && pnpm security:truth && pnpm gateway:systems:check && pnpm gateway:dev:help && pnpm examples:smoke && pnpm agentic:check && pnpm desktop:systems:check && pnpm release:workflow:check && pnpm optional-verifiers:check && pnpm package:check && pnpm pack --dry-run && npm pack --dry-run && docker compose -f docker/compose.local.yml config",
-    "verify": "pnpm doctor && pnpm typecheck && pnpm test && pnpm build && pnpm run security:mainspring && pnpm run security:sensitive-patterns && pnpm security:truth && pnpm docs:check && pnpm console:typecheck && pnpm console:browser-safety:check && pnpm console:build"
+    "release:check": "pnpm verify && pnpm security:truth && pnpm skills:check && pnpm gateway:systems:check && pnpm gateway:dev:help && pnpm examples:smoke && pnpm agentic:check && pnpm desktop:systems:check && pnpm release:workflow:check && pnpm optional-verifiers:check && pnpm package:check && pnpm pack --dry-run && npm pack --dry-run && docker compose -f docker/compose.local.yml config",
+    "verify": "pnpm doctor && pnpm typecheck && pnpm test && pnpm build && pnpm run security:mainspring && pnpm run security:sensitive-patterns && pnpm security:truth && pnpm skills:check && pnpm docs:check && pnpm console:typecheck && pnpm console:browser-safety:check && pnpm console:build"
   },
   "dependencies": {
     "better-sqlite3": "12.10.0",

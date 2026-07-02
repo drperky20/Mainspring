@@ -1,5 +1,10 @@
 import { sanitizeRuntimeResponse } from '#protocol'
 import { MemoryProvider } from '../memory/MemoryProvider.js'
+import {
+  assertScanCanProceed,
+  scanMemoryMutation,
+  stageProvenanceReview,
+} from '../provenance/ProvenanceReview.js'
 import { builtinManifest, inputRecord, positiveInt, type RuntimeTool } from './ToolRegistry.js'
 
 function inputTags(value: unknown): string[] {
@@ -67,11 +72,52 @@ export function createMemoryWriteTool(): RuntimeTool {
       approval: { required: true },
       toolType: 'memory',
     }),
-    execute: ({ input, workspaceRoot, sessionId }) => {
+    execute: ({ input, workspaceRoot, sessionId, runId }) => {
       const record = inputRecord(input)
       const text = typeof record.text === 'string' ? record.text.trim() : ''
       if (!text) throw new Error('Memory write input.text must be a non-empty string.')
       const scope = inputScope(record.scope)
+      const tags = inputTags(record.tags)
+      const metadata =
+        record.metadata && typeof record.metadata === 'object' && !Array.isArray(record.metadata)
+          ? (record.metadata as Record<string, unknown>)
+          : undefined
+      const scan = scanMemoryMutation({
+        text,
+        scope,
+        tags,
+        ...(metadata ? { metadata } : {}),
+      })
+      assertScanCanProceed(scan)
+      const reviewMode = record.reviewMode === 'stage' || scan.status === 'review'
+      if (reviewMode) {
+        const review = stageProvenanceReview({
+          workspaceRoot,
+          runId,
+          source: 'memory.write',
+          mutation: {
+            kind: 'memory',
+            text,
+            scope,
+            tags,
+            ...(sessionId ? { sessionId } : {}),
+            ...(metadata ? { metadata } : {}),
+          },
+          scan,
+        })
+        return sanitizeRuntimeResponse({
+          reviewId: review.reviewId,
+          stored: false,
+          staged: true,
+          scope,
+          status: review.status,
+          scan: {
+            status: scan.status,
+            contentHash: scan.contentHash,
+            findings: scan.findings,
+          },
+        })
+      }
       const provider = new MemoryProvider({
         workspaceRoot,
         ...(sessionId ? { sessionId } : {}),
@@ -79,10 +125,16 @@ export function createMemoryWriteTool(): RuntimeTool {
       const entry = provider.write({
         text,
         scope,
-        tags: inputTags(record.tags),
-        ...(record.metadata && typeof record.metadata === 'object' && !Array.isArray(record.metadata)
-          ? { metadata: record.metadata as Record<string, unknown> }
-          : {}),
+        tags,
+        metadata: {
+          ...(metadata ?? {}),
+          provenance: {
+            scannerVersion: scan.scannerVersion,
+            contentHash: scan.contentHash,
+            status: scan.status,
+            findings: scan.findings.map((finding) => finding.ruleId),
+          },
+        },
       })
       return sanitizeRuntimeResponse({
         id: entry.entryId,
@@ -90,6 +142,10 @@ export function createMemoryWriteTool(): RuntimeTool {
         scope: entry.scope,
         ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
         tags: entry.tags,
+        provenance: {
+          status: scan.status,
+          contentHash: scan.contentHash,
+        },
       })
     },
   }

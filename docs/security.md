@@ -24,6 +24,7 @@ Mainspring treats agents as untrusted workers.
 - RunLog cron/headless grant decisions before due runs are queued or failed
 - local-agent security regression corpus for shell, filesystem, browser/fetch, memory, skill, bridge, and cron policy boundaries
 - repo-local red-team matrix that maps each tested or deferred failure class to evidence and remaining work
+- memory, skill, and local template provenance scanner with staged JSONL review records
 
 ## Hard Truths
 
@@ -45,6 +46,7 @@ Mainspring treats agents as untrusted workers.
 - Put dangerous actions behind policy and approvals.
 - Hard-blocked actions must stay blocked even if an approval receipt is supplied.
 - Side-effecting RunLog cron schedules should use scoped, expiring grants instead of waiting for unattended approval.
+- Treat memory, skills, and local templates as behavior mutation. Use provenance scanning and staged review for suspicious or third-party writes.
 - New tool, host, cron, memory, skill, subagent, channel, or browser side-effect surfaces need a row in `docs/security-redteam-matrix.md` and either an executable regression or an explicit limitation.
 - Add leak tests for new browser-facing fields.
 - Keep runtime work inside the mailbox/kernel/tool/policy spine.

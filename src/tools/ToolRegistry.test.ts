@@ -1477,7 +1477,7 @@ describe('ToolRegistry', () => {
     })
   })
 
-  it('persists approved native skill installs and updates inside the workspace', async () => {
+  it('stages approved third-party skill installs and persists built-in updates inside the workspace', async () => {
     const { events, registry, root } = makeWorkspace()
     const manifest = {
       key: 'workspace.summary',
@@ -1505,16 +1505,21 @@ describe('ToolRegistry', () => {
       output: {
         skillKey: 'workspace.summary',
         action: 'installed',
-        persisted: true,
+        persisted: false,
+        staged: true,
         version: '1.0.0',
+        scan: { status: 'review' },
       },
     })
+    expect(
+      fs.existsSync(path.join(root, '.mainspring/skills/workspace.summary/manifest.json')),
+    ).toBe(false)
 
     const update = await registry.execute({
       key: 'skills.update',
-      input: { manifest: { ...manifest, version: '1.1.0' } },
+      input: { manifest: { ...manifest, source: 'built-in' as const, version: '1.1.0' } },
       approvalReceipt: approvalFor('skills.update', {
-        manifest: { ...manifest, version: '1.1.0' },
+        manifest: { ...manifest, source: 'built-in' as const, version: '1.1.0' },
       }),
     })
     expect(update).toMatchObject({
@@ -1524,7 +1529,7 @@ describe('ToolRegistry', () => {
         action: 'updated',
         persisted: true,
         version: '1.1.0',
-        previousVersion: '1.0.0',
+        provenance: { status: 'pass' },
       },
     })
     expect(
@@ -1534,7 +1539,7 @@ describe('ToolRegistry', () => {
           'utf8',
         ),
       ),
-    ).toMatchObject({ key: 'workspace.summary', version: '1.1.0' })
+    ).toMatchObject({ key: 'workspace.summary', version: '1.1.0', source: 'built-in' })
     expect(events.map((event) => event.type)).toEqual([
       'approval.requested',
       'skill.event',

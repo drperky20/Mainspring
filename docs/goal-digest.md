@@ -7331,6 +7331,44 @@ At the start of each continuation:
 
 Do not mark broad product features complete because scaffolds or docs exist. Be explicit about partial work.
 
+## 2026-07-02 Memory, Skill, And Template Provenance Slice
+
+Implemented the first code-backed provenance and staged-review layer for memory, skills, and local templates.
+
+- Added `src/provenance/ProvenanceReview.ts`.
+- Added deterministic scan results for memory mutations, skill manifests, and local template catalog entries.
+- Added `.mainspring/provenance-review.jsonl` backed staged review records.
+- Added apply helpers for approved staged memory and skill writes:
+  - `createProvenanceReviewQueue`
+  - `applyApprovedMemoryReview`
+  - `applyApprovedSkillReview`
+- Updated `memory.write` so it scans before persistence, blocks block-level findings, stages review findings, and supports explicit `reviewMode: "stage"`.
+- Updated `skills.install` and `skills.update` so they scan before persistence, block block-level findings, and stage remote/uploaded/high-capability manifests before activation.
+- Added `scripts/check-skill-provenance.mjs` and `pnpm skills:check`.
+- Added `pnpm skills:check` to both `pnpm verify` and `pnpm release:check`.
+- Added `docs/skills-security.md` and updated current-state, security, security-truth, red-team, docs index, and implementation backlog docs.
+- Exported provenance review helpers from the package root.
+
+Preserved runtime seams:
+
+`ToolRegistry -> RuntimePolicyGuard / ApprovalReceipt -> memory.write / skills.install / skills.update -> ProvenanceReview -> MemoryProvider / skill manifest store -> events`.
+
+Verification for the focused slice:
+
+- `pnpm exec vitest run src/provenance src/tools`: passed, 4 files / 40 tests.
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm skills:check`: passed with `MAINSPRING_SKILL_PROVENANCE_CHECK_OK`.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm exec vitest run src/provenance src/tools src/security`: passed, 6 files / 53 tests.
+
+Remaining risk:
+
+- The provenance queue has exported code APIs but not yet gateway/console operator review screens.
+- The scanner is deterministic local analysis, not proof that a reviewed skill is harmless.
+- Remote marketplace trust, signing, reputation, hosted identity, and paid installs remain not implemented.
+- Host execution remains unsafe host execution even when a skill or template has been reviewed.
+
 ## 2026-07-02 Local Agent Security Regression Slice
 
 Added the first permanent local-agent security regression corpus for the RunLog Fabric hardening work.

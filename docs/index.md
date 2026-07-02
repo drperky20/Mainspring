@@ -8,6 +8,7 @@
 - [SDK](sdk.md)
 - [Operations](operations.md)
 - [Security](security.md)
+- [Memory, Skills, And Template Provenance](skills-security.md)
 
 ## Features
 

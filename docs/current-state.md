@@ -38,6 +38,12 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Local-agent security regression coverage now exists in `src/security/agent-security-regression.test.ts` with a companion matrix in `docs/security-redteam-matrix.md`.
   - The focused corpus covers host shell approval, loader/env-var injection, network-to-shell hard blocks, path traversal, symlink/junction escape, workspace mutation approval, browser/local URL policy, web-fetch SSRF rejection, memory and skill write approval, MCP/tool bridge policy routing, headless cron denial, and cron grant mutation.
   - The matrix explicitly records partial/deferred classes such as cross-agent spoofing, subagent privilege expansion, malicious remote skill payload review, skill memory poisoning, and browser-adapter private-network enforcement.
+- Memory, skill, and local template provenance now has a canonical module:
+  - `src/provenance/ProvenanceReview.ts` scans memory mutations, skill manifests, and local template catalog entries with deterministic content hashes.
+  - staged review records persist in `.mainspring/provenance-review.jsonl`.
+  - `memory.write` and `skills.install` / `skills.update` scan before persistence, block high-risk findings, and stage review findings.
+  - approved staged memory and skill writes can be applied through exported review helpers.
+  - `pnpm skills:check` scans local example templates and runs inside `pnpm verify` and `pnpm release:check`.
 
 ## Prototype Or Migration Surfaces
 
@@ -54,6 +60,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Memory retrieval adapter connected to RunLog context assembly.
+- Remote skill marketplace trust, signed catalog distribution, and third-party reputation.
 - General checkpoint replay/retry controls beyond the implemented approval-resume continuation.
 - Child-run/subagent helper APIs beyond the parent-run data model.
 - Full gateway/API migration to RunLog-native cron grants and headless policy.

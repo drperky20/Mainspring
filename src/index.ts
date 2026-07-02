@@ -184,6 +184,30 @@ export type {
   PolicyOperation,
   RuntimePolicyDefaults,
 } from './policy/PolicyGuard.js'
+export {
+  JsonlProvenanceReviewQueue,
+  applyApprovedMemoryReview,
+  applyApprovedSkillReview,
+  assertScanCanProceed,
+  createProvenanceReviewQueue,
+  hashProvenanceContent,
+  scanMemoryMutation,
+  scanSkillManifest,
+  scanTemplateCatalogEntry,
+  stageProvenanceReview,
+} from './provenance/ProvenanceReview.js'
+export type {
+  ProvenanceFinding,
+  ProvenanceFindingSeverity,
+  ProvenanceMutationKind,
+  ProvenanceReviewItem,
+  ProvenanceReviewStatus,
+  ProvenanceScanResult,
+  ProvenanceScanStatus,
+  StagedMemoryMutation,
+  StagedProvenanceMutation,
+  StagedSkillMutation,
+} from './provenance/ProvenanceReview.js'
 
 export { ToolRegistry } from './tools/ToolRegistry.js'
 export type {
