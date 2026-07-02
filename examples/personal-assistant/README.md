@@ -10,7 +10,7 @@ This example is now runnable with no paid key:
 pnpm example:personal-assistant
 ```
 
-It uses `MockProvider`, runs one real SDK/runtime session, reads a workspace note through `file.read`, and prints a JSON summary of the session, run, events, and tool activity.
+It uses `createRunLogMainspring`, `MockProvider`, the default `file.read` tool, SQLite RunLog state, and `RunLogProjection`. It reads a workspace note through the canonical RunLog tool path and prints a JSON summary of the run, events, policy decision, checkpoint, and tool activity.
 
 ## Shape
 

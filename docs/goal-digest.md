@@ -8065,7 +8065,7 @@ What this proves:
 
 Still honest:
 
-- The coding, personal-assistant, support, agency-client, and local-first examples still use the compatibility SDK host.
+- At this point in the sequence, the coding, personal-assistant, support, agency-client, and local-first examples still used the compatibility SDK host.
 - At this point in the sequence, `openrouter:e2e` still used the compatibility path until live-provider RunLog coverage was equivalent.
 - The provider-run example is provider-only; it does not prove tool approval, workspace mutation, browser, memory, or skill behavior.
 
@@ -8232,3 +8232,43 @@ Verification in this slice:
 Next recommended milestone:
 
 - Move the remaining compatibility examples that do not require mailbox-only behavior to `createRunLogMainspring`, or add taint labels beyond scan findings for web/email/file-derived memory and skill mutations.
+
+## 2026-07-02 RunLog Personal Assistant Example Slice
+
+Goal:
+
+- Move the personal-assistant runnable example from the compatibility mailbox runtime onto the canonical RunLog SDK host.
+
+Changes:
+
+- Rewrote `examples/personal-assistant/run.mjs` to use `createRunLogMainspring`, `RunIntent`, the default `file.read` tool, RunLog policy decisions, tool checkpoints, and `RunLogProjection`.
+- Updated the personal-assistant README, sample run, and expected events to use RunLog event names and lifecycle.
+- Updated examples, getting-started, current-state, migration, and backlog docs so `personal-assistant` is no longer described as a compatibility-host example.
+
+What this proves:
+
+- A no-key local personal-assistant workflow can read a private workspace note through the canonical RunLog tool path.
+- Read-only workspace tools emit `policy.decision.recorded`, `tool.call.completed`, `checkpoint.saved`, `assistant.result`, and `run.completed` through RunLog.
+- The example reports relative workspace paths and does not require browser storage, paid provider credentials, or the legacy mailbox runtime.
+
+Still honest:
+
+- This proves a read-only `file.read` workflow, not memory writes, browser automation, external channel sends, subagents, or live provider behavior.
+- Host file access is still local host access, not containment.
+- Coding, support, agency-client, and local-first examples still exercise the compatibility SDK host until migrated or deliberately retained.
+
+Verification in this slice:
+
+- `pnpm example:personal-assistant`: passed with `runtimePath: "runlog"`, one `allow` policy decision, a `tool` checkpoint, and `pendingApprovals: 0`.
+- `pnpm examples:check`: passed and now runs `personal-assistant` through the RunLog SDK host.
+- `pnpm agentic:check`: passed and included the personal-assistant scenario.
+- `pnpm typecheck`: passed.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed after rewording the backlog risk to avoid unsupported security-claim wording.
+- `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 436 tests plus build, security, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end, including examples smoke, agentic harness, desktop systems, optional verifier diagnostics, package dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Move `support-agent` to `createRunLogMainspring` as the next read-only FAQ workflow, or migrate `local-first-agent` once RunLog memory review coverage is ready.
