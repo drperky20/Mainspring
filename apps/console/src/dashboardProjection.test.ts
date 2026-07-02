@@ -828,7 +828,9 @@ describe('projectConsoleDashboard', () => {
             pendingApprovalCount: 1,
             approvalDecisionCount: 1,
             toolCallCount: 1,
+            checkpointCount: 1,
             policyDecisionCount: 1,
+            errorCount: 0,
             pendingApprovals: [
               {
                 approvalId: 'approval_runlog_1',
@@ -842,6 +844,13 @@ describe('projectConsoleDashboard', () => {
                 status: 'requested',
               },
             ],
+            checkpoints: [
+              {
+                eventId: 'event_checkpoint_runlog_1',
+                seq: 8,
+                kind: 'approval',
+              },
+            ],
             policyDecisions: [
               {
                 decisionId: 'decision_runlog_1',
@@ -851,6 +860,7 @@ describe('projectConsoleDashboard', () => {
                 toolCallId: 'tool_call_runlog_1',
               },
             ],
+            errors: [],
           },
         ],
       },

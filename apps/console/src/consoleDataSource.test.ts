@@ -132,9 +132,12 @@ const gatewaySnapshotFixture = {
         pendingApprovalCount: 1,
         approvalDecisionCount: 0,
         toolCallCount: 1,
+        checkpointCount: 1,
         policyDecisionCount: 1,
+        errorCount: 0,
         pendingApprovals: [{ approvalId: 'approval_runlog_1', toolCallId: 'toolcall_runlog_1' }],
         toolCalls: [{ toolCallId: 'toolcall_runlog_1', name: 'file.write', status: 'requested' }],
+        checkpoints: [{ eventId: 'event_checkpoint_runlog_1', seq: 8, kind: 'approval' }],
         policyDecisions: [
           {
             decisionId: 'dr_runlog_1',
@@ -144,6 +147,7 @@ const gatewaySnapshotFixture = {
             toolCallId: 'toolcall_runlog_1',
           },
         ],
+        errors: [],
       },
     ],
   },

@@ -8126,3 +8126,39 @@ Verification in this slice:
 Next recommended milestone:
 
 - Migrate another compatibility example that does not require mailbox-only behavior, or add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the sanitized gateway/console DTO boundary.
+
+## 2026-07-02 RunLog Run Detail Projection Slice
+
+Goal:
+
+- Add first-class checkpoint and error summaries to RunLog run projections so gateway, HTTP, and console surfaces can inspect run progress and failure state without requiring raw event payload scans.
+
+Changes:
+
+- Extended `RunLogProjection` with `checkpoints` from `checkpoint.saved` events and `errors` from `runtime.error` / `run.failed` events.
+- Extended `LocalGatewayRunLogRunProjection` with compact checkpoint and error summaries that omit raw checkpoint/error payloads.
+- Extended the HTTP RunLog projection response with `checkpoints` and `errors` beside pending approvals, tool calls, policy decisions, artifacts, usage, and public events.
+- Extended `ConsoleGatewayRunLogRun` with checkpoint/error counts and sanitized checkpoint/error summaries.
+- Updated console data-source and dashboard fixtures so RunLog summaries remain part of the browser-facing DTO contract.
+- Updated docs/current-state, docs/migration-runlog, and docs/implementation-backlog to record that sanitized checkpoint/error run-detail projection is complete.
+
+What this proves:
+
+- Public RunLog run-detail readers can see checkpoint and failure summaries without parsing raw event payloads.
+- Browser-facing checkpoint/error text goes through the same redaction boundary as other RunLog console DTO fields.
+- The projection still keeps raw checkpoint/error payloads out of the console DTO.
+
+Still honest:
+
+- This is not a visual run-detail panel, checkpoint rewind UI, artifact authorization model, browser lease implementation, subagent API, or live-provider E2E migration.
+- Raw RunLog projection objects inside trusted server/SDK code still contain full events and payloads by design; browser/client surfaces must keep using sanitized gateway/console DTOs.
+
+Verification in this slice:
+
+- `pnpm typecheck`: passed.
+- `pnpm exec vitest run src/gateway/ConsoleSnapshotAdapter.test.ts apps/console/src/consoleDataSource.test.ts apps/console/src/dashboardProjection.test.ts`: passed, 3 files / 24 tests.
+- `pnpm exec vitest run src/sdk/RunLogMainspring.test.ts src/core/RunLogKernel.test.ts src/gateway/LocalGateway.test.ts src/gateway/server/createLocalGatewayServer.test.ts`: passed, 4 files / 71 tests.
+
+Next recommended milestone:
+
+- Add dedicated console run-detail panels for RunLog checkpoints, policy decisions, artifacts, and errors, or migrate `openrouter:e2e` to a RunLog-native live-provider path once the live projection contract is equivalent.

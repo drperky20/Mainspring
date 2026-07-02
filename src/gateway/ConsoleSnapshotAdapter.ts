@@ -138,7 +138,9 @@ export interface ConsoleGatewayRunLogRun {
   pendingApprovalCount: number
   approvalDecisionCount: number
   toolCallCount: number
+  checkpointCount: number
   policyDecisionCount: number
+  errorCount: number
   pendingApprovals: Array<{
     approvalId?: string
     toolCallId?: string
@@ -148,12 +150,23 @@ export interface ConsoleGatewayRunLogRun {
     name?: string
     status: 'requested' | 'completed' | 'failed' | 'blocked'
   }>
+  checkpoints: Array<{
+    eventId: string
+    seq: number
+    kind?: string
+  }>
   policyDecisions: Array<{
     decisionId: string
     state: string
     surface: string
     targetKey: string
     toolCallId?: string
+  }>
+  errors: Array<{
+    eventId: string
+    seq: number
+    type: 'runtime.error' | 'run.failed'
+    message?: string
   }>
 }
 
@@ -842,7 +855,9 @@ function consoleRunLogRun(run: LocalGatewayRunLogRunProjection): ConsoleGatewayR
     pendingApprovalCount: run.pendingApprovals.length,
     approvalDecisionCount: run.approvalDecisions.length,
     toolCallCount: run.toolCalls.length,
+    checkpointCount: run.checkpoints.length,
     policyDecisionCount: run.policyDecisions.length,
+    errorCount: run.errors.length,
     pendingApprovals: run.pendingApprovals.map((approval) => ({
       ...(approval.approvalId ? { approvalId: browserSafePreviewText(approval.approvalId) } : {}),
       ...(approval.toolCallId ? { toolCallId: browserSafePreviewText(approval.toolCallId) } : {}),
@@ -852,12 +867,23 @@ function consoleRunLogRun(run: LocalGatewayRunLogRunProjection): ConsoleGatewayR
       ...(call.name ? { name: browserSafePreviewText(call.name) } : {}),
       status: call.status,
     })),
+    checkpoints: run.checkpoints.map((checkpoint) => ({
+      eventId: browserSafePreviewText(checkpoint.eventId),
+      seq: checkpoint.seq,
+      ...(checkpoint.kind ? { kind: browserSafePreviewText(checkpoint.kind) } : {}),
+    })),
     policyDecisions: run.policyDecisions.map((decision) => ({
       decisionId: browserSafePreviewText(decision.decisionId),
       state: browserSafePreviewText(decision.state),
       surface: browserSafePreviewText(decision.surface),
       targetKey: browserSafePreviewText(decision.targetKey),
       ...(decision.toolCallId ? { toolCallId: browserSafePreviewText(decision.toolCallId) } : {}),
+    })),
+    errors: run.errors.map((error) => ({
+      eventId: browserSafePreviewText(error.eventId),
+      seq: error.seq,
+      type: error.type,
+      ...(error.message ? { message: browserSafePreviewText(error.message) } : {}),
     })),
   }
 }

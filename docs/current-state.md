@@ -30,7 +30,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - RunLog `RunIntent` / `RunRecord` now carry opaque provider credential refs such as `env:...` or `managed:...`; provider calls receive only parsed refs plus an in-process host secret resolver.
 - Console-facing RunLog projection:
   - `LocalMainspringGateway.snapshot()` can include an optional sanitized RunLog read model for runs known to gateway app-state metadata.
-  - `gatewaySnapshotToConsoleState()` projects RunLog runs, pending approvals, tool calls, and policy decision summaries without exposing raw private event fields.
+  - `gatewaySnapshotToConsoleState()` projects RunLog runs, pending approvals, tool calls, checkpoint summaries, policy decision summaries, and error summaries without exposing raw private event fields.
   - The React console data-source summary and dashboard projection count RunLog active runs and pending approvals beside legacy compatibility runs.
 - Package subpaths now expose `mainspring/core`, `mainspring/adapters`, `mainspring/adapters/sqlite`, `mainspring/adapters/local-blob`, `mainspring/capabilities`, `mainspring/hosts/runlog`, and `mainspring/compat`.
 - `docs/migration-runlog.md` records the legacy mailbox/`RuntimeKernel` retirement map and `pnpm runlog:migration:check` keeps that map tied to existing source files, package exports, and release checks.

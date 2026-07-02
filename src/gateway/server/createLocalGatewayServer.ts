@@ -1358,9 +1358,11 @@ function runLogProjectionResponse(projection: RunLogRunProjection) {
     pendingApprovals: projection.pendingApprovals,
     approvalDecisions: projection.approvalDecisions,
     toolCalls: projection.toolCalls,
+    checkpoints: projection.checkpoints,
     policyDecisions: projection.policyDecisions,
     artifacts: projection.artifacts,
     usage: projection.usage,
+    errors: projection.errors,
     latestSeq: projection.latestSeq,
     events: projection.events.map(runLogEventPublic),
   }

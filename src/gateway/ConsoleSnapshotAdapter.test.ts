@@ -519,6 +519,13 @@ const sourceSnapshot: LocalGatewaySnapshot = {
             status: 'requested',
           },
         ],
+        checkpoints: [
+          {
+            eventId: 'event_checkpoint_1 filePath=C:\\secret\\checkpoint-event.txt',
+            seq: 7,
+            kind: 'approval artifactPath=C:\\secret\\checkpoint-kind.txt',
+          },
+        ],
         policyDecisions: [
           {
             decisionId: 'dr_runlog_1',
@@ -537,6 +544,14 @@ const sourceSnapshot: LocalGatewaySnapshot = {
             manifestHash: 'hash_manifest',
             policyHash: 'hash_policy',
             createdAt: '2026-06-27T11:06:20.000Z',
+          },
+        ],
+        errors: [
+          {
+            eventId: 'event_error_1 filePath=C:\\secret\\error-event.txt',
+            seq: 8,
+            type: 'runtime.error',
+            message: 'blocked artifactPath=C:\\secret\\runlog-error.log',
           },
         ],
       },
@@ -717,7 +732,9 @@ describe('gatewaySnapshotToConsoleState', () => {
             pendingApprovalCount: 1,
             approvalDecisionCount: 0,
             toolCallCount: 1,
+            checkpointCount: 1,
             policyDecisionCount: 1,
+            errorCount: 1,
             pendingApprovals: [
               {
                 approvalId: 'approval_runlog_1',
@@ -731,6 +748,13 @@ describe('gatewaySnapshotToConsoleState', () => {
                 status: 'requested',
               },
             ],
+            checkpoints: [
+              {
+                eventId: 'event_checkpoint_1 [redacted]',
+                seq: 7,
+                kind: 'approval [redacted]',
+              },
+            ],
             policyDecisions: [
               {
                 decisionId: 'dr_runlog_1',
@@ -738,6 +762,14 @@ describe('gatewaySnapshotToConsoleState', () => {
                 surface: 'file',
                 targetKey: 'file.write [redacted]',
                 toolCallId: 'toolcall_runlog_write [redacted]',
+              },
+            ],
+            errors: [
+              {
+                eventId: 'event_error_1 [redacted]',
+                seq: 8,
+                type: 'runtime.error',
+                message: 'blocked [redacted]',
               },
             ],
           },
@@ -946,6 +978,10 @@ describe('gatewaySnapshotToConsoleState', () => {
       expect(serialized).not.toContain('artifact-kind')
       expect(serialized).not.toContain('artifact-media')
       expect(serialized).not.toContain('tool-name')
+      expect(serialized).not.toContain('checkpoint-event')
+      expect(serialized).not.toContain('checkpoint-kind')
+      expect(serialized).not.toContain('error-event')
+      expect(serialized).not.toContain('runlog-error')
       expect(serialized).not.toContain('audit-category')
       expect(serialized).not.toContain('audit-action')
       expect(serialized).not.toContain('audit-actor')

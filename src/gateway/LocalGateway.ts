@@ -617,7 +617,18 @@ export interface LocalGatewayRunLogRunProjection {
     name?: string
     status: 'requested' | 'completed' | 'failed' | 'blocked'
   }>
+  checkpoints: Array<{
+    eventId: string
+    seq: number
+    kind?: string
+  }>
   policyDecisions: DecisionRecord[]
+  errors: Array<{
+    eventId: string
+    seq: number
+    type: 'runtime.error' | 'run.failed'
+    message?: string
+  }>
 }
 
 function projectSession(session: MainspringSessionRecord): LocalGatewaySessionProjection {
@@ -812,7 +823,18 @@ function projectLocalRunLogRun(projection: RunLogRunProjection): LocalGatewayRun
       ...(call.name ? { name: call.name } : {}),
       status: call.status,
     })),
+    checkpoints: projection.checkpoints.map((checkpoint) => ({
+      eventId: checkpoint.eventId,
+      seq: checkpoint.seq,
+      ...(checkpoint.kind ? { kind: checkpoint.kind } : {}),
+    })),
     policyDecisions: projection.policyDecisions,
+    errors: projection.errors.map((error) => ({
+      eventId: error.eventId,
+      seq: error.seq,
+      type: error.type,
+      ...(error.message ? { message: error.message } : {}),
+    })),
   }
 }
 

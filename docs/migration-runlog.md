@@ -67,6 +67,6 @@ The compatibility path is not a second product architecture. It is the migration
 
 1. Move the remaining compatibility examples that do not need mailbox-only behavior to `createRunLogMainspring`.
 2. Move `openrouter:e2e` to a RunLog-native live-provider path once live-provider projection coverage is equivalent.
-3. Add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the existing sanitized browser DTO boundary.
+3. Add dedicated console run-detail panels for RunLog checkpoints, policy decisions, artifacts, and errors now that sanitized DTO summaries exist.
 4. Add taint labels beyond scan findings for web/email/file-derived memory and skill mutations.
 5. Retire mailbox event projection once SDK/gateway/console no longer need it.

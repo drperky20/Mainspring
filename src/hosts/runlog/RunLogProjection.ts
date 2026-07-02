@@ -6,6 +6,12 @@ export interface RunLogRunProjection {
   events: RunLogEvent[]
   status: RunStatus
   assistantText: string
+  checkpoints: Array<{
+    eventId: string
+    seq: number
+    kind?: string
+    payload: unknown
+  }>
   pendingApprovals: Array<{
     approvalId?: string
     toolCallId?: string
@@ -26,6 +32,13 @@ export interface RunLogRunProjection {
   policyDecisions: DecisionRecord[]
   artifacts: unknown[]
   usage: unknown[]
+  errors: Array<{
+    eventId: string
+    seq: number
+    type: 'runtime.error' | 'run.failed'
+    message?: string
+    payload: unknown
+  }>
   latestSeq: number
 }
 
@@ -48,9 +61,11 @@ export function projectRunLogRun(input: {
   const approvalDecisions: RunLogRunProjection['approvalDecisions'] = []
   const resolvedApprovals = new Set<string>()
   const toolCalls: RunLogRunProjection['toolCalls'] = []
+  const checkpoints: RunLogRunProjection['checkpoints'] = []
   const policyDecisions: DecisionRecord[] = []
   const artifacts: unknown[] = []
   const usage: unknown[] = []
+  const errors: RunLogRunProjection['errors'] = []
 
   for (const event of events) {
     const payload = payloadRecord(event.payload)
@@ -92,8 +107,25 @@ export function projectRunLogRun(input: {
     if (event.type === 'policy.decision.recorded') {
       policyDecisions.push(event.payload as DecisionRecord)
     }
+    if (event.type === 'checkpoint.saved') {
+      checkpoints.push({
+        eventId: event.eventId,
+        seq: event.seq,
+        kind: typeof payload.kind === 'string' ? payload.kind : undefined,
+        payload: event.payload,
+      })
+    }
     if (event.type === 'artifact.created') artifacts.push(event.payload)
     if (event.type === 'usage.reported') usage.push(event.payload)
+    if (event.type === 'runtime.error' || event.type === 'run.failed') {
+      errors.push({
+        eventId: event.eventId,
+        seq: event.seq,
+        type: event.type,
+        message: typeof payload.message === 'string' ? payload.message : undefined,
+        payload: event.payload,
+      })
+    }
   }
 
   return {
@@ -106,9 +138,11 @@ export function projectRunLogRun(input: {
     ),
     approvalDecisions,
     toolCalls,
+    checkpoints,
     policyDecisions,
     artifacts,
     usage,
+    errors,
     latestSeq: events.at(-1)?.seq ?? 0,
   }
 }
