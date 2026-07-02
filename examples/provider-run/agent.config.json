@@ -1,0 +1,9 @@
+{
+  "name": "Provider Run",
+  "runtime": "runlog",
+  "provider": "mock",
+  "model": "mock/runlog-provider",
+  "allowedTools": [],
+  "approvalMode": "manual",
+  "description": "Minimal RunLog-native provider-only example."
+}

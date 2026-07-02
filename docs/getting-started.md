@@ -20,16 +20,16 @@ pnpm verify
 ## Run A Local Example
 
 ```bash
-pnpm example:coding-agent
+pnpm example:provider-run
 ```
 
 Run all examples:
 
 ```bash
-pnpm examples:smoke
+pnpm examples:check
 ```
 
-The examples use the real SDK/runtime path. They are not sandboxes.
+`provider-run` uses the canonical RunLog SDK host and does not require a live provider key. The other examples keep the compatibility SDK host covered while migration continues. The examples do not provide containment; host tool examples inherit the normal local runtime limits.
 
 ## Run The Gateway And Console
 

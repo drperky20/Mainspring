@@ -8040,3 +8040,47 @@ Verification in this slice:
 Next recommended milestone:
 
 - Move examples and README quickstarts from `createMainspring` to `createRunLogMainspring` where gateway compatibility is not required, or add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the existing sanitized browser DTO boundary.
+
+## 2026-07-02 RunLog Provider Example Slice
+
+Goal:
+
+- Give the public quickstart and examples surface a runnable `createRunLogMainspring` front door while preserving compatibility examples that still prove mailbox-only approval/replay behavior.
+
+Changes:
+
+- Added `examples/provider-run`, a provider-only RunLog-native example using `createRunLogMainspring`, `MockProvider`, SQLite RunLog state, and `RunLogProjection`.
+- Added `pnpm example:provider-run`.
+- Added `pnpm examples:check` as the public example check alias.
+- Added the provider-run example to `pnpm examples:smoke` and `pnpm agentic:check`.
+- Updated README minimal SDK example from `createMainspring` to `createRunLogMainspring`.
+- Updated examples/getting-started/operations docs to make `provider-run` the first example and to label the remaining examples as compatibility-host coverage during migration.
+- Updated the RunLog migration map and implementation backlog.
+
+What this proves:
+
+- A source checkout now has a no-key, no-tool, RunLog-native example at the front door.
+- The release gate exercises at least one runnable example through the canonical RunLog SDK host.
+- Compatibility examples remain intentional instead of being mislabeled as fully RunLog-native.
+
+Still honest:
+
+- The coding, personal-assistant, support, agency-client, and local-first examples still use the compatibility SDK host.
+- `openrouter:e2e` still uses the compatibility path until live-provider RunLog coverage is equivalent.
+- The provider-run example is provider-only; it does not prove tool approval, workspace mutation, browser, memory, or skill behavior.
+
+Verification in this slice:
+
+- `pnpm example:provider-run`: passed.
+- `pnpm examples:check`: passed and ran `provider-run` first, followed by the compatibility examples.
+- `pnpm agentic:check`: passed and included `provider-run RunLog example`.
+- `pnpm typecheck`: passed.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 436 tests plus build, security, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end, including gateway systems, examples smoke, agentic harness, desktop systems, optional verifiers, package dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Move the remaining compatibility examples that do not need mailbox-only behavior to `createRunLogMainspring`, or add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the existing sanitized browser DTO boundary.

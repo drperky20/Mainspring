@@ -3,23 +3,24 @@
 Run one example:
 
 ```bash
-pnpm example:coding-agent
+pnpm example:provider-run
 ```
 
 Run all examples:
 
 ```bash
-pnpm examples:smoke
+pnpm examples:check
 ```
 
 ## Inventory
 
 | Example | Purpose |
 | --- | --- |
+| `provider-run` | Minimal RunLog-native provider-only run without tools or paid provider keys. |
 | `coding-agent` | Approval-backed file mutation workflow. |
 | `personal-assistant` | Local note-reading assistant. |
 | `support-agent` | Support workflow over policy and FAQ files. |
 | `agency-client-agent` | Client deliverable workflow. |
 | `local-first-agent` | Local memory workflow. |
 
-Examples use the real SDK/runtime path. They are not sandboxes.
+`provider-run` uses `createRunLogMainspring` and the canonical RunLog path. The other examples currently use the compatibility SDK host to keep approval, replay, and local tool workflows covered while migration continues. The examples do not provide containment; host tool examples inherit the normal local runtime limits.

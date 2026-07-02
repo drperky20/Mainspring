@@ -45,10 +45,10 @@ pnpm install
 pnpm verify
 ```
 
-Run an example that does not need a paid provider key:
+Run the smallest RunLog-native example. It does not need a paid provider key:
 
 ```bash
-pnpm example:coding-agent
+pnpm example:provider-run
 ```
 
 Run the local gateway and console:
@@ -69,29 +69,31 @@ http://127.0.0.1:5173/?mainspringConsoleSource=local-gateway-dev
 ## Minimal SDK Example
 
 ```ts
-import { EchoProvider, createMainspring } from 'mainspring'
+import { EchoProvider, createRunLogMainspring } from 'mainspring'
 
-const mainspring = createMainspring({
-  sessionsRoot: '.mainspring/sessions',
+const mainspring = createRunLogMainspring({
+  rootPath: '.mainspring/runlog',
   workspaceRoot: '.mainspring/workspace',
   provider: new EchoProvider(),
-  pollIntervalMs: 25,
+  agent: {
+    agentId: 'agent_default',
+    instructions: 'Answer briefly and use tools only when allowed.',
+    capabilities: ['provider'],
+  },
 })
 
-await mainspring.start()
-
-const session = mainspring.sessions.create()
-const run = session.runs.start({
+const run = mainspring.runs.start({
   input: 'Summarize the workspace notes and propose next actions.',
-  allowedTools: ['file.read'],
-  mode: 'chat',
+  sessionId: 'local-session',
 })
 
-for await (const event of run.events()) {
-  console.log(event.type, event.payload)
-}
+await run.drainUntilIdle()
 
-await mainspring.stop()
+console.log(run.status())
+console.log(run.result())
+console.log(run.projection().events.map((event) => event.type))
+
+mainspring.close()
 ```
 
 ## Project Layout
@@ -154,6 +156,7 @@ Focused checks:
 
 ```bash
 pnpm gateway:systems:check
+pnpm examples:check
 pnpm examples:smoke
 pnpm package:check
 pnpm desktop:systems:check
