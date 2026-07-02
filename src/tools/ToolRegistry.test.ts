@@ -1522,6 +1522,10 @@ describe('ToolRegistry', () => {
         scope: 'session',
         sessionId: 'session_1',
         tags: ['runtime'],
+        provenance: {
+          status: 'pass',
+          labels: ['runtime-generated'],
+        },
       },
     })
 
@@ -1539,6 +1543,11 @@ describe('ToolRegistry', () => {
             sessionId: 'session_1',
             text: 'Remember the Mainspring native runtime direction.',
             tags: ['runtime'],
+            provenance: {
+              source: 'memory.write',
+              labels: ['runtime-generated'],
+              scanStatus: 'pass',
+            },
           },
         ],
       },
@@ -1608,7 +1617,7 @@ describe('ToolRegistry', () => {
         action: 'updated',
         persisted: true,
         version: '1.1.0',
-        provenance: { status: 'pass' },
+        provenance: { status: 'pass', labels: ['runtime-generated'] },
       },
     })
     expect(
@@ -1618,7 +1627,16 @@ describe('ToolRegistry', () => {
           'utf8',
         ),
       ),
-    ).toMatchObject({ key: 'workspace.summary', version: '1.1.0', source: 'built-in' })
+    ).toMatchObject({
+      key: 'workspace.summary',
+      version: '1.1.0',
+      source: 'built-in',
+      provenance: {
+        source: 'skills.updated',
+        labels: ['runtime-generated'],
+        scanStatus: 'pass',
+      },
+    })
     expect(events.map((event) => event.type)).toEqual([
       'approval.requested',
       'skill.event',

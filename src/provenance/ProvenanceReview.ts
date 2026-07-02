@@ -5,6 +5,8 @@ import {
   SkillManifestSchema,
   createMainspringRuntimeId,
   sanitizeRuntimeResponse,
+  type ProvenanceTaintLabel,
+  type ProvenanceTrustMetadata,
   type SkillManifest,
 } from '#protocol'
 import { assertPathContained } from '#protocol/node'
@@ -29,6 +31,15 @@ export interface ProvenanceScanResult {
   contentHash: string
   status: ProvenanceScanStatus
   findings: ProvenanceFinding[]
+}
+
+export interface ProvenanceTrustInput {
+  source: string
+  scan: ProvenanceScanResult
+  reviewed?: boolean
+  reviewId?: string
+  mutationKind?: ProvenanceMutationKind
+  manifest?: SkillManifest
 }
 
 export interface StagedMemoryMutation {
@@ -313,6 +324,64 @@ export function scanTemplateCatalogEntry(input: {
   return scanResult({ kind: 'template', input }, findings)
 }
 
+function addTaintLabel(labels: Set<ProvenanceTaintLabel>, label: ProvenanceTaintLabel): void {
+  labels.add(label)
+}
+
+export function deriveProvenanceTrustMetadata(
+  input: ProvenanceTrustInput,
+): ProvenanceTrustMetadata {
+  const labels = new Set<ProvenanceTaintLabel>()
+  const source = input.source.trim() || 'runtime'
+  const reviewed = input.reviewed === true
+
+  if (reviewed) addTaintLabel(labels, 'operator-reviewed')
+  if (input.scan.status === 'pass' && !reviewed) addTaintLabel(labels, 'runtime-generated')
+  if (input.scan.status === 'review') addTaintLabel(labels, 'untrusted-input')
+  if (source.includes('template') || source.includes('built-in')) addTaintLabel(labels, 'trusted-local')
+  if (input.manifest?.source && input.manifest.source !== 'built-in') {
+    addTaintLabel(labels, 'third-party')
+  }
+
+  for (const finding of input.scan.findings) {
+    if (finding.ruleId === 'third-party-skill-source') addTaintLabel(labels, 'third-party')
+    if (
+      finding.ruleId === 'skill-shell-permission' ||
+      finding.ruleId === 'skill-open-network' ||
+      finding.ruleId === 'skill-computer-write' ||
+      finding.ruleId === 'template-shell-tool' ||
+      finding.ruleId === 'template-memory-write'
+    ) {
+      addTaintLabel(labels, 'high-capability')
+    }
+    if (finding.ruleId === 'prompt-injection-directive') {
+      addTaintLabel(labels, 'prompt-injection-suspect')
+    }
+    if (finding.ruleId === 'secret-or-env-access' || finding.ruleId === 'raw-secret-material') {
+      addTaintLabel(labels, 'secret-reference')
+    }
+    if (finding.ruleId === 'policy-mutation-language') {
+      addTaintLabel(labels, 'policy-mutation-suspect')
+    }
+    if (finding.ruleId === 'remote-exec-pipe') {
+      addTaintLabel(labels, 'remote-code-suspect')
+    }
+  }
+
+  if (labels.size === 0) addTaintLabel(labels, 'runtime-generated')
+
+  return {
+    source,
+    labels: [...labels].sort(),
+    scannerVersion: input.scan.scannerVersion,
+    contentHash: input.scan.contentHash,
+    scanStatus: input.scan.status,
+    findings: input.scan.findings.map((finding) => finding.ruleId),
+    ...(reviewed ? { reviewed: true } : {}),
+    ...(input.reviewId ? { reviewId: input.reviewId } : {}),
+  }
+}
+
 function reviewFilePath(workspaceRoot: string): string {
   const resolvedWorkspaceRoot = fs.realpathSync.native(workspaceRoot)
   return assertPathContained(
@@ -451,7 +520,16 @@ export function applyApprovedMemoryReview(input: {
     text: item.mutation.text,
     scope: item.mutation.scope,
     tags: item.mutation.tags,
-    ...(item.mutation.metadata ? { metadata: item.mutation.metadata } : {}),
+    metadata: {
+      ...(item.mutation.metadata ?? {}),
+      provenance: deriveProvenanceTrustMetadata({
+        source: item.source,
+        scan: item.scan,
+        reviewed: true,
+        reviewId: item.reviewId,
+        mutationKind: 'memory',
+      }),
+    },
   })
   queue.decide({
     reviewId: input.reviewId,
@@ -474,8 +552,19 @@ export function applyApprovedSkillReview(input: {
   if (item.mutation.kind !== 'skill') throw new Error('Provenance review item is not a skill mutation.')
   assertScanCanProceed(item.scan)
   const filePath = skillManifestPath(input.workspaceRoot, item.mutation.manifest.key)
+  const manifest: SkillManifest = {
+    ...item.mutation.manifest,
+    provenance: deriveProvenanceTrustMetadata({
+      source: item.source,
+      scan: item.scan,
+      reviewed: true,
+      reviewId: item.reviewId,
+      mutationKind: 'skill',
+      manifest: item.mutation.manifest,
+    }),
+  }
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  fs.writeFileSync(filePath, `${JSON.stringify(item.mutation.manifest, null, 2)}\n`, 'utf8')
+  fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
   queue.decide({
     reviewId: input.reviewId,
     decision: 'applied',

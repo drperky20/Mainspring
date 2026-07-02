@@ -10,6 +10,7 @@ import { assertPathContained } from '#protocol/node'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
 import {
   assertScanCanProceed,
+  deriveProvenanceTrustMetadata,
   scanSkillManifest,
   stageProvenanceReview,
 } from '../provenance/ProvenanceReview.js'
@@ -49,6 +50,26 @@ function skillManifestPath(workspaceRoot: string, skillKey: string): string {
 function readExistingManifest(filePath: string): SkillManifest | null {
   if (!fs.existsSync(filePath)) return null
   return SkillManifestSchema.parse(JSON.parse(fs.readFileSync(filePath, 'utf8')))
+}
+
+function manifestWithProvenance(input: {
+  manifest: SkillManifest
+  source: string
+  scan: ReturnType<typeof scanSkillManifest>
+  reviewed?: boolean
+  reviewId?: string
+}): SkillManifest {
+  return {
+    ...input.manifest,
+    provenance: deriveProvenanceTrustMetadata({
+      source: input.source,
+      scan: input.scan,
+      reviewed: input.reviewed,
+      reviewId: input.reviewId,
+      mutationKind: 'skill',
+      manifest: input.manifest,
+    }),
+  }
 }
 
 function persistManifest(input: {
@@ -102,8 +123,13 @@ function persistManifest(input: {
   }
   const filePath = skillManifestPath(input.workspaceRoot, input.manifest.key)
   const previous = readExistingManifest(filePath)
+  const manifest = manifestWithProvenance({
+    manifest: input.manifest,
+    source: `skills.${input.action}`,
+    scan,
+  })
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  fs.writeFileSync(filePath, `${JSON.stringify(input.manifest, null, 2)}\n`, 'utf8')
+  fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
   input.emitEvent({
     type: 'skill.event',
     runId: input.runId,
@@ -115,6 +141,7 @@ function persistManifest(input: {
       previousVersion: previous?.version,
       scanStatus: scan.status,
       contentHash: scan.contentHash,
+      taintLabels: manifest.provenance?.labels,
     },
   })
   return sanitizeRuntimeResponse({
@@ -127,6 +154,7 @@ function persistManifest(input: {
     provenance: {
       status: scan.status,
       contentHash: scan.contentHash,
+      labels: manifest.provenance?.labels,
     },
   })
 }

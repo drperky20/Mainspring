@@ -8582,3 +8582,42 @@ Verification in this slice:
 Next recommended milestone:
 
 - Add taint labels for memory and skill mutations, or continue RunLog child-run/subagent attenuation.
+
+## 2026-07-02 Memory And Skill Taint Metadata Slice
+
+Goal:
+
+- Close the backlog gap where provenance scanning existed but persisted memory and skill records did not carry durable trust/taint semantics for later policy and context assembly.
+
+Changes:
+
+- Added typed provenance taint metadata and labels to the protocol surface.
+- Added `deriveProvenanceTrustMetadata` in the provenance module.
+- Persisted provenance/taint metadata on direct `memory.write` records and approved staged memory applies.
+- Projected memory provenance through `memory.read` results.
+- Persisted provenance/taint metadata on direct skill manifest writes and approved staged skill applies.
+- Updated docs/current-state, skills-security, security truth, red-team matrix, migration notes, and backlog status.
+
+What this proves:
+
+- Memory records and skill manifests can now preserve durable labels such as `runtime-generated`, `operator-reviewed`, `third-party`, `untrusted-input`, and high-risk finding-derived labels.
+- Future context assembly and policy prompts have a concrete metadata field to reason about trusted, reviewed, and suspicious persisted behavior inputs.
+
+Still honest:
+
+- Taint metadata is advisory context, not proof that content is safe.
+- This does not implement remote marketplace trust, signing, hosted reputation, or context filtering based on taint labels.
+- Host shell execution remains unsafe host execution even when a skill or memory item has been reviewed.
+
+Verification in this slice:
+
+- `pnpm exec vitest run src/provenance/ProvenanceReview.test.ts src/memory/MemoryStore.test.ts src/tools/ToolRegistry.test.ts`: passed, 3 files / 34 tests.
+- `pnpm typecheck`: passed.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 439 tests plus build, security, sensitive-patterns, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end, including verify, security truth, skill provenance, RunLog migration, gateway systems, gateway help, examples smoke, agentic harness, desktop systems, release workflow, optional verifiers, package surface, package dry-runs, npm dry-run, and Docker Compose config.
+
+Next recommended milestone:
+
+- Use persisted taint labels in RunLog context assembly, or continue RunLog child-run/subagent attenuation.

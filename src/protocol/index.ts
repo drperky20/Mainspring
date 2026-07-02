@@ -1795,6 +1795,33 @@ export const CapabilityApprovalSchema = z.object({
   dangerousPatterns: z.array(z.string()).optional(),
 })
 
+export const ProvenanceTaintLabelSchema = z.enum([
+  'trusted-local',
+  'runtime-generated',
+  'operator-reviewed',
+  'third-party',
+  'untrusted-input',
+  'high-capability',
+  'prompt-injection-suspect',
+  'secret-reference',
+  'policy-mutation-suspect',
+  'remote-code-suspect',
+])
+
+export const ProvenanceTrustMetadataSchema = z.object({
+  source: z.string().min(1),
+  labels: z.array(ProvenanceTaintLabelSchema),
+  scannerVersion: z.number().int().positive(),
+  contentHash: z.string().min(1),
+  scanStatus: z.enum(['pass', 'review', 'block']),
+  findings: z.array(z.string()),
+  reviewed: z.boolean().optional(),
+  reviewId: z.string().optional(),
+})
+
+export type ProvenanceTaintLabel = z.infer<typeof ProvenanceTaintLabelSchema>
+export type ProvenanceTrustMetadata = z.infer<typeof ProvenanceTrustMetadataSchema>
+
 export const SkillManifestSchema = z.object({
   key: z.string().min(1),
   name: z.string().min(1),
@@ -1805,6 +1832,7 @@ export const SkillManifestSchema = z.object({
   instructionsPath: z.string().optional(),
   permissions: CapabilityManifestPermissionsSchema,
   approval: CapabilityApprovalSchema,
+  provenance: ProvenanceTrustMetadataSchema.optional(),
 })
 
 export type SkillManifest = z.infer<typeof SkillManifestSchema>

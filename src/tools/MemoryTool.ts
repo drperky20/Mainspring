@@ -2,6 +2,7 @@ import { sanitizeRuntimeResponse } from '#protocol'
 import { MemoryProvider } from '../memory/MemoryProvider.js'
 import {
   assertScanCanProceed,
+  deriveProvenanceTrustMetadata,
   scanMemoryMutation,
   stageProvenanceReview,
 } from '../provenance/ProvenanceReview.js'
@@ -19,6 +20,15 @@ function inputTags(value: unknown): string[] {
 
 function inputScope(value: unknown): 'workspace' | 'session' {
   return value === 'session' ? 'session' : 'workspace'
+}
+
+function memoryProvenance(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const provenance = metadata?.provenance
+  return provenance && typeof provenance === 'object' && !Array.isArray(provenance)
+    ? (provenance as Record<string, unknown>)
+    : undefined
 }
 
 export function createMemoryReadTool(): RuntimeTool {
@@ -56,6 +66,7 @@ export function createMemoryReadTool(): RuntimeTool {
           text: entry.text,
           tags: entry.tags,
           createdAt: entry.createdAt,
+          ...(memoryProvenance(entry.metadata) ? { provenance: memoryProvenance(entry.metadata) } : {}),
         })),
       })
     },
@@ -128,14 +139,14 @@ export function createMemoryWriteTool(): RuntimeTool {
         tags,
         metadata: {
           ...(metadata ?? {}),
-          provenance: {
-            scannerVersion: scan.scannerVersion,
-            contentHash: scan.contentHash,
-            status: scan.status,
-            findings: scan.findings.map((finding) => finding.ruleId),
-          },
+          provenance: deriveProvenanceTrustMetadata({
+            source: 'memory.write',
+            scan,
+            mutationKind: 'memory',
+          }),
         },
       })
+      const provenance = memoryProvenance(entry.metadata)
       return sanitizeRuntimeResponse({
         id: entry.entryId,
         stored: true,
@@ -145,6 +156,10 @@ export function createMemoryWriteTool(): RuntimeTool {
         provenance: {
           status: scan.status,
           contentHash: scan.contentHash,
+          labels:
+            provenance && 'labels' in provenance
+              ? (provenance as { labels?: unknown }).labels
+              : undefined,
         },
       })
     },

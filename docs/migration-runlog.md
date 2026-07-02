@@ -65,6 +65,6 @@ The compatibility path is not a second product architecture. It is the migration
 
 ## Next Canonicalization Slices
 
-1. Add taint labels beyond scan findings for web/email/file-derived memory and skill mutations.
+1. Use persisted memory/skill taint labels in context assembly and policy prompts.
 2. Add checkpoint replay/retry controls only after RunLog replay semantics are code-backed.
 3. Retire mailbox event projection once SDK/gateway/console no longer need it.

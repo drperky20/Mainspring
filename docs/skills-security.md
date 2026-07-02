@@ -9,17 +9,34 @@ Mainspring treats memory, skills, and local templates as behavior-changing input
   - `block` findings fail before writing.
   - `review` findings are staged in `.mainspring/provenance-review.jsonl`.
   - explicit `reviewMode: "stage"` stages even clean memory.
-  - clean approved writes still persist through the existing memory store and include provenance metadata.
+  - clean approved writes still persist through the existing memory store and include provenance/taint metadata.
+  - `memory.read` returns persisted provenance metadata so context loaders and operators can distinguish runtime-generated, reviewed, and suspicious material.
 - `skills.install` and `skills.update` scan manifests before persistence.
   - remote or uploaded skill sources stage by default.
   - shell, open network, and computer-write permissions require review.
   - block-level findings fail before writing a manifest.
+  - persisted manifests include typed provenance/taint metadata.
 - Approved staged memory and skill mutations can be applied through exported helpers:
   - `createProvenanceReviewQueue`
   - `applyApprovedMemoryReview`
   - `applyApprovedSkillReview`
 - Local example templates are scanned by `pnpm skills:check`.
 - `pnpm verify` and `pnpm release:check` run `pnpm skills:check`.
+
+## Taint Metadata
+
+Persisted memory records and skill manifests use a common provenance metadata shape:
+
+- `source`
+- `labels`
+- `scannerVersion`
+- `contentHash`
+- `scanStatus`
+- `findings`
+- `reviewed`
+- `reviewId`
+
+Current labels include `runtime-generated`, `operator-reviewed`, `trusted-local`, `third-party`, `untrusted-input`, `high-capability`, `prompt-injection-suspect`, `secret-reference`, `policy-mutation-suspect`, and `remote-code-suspect`.
 
 ## Scanner Rules
 
@@ -41,7 +58,8 @@ Warnings route to review. Block findings fail closed.
 - It does not prove that a reviewed skill is harmless.
 - It does not run third-party code analysis beyond deterministic text and manifest checks.
 - It does not add hosted identity, reputation, signing, or paid marketplace trust.
-- Host shell execution remains unsafe host execution even when a skill or template is reviewed.
+- Taint metadata is advisory context for policy and context assembly; it is not proof that content is safe.
+- Host shell execution remains unsafe host execution even when a skill, memory item, or template is reviewed.
 
 ## Maintainer Commands
 

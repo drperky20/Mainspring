@@ -132,6 +132,15 @@ describe('provenance review', () => {
         sessionId: 'session_1',
         text: 'Remember: operator-approved notes only.',
         tags: ['ops'],
+        metadata: {
+          provenance: {
+            source: 'runtime',
+            labels: ['operator-reviewed'],
+            scanStatus: 'pass',
+            reviewed: true,
+            reviewId: staged.reviewId,
+          },
+        },
       },
     ])
     expect(createProvenanceReviewQueue(root).get(staged.reviewId)?.status).toBe('applied')
@@ -200,7 +209,17 @@ describe('provenance review', () => {
           'utf8',
         ),
       ),
-    ).toMatchObject({ key: 'workspace.summary', version: '2.0.0' })
+    ).toMatchObject({
+      key: 'workspace.summary',
+      version: '2.0.0',
+      provenance: {
+        source: 'runtime',
+        labels: ['operator-reviewed', 'third-party', 'untrusted-input'],
+        scanStatus: 'review',
+        reviewed: true,
+        reviewId: staged.reviewId,
+      },
+    })
 
     const rejected = stageProvenanceReview({
       workspaceRoot: root,
