@@ -38,6 +38,29 @@ console.log(run.projection().events.map((event) => event.type))
 mainspring.close()
 ```
 
+For live providers, pass opaque credential refs into runs and provide a host-side
+resolver. Store refs in RunLog, not raw secret values:
+
+```ts
+const mainspring = createRunLogMainspring({
+  rootPath: '.mainspring',
+  provider: openRouterProvider,
+  secretResolver: (ref) =>
+    ref.kind === 'managed' ? localSecretStore.get(ref.key) : process.env[ref.key],
+  agent: {
+    agentId: 'agent_default',
+    instructions: 'Answer briefly.',
+    providerId: 'openrouter',
+    capabilities: ['provider'],
+  },
+})
+
+const run = mainspring.runs.start({
+  input: 'Use the configured provider.',
+  credentialRef: 'managed:provider_profile_default',
+})
+```
+
 Approval-required tools surface through the same projection:
 
 ```ts

@@ -254,6 +254,7 @@ export interface LocalGatewayRunProjection {
 
 export type LocalGatewayStartRunInput = StartRunInput & {
   sessionId: string
+  providerProfileId?: string
   allowBudgetWarning?: boolean
 }
 
@@ -1054,32 +1055,39 @@ export class LocalMainspringGateway {
     runs: {
       start: async (input: LocalGatewayStartRunInput): Promise<LocalGatewayRunLogStartResult> => {
         const runtime = this.requireRunLogRuntime()
-        const session = this.runtime.storage.stateStore.getSession(input.sessionId)
-        if (!session) throw new Error(`Unknown session: ${input.sessionId}`)
-        const budgetEvaluations = this.assertRunBudgetAllowed(input, session)
-        const agentId = input.agentId ?? runtime.defaultAgentId
-        this.ensureRunLogAgent(input, agentId)
-        const workspaceRoot = input.workspaceId
-          ? this.appState?.workspaces.get(input.workspaceId)?.root
+        const resolvedInput = input.providerProfileId ? this.resolveAppStateRunInput(input) : input
+        const session = this.runtime.storage.stateStore.getSession(resolvedInput.sessionId)
+        if (!session) throw new Error(`Unknown session: ${resolvedInput.sessionId}`)
+        const budgetEvaluations = this.assertRunBudgetAllowed(resolvedInput, session)
+        const agentId = resolvedInput.agentId ?? runtime.defaultAgentId
+        this.ensureRunLogAgent(resolvedInput, agentId)
+        const workspaceRoot = resolvedInput.workspaceId
+          ? this.appState?.workspaces.get(resolvedInput.workspaceId)?.root
           : session.workspaceRoot
         const handle = runtime.runs.start({
           agentId,
-          input: input.input,
-          sessionId: input.sessionId,
-          workspaceId: input.workspaceId,
+          input: resolvedInput.input,
+          sessionId: resolvedInput.sessionId,
+          workspaceId: resolvedInput.workspaceId,
           ...(workspaceRoot ? { workspaceRoot } : {}),
-          providerId: input.providerId,
-          modelId: input.modelId,
-          allowedTools: input.allowedTools ?? [],
-          requestedCapabilities: runLogCapabilitiesFromGatewayInput(input),
+          providerId: resolvedInput.providerId,
+          modelId: resolvedInput.modelId,
+          credentialRef: resolvedInput.credentialRef,
+          allowedTools: resolvedInput.allowedTools ?? [],
+          requestedCapabilities: runLogCapabilitiesFromGatewayInput(resolvedInput),
           metadata: {
             gatewaySurface: 'runlog',
-            ...(input.computerId ? { computerId: input.computerId } : {}),
-            ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+            ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
+            ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
+            ...(resolvedInput.runtimeProfile ? { runtimeProfile: resolvedInput.runtimeProfile } : {}),
           },
         })
         await handle.drainUntilIdle()
-        this.persistRunLogMetadata(handle.record, input, budgetEvaluations)
+        this.persistRunLogMetadata(
+          handle.record,
+          { ...resolvedInput, ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}) },
+          budgetEvaluations,
+        )
         this.appState?.auditEvents.create({
           category: 'gateway',
           action: 'runlog.run.enqueued',
@@ -1087,7 +1095,7 @@ export class LocalMainspringGateway {
           targetType: 'run',
           targetId: handle.record.runId,
           runId: handle.record.runId,
-          sessionId: input.sessionId,
+          sessionId: resolvedInput.sessionId,
         })
         return { run: runtime.store.getRun(handle.record.runId) ?? handle.record, projection: handle.projection() }
       },
@@ -1162,10 +1170,12 @@ export class LocalMainspringGateway {
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       ...(input.agentId ? { agentId: input.agentId } : {}),
       ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
       ...(input.modelId ? { modelId: input.modelId } : {}),
       ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
       metadata: {
         runtime: 'runlog',
+        ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
         ...(budgetEvaluations.length > 0
           ? { budgetEvaluationIds: budgetEvaluations.map((evaluation) => evaluation.budgetId) }
           : {}),

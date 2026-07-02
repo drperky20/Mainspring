@@ -16,7 +16,7 @@ MAINSPRING_CREDENTIAL_REF=env:OPENROUTER_API_KEY
 OPENROUTER_API_KEY=...
 ```
 
-In `local-gateway-dev`, a browser can submit a provider secret once. The gateway encrypts it in local app-state storage and resolves it host-side during provider query. The browser cannot read the value back.
+In `local-gateway-dev`, a browser can submit a provider secret once. The gateway encrypts it in local app-state storage and resolves it host-side during provider query. The browser cannot read the value back. RunLog-backed gateway starts carry only opaque credential refs such as `managed:provider_profile_...`; the raw value is injected into provider calls through the host resolver and is not appended to RunLog events.
 
 `openrouter:e2e` is an optional live-provider verifier. Missing credentials fail closed with `MAINSPRING_OPENROUTER_E2E_PREREQUISITES_BLOCKED` without echoing key values. With credentials present, it uses the SDK/runtime path and temporary per-session SQLite state rather than a direct provider shortcut.
 

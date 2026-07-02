@@ -7866,3 +7866,38 @@ Verification in this slice:
 Next recommended milestone:
 
 - Move gateway cron scheduling to RunLog cron grants, or add RunLog provider secret resolution for managed/non-env provider profile secrets.
+
+## 2026-07-02 RunLog Provider Secret Resolution Slice
+
+Goal:
+
+- Give RunLog-backed gateway starts parity with the compatibility runtime for provider profile secrets: browser-created managed provider secrets remain write-only, while provider calls receive only opaque credential refs plus host-side resolver access.
+
+Changes:
+
+- Added `credentialRef` to RunLog `RunIntent` / `RunRecord` and persisted it in the SQLite RunLog `runs.credential_ref` column with an idempotent existing-store migration.
+- Updated `RunLogExecutor` to parse credential refs into `QueryInput.credentialRef` and attach the configured in-process `secretResolver` only for provider calls.
+- Added `secretResolver` to `createRunLogMainspring` options and wired the local gateway dev RunLog host to the gateway app-state secret resolver.
+- Fixed RunLog-backed gateway default starts so `providerProfileId` resolves through app-state before creating the `RunIntent`, preserving workspace, agent, provider id, model id, and managed credential ref behavior.
+- Added focused kernel and HTTP gateway tests proving managed refs resolve in-process and raw secret values do not appear in RunLog events, HTTP responses, snapshots, or files.
+- Updated current-state, SDK, local-gateway, secrets/providers, migration, and backlog docs with the new credential-ref truth.
+
+What this proves:
+
+- RunLog provider calls can use managed provider profile secrets without storing raw values in RunLog.
+- The default `/runs/start` RunLog path no longer loses provider-profile routing data.
+- Browser-facing gateway responses still omit `secretRef` and raw provider key material.
+
+Verification in this slice:
+
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run src/core/RunLogKernel.test.ts src/gateway/server/createLocalGatewayServer.test.ts`: passed, 2 files / 30 tests.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm runlog:migration:check`: passed with `MAINSPRING_RUNLOG_MIGRATION_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 426 tests plus build, security, skill provenance, RunLog migration, docs, and console checks.
+- `pnpm release:check`: passed end to end, including gateway systems, compiled `gateway:dev:help`, examples smoke, agentic harness, desktop systems, optional verifiers, package surface, package/npm dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Move gateway cron scheduling to RunLog cron grants.

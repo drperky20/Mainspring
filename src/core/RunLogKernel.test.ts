@@ -7,6 +7,7 @@ import { SqliteRunLogStore } from '../adapters/sqlite/SqliteRunLogStore.js'
 import { createRunLogCronGrant } from '../capabilities/cron/RunLogCron.js'
 import { LocalWorkspaceAdapter } from '../capabilities/workspace/LocalWorkspaceAdapter.js'
 import type { QueryInput } from '../providers/types.js'
+import type { AgentProvider, AgentQuery } from '../providers/types.js'
 import { MockProvider } from '../providers/MockProvider.js'
 import { builtinManifest, type RuntimeTool } from '../tools/ToolRegistry.js'
 import { projectRunLogRun } from '../hosts/runlog/RunLogProjection.js'
@@ -73,6 +74,32 @@ function guardedShellTool(executions: { count: number }): RuntimeTool {
       executions.count += 1
       return { ok: true, input, executions: executions.count }
     },
+  }
+}
+
+class CredentialRecordingProvider implements AgentProvider {
+  readonly credentialRefs: Array<QueryInput['credentialRef']> = []
+  readonly resolvedCredentials: Array<string | undefined> = []
+
+  query(input: QueryInput): AgentQuery {
+    this.credentialRefs.push(input.credentialRef)
+    this.resolvedCredentials.push(
+      input.credentialRef ? input.resolveCredential?.(input.credentialRef) : undefined,
+    )
+    return {
+      push() {},
+      end() {},
+      abort() {},
+      events: (async function* () {
+        yield {
+          type: 'init' as const,
+          provider: input.providerId,
+          providerSessionId: 'provider_credential_ref_check',
+          modelId: input.model,
+        }
+        yield { type: 'result' as const, text: 'credential resolved' }
+      })(),
+    }
   }
 }
 
@@ -158,6 +185,42 @@ describe('RunLogKernel', () => {
         'run.completed',
       ]),
     )
+  })
+
+  it('passes credential refs and in-process secret resolution to provider queries without event leakage', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const provider = new CredentialRecordingProvider()
+    const secretValue = 'sk-runlog-managed-secret-value'
+    const kernel = new RunLogKernel({
+      store,
+      providerRouter: new SingleProviderRouter(provider),
+      secretResolver: (ref) =>
+        ref.kind === 'managed' && ref.key === 'profile_1' ? secretValue : undefined,
+    })
+
+    kernel.putAgent({
+      agentId: 'agent_provider_secret',
+      instructions: 'Use the configured provider.',
+      providerId: 'mock',
+      capabilities: ['provider'],
+    })
+    const run = kernel.startRun({
+      agentId: 'agent_provider_secret',
+      input: 'Resolve credential ref.',
+      sessionId: 'session_secret',
+      credentialRef: 'managed:profile_1',
+    })
+
+    await kernel.drainUntilIdle()
+    const persisted = store.getRun(run.runId)
+    const serializedEvents = JSON.stringify(store.listEvents({ runId: run.runId }))
+
+    expect(provider.credentialRefs).toEqual([{ kind: 'managed', key: 'profile_1' }])
+    expect(provider.resolvedCredentials).toEqual([secretValue])
+    expect(persisted?.credentialRef).toBe('managed:profile_1')
+    expect(serializedEvents).not.toContain(secretValue)
+    expect(projectRunLogRun({ store, runId: run.runId }).assistantText).toBe('credential resolved')
   })
 
   it('executes provider-requested tools through ToolRegistry and checkpoints the boundary', async () => {

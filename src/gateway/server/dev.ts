@@ -162,6 +162,10 @@ async function main(): Promise<void> {
       capabilities: ['provider'],
     },
     approvalReceiptKey: process.env.MAINSPRING_RUNLOG_APPROVAL_KEY,
+    secretResolver: (ref) =>
+      ref.kind === 'env'
+        ? process.env[ref.key]
+        : appState.resolveSecretRef(`${ref.kind}:${ref.key}`) ?? undefined,
     workerId: 'gateway-dev',
   })
   await runtime.start()

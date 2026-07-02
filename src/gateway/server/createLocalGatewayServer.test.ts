@@ -263,6 +263,121 @@ describe('LocalGatewayHttpServer', () => {
     }
   }, 60_000)
 
+  it('resolves managed provider profile secrets for RunLog-backed default HTTP starts without response leakage', async () => {
+    const root = makeTempRoot('mainspring-gateway-server-runlog-secret-http-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const provider = new ManagedSecretRecordingProvider()
+    const managedSecretValue = 'sk-runlog-managed-secret-http-value'
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider,
+      secretResolver: (ref) => appState.resolveSecretRef(`${ref.kind}:${ref.key}`) ?? undefined,
+      pollIntervalMs: 10,
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider,
+      defaultProviderId: 'default',
+      agent: {
+        agentId: 'gateway-runlog-secret-agent',
+        instructions: 'Resolve managed provider profile credentials through RunLog.',
+        providerId: 'default',
+        capabilities: ['provider'],
+      },
+      secretResolver: (ref) => appState.resolveSecretRef(`${ref.kind}:${ref.key}`) ?? undefined,
+      approvalReceiptKey: 'gateway-runlog-managed-secret-test-key',
+    })
+    const gateway = createLocalMainspringGateway({
+      runtime: mainspring,
+      runLog,
+      appState,
+      cells: testCellBackendOptions(),
+    })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    await mainspring.start()
+    try {
+      const started = await server.start()
+      const createdClient = await fetch(`${started.url}/clients`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'RunLog Secret HTTP Client',
+          workspaceName: 'RunLog Secret HTTP Workspace',
+          workspaceRoot,
+        }),
+      }).then((response) => response.json())
+      const sessionId = createdClient.session.sessionId as string
+      const workspaceId = createdClient.workspace.workspaceId as string
+
+      const createdProfile = await fetch(`${started.url}/provider-profiles`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          providerId: 'default',
+          label: 'RunLog HTTP Managed Secret',
+          defaultModelId: 'runlog-managed-secret-http-model',
+          secretValue: managedSecretValue,
+        }),
+      }).then((response) => response.json())
+      const providerProfileId = createdProfile.providerProfile.profileId as string
+
+      const startedRun = await fetch(`${started.url}/runs/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          workspaceId,
+          providerProfileId,
+          input: 'Resolve the RunLog managed provider credential.',
+          mode: 'chat',
+          allowedTools: [],
+        }),
+      }).then((response) => response.json())
+      const runId = startedRun.run.runId as string
+
+      const runLogProjection = await waitFor(async () => {
+        const snapshot = await fetch(`${started.url}/snapshot`).then((response) => response.json())
+        return snapshot.runLog?.runs?.find(
+          (run: { runId: string; status: string }) =>
+            run.runId === runId && run.status === 'completed',
+        )
+      }, 'RunLog HTTP managed secret run completion')
+      const runLogEvents = await fetch(
+        `${started.url}/runlog/runs/${encodeURIComponent(runId)}/events?limit=100`,
+      ).then((response) => response.json())
+      const snapshot = await fetch(`${started.url}/snapshot`).then((response) => response.json())
+      const serializedHttp = JSON.stringify({
+        createdClient,
+        createdProfile,
+        startedRun,
+        runLogProjection,
+        runLogEvents,
+        snapshot,
+      })
+
+      expect(provider.resolvedSecrets).toEqual([managedSecretValue])
+      expect(provider.credentialRefs).toEqual([{ kind: 'managed', key: providerProfileId }])
+      expect(runLog.store.getRun(runId)?.credentialRef).toBe(`managed:${providerProfileId}`)
+      expect(runLogEvents.events).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: 'run.completed' })]),
+      )
+      expect(serializedHttp).not.toContain(managedSecretValue)
+      expect(serializedHttp).not.toContain('secretRef')
+      expect(fileContains(root, managedSecretValue)).toBeNull()
+    } finally {
+      await server.stop()
+      runLog.close()
+      appState.close()
+      await mainspring.stop()
+    }
+  }, 60_000)
+
   it('protects hosted routes with bootstrapped auth and revocable sessions', async () => {
     const root = makeTempRoot('mainspring-gateway-server-hosted-auth-')
     const sessionsRoot = path.join(root, 'sessions')

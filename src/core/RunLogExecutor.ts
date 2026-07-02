@@ -1,5 +1,5 @@
 import path from 'node:path'
-import type { RuntimePolicy } from '#protocol'
+import { RuntimeSecretRefSchema, type RuntimePolicy } from '#protocol'
 import type { ProviderEvent, ProviderMessage, QueryInput } from '../providers/types.js'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
 import type { DecisionRecord } from '../policy/DecisionRecord.js'
@@ -52,7 +52,11 @@ function providerQueryInput(input: {
   tools: RuntimeTool[]
   messages?: ProviderMessage[]
   prompt?: string
+  secretResolver?: QueryInput['resolveCredential']
 }): QueryInput {
+  const credentialRef = input.run.credentialRef
+    ? RuntimeSecretRefSchema.parse(input.run.credentialRef)
+    : undefined
   return {
     prompt: input.prompt ?? input.run.input,
     sessionId: input.run.sessionId,
@@ -60,6 +64,8 @@ function providerQueryInput(input: {
     systemPrompt: input.agent.instructions,
     providerId: input.run.providerId ?? input.agent.providerId,
     model: input.run.modelId ?? input.agent.modelId,
+    ...(credentialRef ? { credentialRef } : {}),
+    ...(credentialRef && input.secretResolver ? { resolveCredential: input.secretResolver } : {}),
     messages: input.messages,
     tools: input.tools.map((tool) => ({ manifest: tool.manifest })),
   }
@@ -161,6 +167,7 @@ export class RunLogExecutor {
             agent,
             workspaceRoot: workspaceLease.root,
             tools: selectedTools,
+            secretResolver: this.options.secretResolver,
           }),
         })
         checkpointsAppended += result.checkpointsAppended
@@ -575,6 +582,7 @@ export class RunLogExecutor {
           workspaceRoot: input.workspaceLease.root,
           tools: input.selectedTools,
           prompt: '',
+          secretResolver: this.options.secretResolver,
           messages: providerContinuationMessages({
             run: input.run,
             request,

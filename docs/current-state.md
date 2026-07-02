@@ -27,6 +27,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `/runlog/runs/:runId/events` tails the same projection.
   - `/runlog/approvals/:approvalId/resolve` approves or denies through scoped RunLog receipts and returns the updated projection.
   - `pnpm gateway:dev` now constructs a local RunLog host by default, backed by `.mainspring/runlog/runlog.sqlite` and `.mainspring/runlog/workspaces`.
+  - RunLog `RunIntent` / `RunRecord` now carry opaque provider credential refs such as `env:...` or `managed:...`; provider calls receive only parsed refs plus an in-process host secret resolver.
 - Console-facing RunLog projection:
   - `LocalMainspringGateway.snapshot()` can include an optional sanitized RunLog read model for runs known to gateway app-state metadata.
   - `gatewaySnapshotToConsoleState()` projects RunLog runs, pending approvals, tool calls, and policy decision summaries without exposing raw private event fields.
@@ -73,7 +74,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Not Implemented Yet
 
 - Full replacement of `RuntimeKernel` and per-session mailbox execution with RunLog execution.
-- RunLog provider secret resolution for managed/non-env provider profile secrets. Local dev RunLog provider selection currently uses env-backed live providers only, otherwise EchoProvider.
+- Broader provider-account auth beyond env/local managed refs, such as OAuth provider auth or hosted KMS.
 - Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Memory retrieval adapter connected to RunLog context assembly.

@@ -21,6 +21,7 @@ import {
   type RunLogRunProjection,
 } from '../hosts/runlog/RunLogProjection.js'
 import type { AgentProvider } from '../providers/types.js'
+import type { RuntimeSecretResolver } from '../providers/types.js'
 import { createDefaultRuntimeTools } from '../runtime/defaultTools.js'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
 
@@ -40,6 +41,7 @@ export interface CreateRunLogMainspringOptions {
   tools?: RuntimeTool[]
   policy?: RuntimePolicy
   approvalReceiptKey?: string
+  secretResolver?: RuntimeSecretResolver
   workerId?: string
   leaseMs?: number
   maxToolIterations?: number
@@ -119,6 +121,7 @@ export class RunLogMainspring {
       defaultWorkspaceRoot: workspaceRoot,
       policy: options.policy,
       approvalReceiptKey: options.approvalReceiptKey,
+      secretResolver: options.secretResolver,
       workerId: options.workerId,
       leaseMs: options.leaseMs,
       maxToolIterations: options.maxToolIterations,

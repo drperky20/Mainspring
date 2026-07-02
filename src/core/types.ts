@@ -1,5 +1,5 @@
 import type { ProviderUsage, RuntimePolicy } from '#protocol'
-import type { AgentProvider, QueryInput } from '../providers/types.js'
+import type { AgentProvider, QueryInput, RuntimeSecretResolver } from '../providers/types.js'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
 
 export type RunLogCapability =
@@ -37,6 +37,7 @@ export interface RunIntent {
   requestedCapabilities?: RunLogCapability[]
   providerId?: string
   modelId?: string
+  credentialRef?: string
   systemPrompt?: string
   allowedTools?: string[]
   approvalPolicy?: RuntimePolicy['approvalPolicy']
@@ -64,6 +65,7 @@ export interface RunRecord {
   workspaceRoot?: string
   providerId?: string
   modelId?: string
+  credentialRef?: string
   workerId?: string
   leaseUntil?: string
   metadata?: Record<string, unknown>
@@ -269,6 +271,7 @@ export interface RunExecutorOptions {
   defaultWorkspaceRoot?: string
   policy?: RuntimePolicy
   approvalReceiptKey?: string
+  secretResolver?: RuntimeSecretResolver
   maxToolIterations?: number
 }
 
