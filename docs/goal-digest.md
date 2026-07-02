@@ -7692,3 +7692,40 @@ Next recommended milestone:
 
 - Durable RunLog approval-resume with scoped receipts.
 - Then central policy decision records for all side-effecting surfaces.
+
+## 2026-07-02 RunLog SDK Host Slice
+
+Goal:
+
+- Continue Milestone I by adding a public RunLog-native SDK host without flipping the older mailbox-compatible `createMainspring` factory too early.
+
+Changes:
+
+- Added `src/sdk/RunLogMainspring.ts`.
+- Exported `RunLogMainspring`, `RunLogMainspringRunHandle`, and `createRunLogMainspring` from `src/sdk/index.ts`.
+- Added `src/sdk/RunLogMainspring.test.ts`.
+- Updated `docs/sdk.md` with the RunLog SDK host as the forward path and the older `createMainspring` API as the compatibility host.
+- Updated `docs/migration-runlog.md`, `docs/current-state.md`, and `docs/implementation-backlog.md` to record that direct SDK embedding can now create `RunIntent` records and read `RunLogProjection`.
+- Updated `scripts/check-runlog-migration.mjs`, `scripts/check-package-surface.mjs`, and `src/package-exports.test.ts` so this new surface is guarded.
+
+What this proves:
+
+- Direct SDK embedding can start a provider-only run through `RunIntent`, drain it through `RunLogKernel`, and inspect the result through `RunLogProjection`.
+- Direct SDK embedding can observe a pending RunLog approval, approve it with a scoped receipt, resume the tool through `ToolRegistry`, and complete the run.
+- The gateway, console, and old `createMainspring` factory remain compatibility surfaces until their DTO and streaming tests are migrated.
+
+Verification in this slice:
+
+- `pnpm exec vitest run src/sdk/RunLogMainspring.test.ts`: passed, 1 file / 2 tests.
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run src/sdk/RunLogMainspring.test.ts src/package-exports.test.ts`: passed, 2 files / 8 tests.
+- `pnpm runlog:migration:check`: passed with `MAINSPRING_RUNLOG_MIGRATION_CHECK_OK`.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 421 tests plus build, security, skill provenance, RunLog migration, docs, and console checks.
+- `pnpm release:check`: passed end to end, including `verify`, gateway systems, examples smoke, agentic harness, desktop systems, release workflow, optional verifiers, package surface, package and npm dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Add gateway/API RunLog intake that writes `RunIntent`, tails `RunLogProjection`, and resumes approvals through the public API while preserving existing gateway DTO tests.

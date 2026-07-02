@@ -2,7 +2,10 @@
 
 Last updated: 2026-07-02.
 
-RunLog Fabric is the canonical runtime target. The legacy mailbox and `RuntimeKernel` path still exists for SDK/gateway compatibility and live examples. This map records what can move, what must stay temporarily, and what tests protect each decision.
+RunLog Fabric is the canonical runtime target. A RunLog-backed SDK host now exists for
+new embedded usage. The legacy mailbox and `RuntimeKernel` path still exists for the
+older `createMainspring` SDK/gateway compatibility surface and live examples. This map
+records what can move, what must stay temporarily, and what tests protect each decision.
 
 ## Current Execution Split
 
@@ -46,7 +49,7 @@ The compatibility path is not a second product architecture. It is the migration
 | `src/storage/sqlite/SqliteMainspringStorage.ts` | `createMainspring` state, command, event, artifact stores | `SqliteRunLogStore` plus host read models | Compatibility SDK storage | `src/gateway/AppStateStore.test.ts`, `src/gateway/LocalGateway.test.ts` | Split state/app data from run execution before removal. |
 | `src/events/normalizeRuntimeEvent.ts` | SDK/gateway projections for mailbox rows | `src/hosts/runlog/RunLogProjection.ts` | Compatibility projection | `src/events/normalizeRuntimeEvent.test.ts`, `src/hosts/runlog` tests | Keep only for mailbox row projection; new hosts should consume `RunLogProjection`. |
 | `src/contracts/runtime.ts` run DTOs | SDK, gateway, console client types | `src/core/types.ts` `RunIntent` / `RunLogEvent` and host DTOs | Public compatibility DTOs | `src/package-exports.test.ts`, SDK/gateway tests | Keep DTO shape until public API migration has compatibility tests. |
-| `src/sdk/Mainspring.ts` session/run creation | README examples, gateway dev server, examples, OpenRouter E2E | RunLog-backed SDK host that creates `RunIntent` | Public compatibility host | `src/index.test.ts`, `scripts/check-agentic-harness.mjs`, examples smoke | Move incrementally; preserve factory import and handle shapes while changing backend. |
+| `src/sdk/Mainspring.ts` session/run creation | README examples, gateway dev server, examples, OpenRouter E2E | `src/sdk/RunLogMainspring.ts` creates `RunIntent` and projects `RunLogProjection` | Public compatibility host plus RunLog-native SDK host | `src/index.test.ts`, `src/sdk/RunLogMainspring.test.ts`, `scripts/check-agentic-harness.mjs`, examples smoke | Keep `createMainspring` until gateway/examples move; use `createRunLogMainspring` for new SDK work. |
 | `src/gateway/LocalGateway.ts` session/run APIs | HTTP server, console, gateway tests | RunLog intake plus `RunLogProjection` read model | Mixed gateway/app-state surface | `src/gateway/LocalGateway.test.ts`, `src/gateway/server/createLocalGatewayServer.test.ts` | Migrate run creation, approval, event tail, and cron surfaces before deleting mailbox reads. |
 | `apps/console/src/App.tsx` gateway state | Browser operator UI | Gateway DTOs projected from RunLog host state | Browser client surface | `apps/console/src`, console browser-safety check | Keep browser DTO boundary; do not expose raw RunLog/private fields. |
 | `src/compat/runlog.ts` | Temporary RunLog migration subpath | Direct `mainspring/core`, `mainspring/adapters/sqlite`, `mainspring/hosts/runlog` imports | Temporary compatibility exports | `src/package-exports.test.ts`, `scripts/check-package-surface.mjs` | Remove after consumers use canonical subpaths. |
@@ -62,8 +65,8 @@ The compatibility path is not a second product architecture. It is the migration
 
 ## Next Canonicalization Slices
 
-1. Add RunLog-backed SDK run creation behind the existing `createMainspring` shape.
-2. Add gateway run creation that writes `RunIntent` and tails `RunLogProjection`.
-3. Surface approved-tool continuation through the public API using scoped RunLog receipts.
-4. Move gateway cron scheduling to RunLog cron grants.
+1. Add gateway run creation that writes `RunIntent` and tails `RunLogProjection`.
+2. Surface approved-tool continuation through the gateway/API using scoped RunLog receipts.
+3. Move gateway cron scheduling to RunLog cron grants.
+4. Move examples and README quickstarts from `createMainspring` to `createRunLogMainspring` where gateway compatibility is not required.
 5. Retire mailbox event projection once SDK/gateway/console no longer need it.

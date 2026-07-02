@@ -23,7 +23,7 @@ const expectedExports = {
   './sdk': {
     import: './dist/sdk/index.js',
     types: './dist/sdk/index.d.ts',
-    symbols: ['Mainspring', 'createMainspring'],
+    symbols: ['Mainspring', 'createMainspring', 'RunLogMainspring', 'createRunLogMainspring'],
   },
   './contracts': {
     import: './dist/contracts/index.js',

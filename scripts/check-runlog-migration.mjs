@@ -22,6 +22,7 @@ const requiredFiles = [
   'src/storage/sqlite/SqliteMainspringStorage.ts',
   'src/events/normalizeRuntimeEvent.ts',
   'src/sdk/Mainspring.ts',
+  'src/sdk/RunLogMainspring.ts',
   'src/gateway/LocalGateway.ts',
   'src/compat/runlog.ts',
 ]
@@ -44,6 +45,7 @@ for (const phrase of [
   'SessionRuntimeSupervisor',
   'RuntimeKernel',
   'MainspringMailbox',
+  'RunLogMainspring',
   'Compatibility runtime loop',
   'Compatibility executor',
   'RunLogProjection',

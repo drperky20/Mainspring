@@ -6,6 +6,7 @@ import {
   PROVIDER_INIT_LOG_MESSAGE,
   providerInitDetailFromRunEvent,
 } from './contracts/index.js'
+import { createRunLogMainspring } from './sdk/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -61,6 +62,10 @@ describe('mainspring package exports', () => {
       import: './dist/hosts/runlog/index.js',
       types: './dist/hosts/runlog/index.d.ts',
     })
+  })
+
+  it('exposes the RunLog SDK host from the SDK barrel', () => {
+    expect(typeof createRunLogMainspring).toBe('function')
   })
 
   it('uses package imports for internal protocol and control contracts', () => {
