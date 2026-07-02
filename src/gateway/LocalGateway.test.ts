@@ -6,6 +6,7 @@ import { MainspringMailbox } from '../mailbox/SqliteMailbox.js'
 import { EchoProvider } from '../providers/EchoProvider.js'
 import { MockProvider } from '../providers/MockProvider.js'
 import { createMainspring } from '../sdk/Mainspring.js'
+import { createRunLogMainspring } from '../sdk/RunLogMainspring.js'
 import { executionBackendCapabilities } from '../tools/ExecutionBackend.js'
 import {
   createLocalMainspringGateway,
@@ -3218,6 +3219,148 @@ describe('LocalMainspringGateway', () => {
         lastTickAt: tickNow.toISOString(),
       })
     } finally {
+      appState.close()
+    }
+  })
+
+  it('ticks due cron schedules into RunLog runs when the gateway has a RunLog host', async () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths('mainspring-gateway-cron-runlog-')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'cron ok' } }]),
+    })
+    const tickNow = new Date('2026-06-30T14:00:00.000Z')
+    const gateway = createLocalMainspringGateway({
+      runtime: mainspring,
+      runLog,
+      appState,
+      cron: {
+        enabled: false,
+        now: () => tickNow,
+      },
+    })
+
+    try {
+      const session = mainspring.sessions.create({
+        sessionId: 'cron-runlog-session',
+        workspace: { root: workspaceRoot },
+      })
+      appState.cronSchedules.create({
+        scheduleId: 'schedule_runlog',
+        sessionId: session.record.sessionId,
+        label: 'RunLog due schedule',
+        prompt: 'Run through RunLog.',
+        cronExpr: '0 * * * *',
+        enabled: true,
+        nextRunAt: '2026-06-30T13:00:00.000Z',
+      })
+
+      await gateway.cron.tick()
+      await runLog.drainUntilIdle()
+
+      expect(MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(1)).toEqual([])
+      const runMetadata = appState.runs.list({ sessionId: session.record.sessionId })[0]
+      expect(runMetadata).toMatchObject({
+        sessionId: session.record.sessionId,
+        metadata: expect.objectContaining({
+          runtime: 'runlog',
+          scheduleId: 'schedule_runlog',
+          trigger: 'scheduler',
+          headless: true,
+          cronDecisionState: 'allow',
+        }),
+      })
+      expect(runMetadata?.runId).toBeTruthy()
+      const run = runLog.store.getRun(runMetadata!.runId)
+      expect(run).toMatchObject({ status: 'completed', input: 'Run through RunLog.' })
+      expect(runLog.store.listEvents({ runId: runMetadata!.runId }).map((event) => event.type)).toEqual(
+        expect.arrayContaining([
+          'cron.due',
+          'policy.decision.recorded',
+          'input.received',
+          'run.queued',
+          'run.completed',
+        ]),
+      )
+      expect(appState.cronSchedules.get('schedule_runlog')?.metadata).toMatchObject({
+        headless: true,
+        trigger: 'scheduler',
+        cronScheduleKey: '0 * * * *|local',
+        lastDecision: expect.objectContaining({ state: 'allow' }),
+      })
+    } finally {
+      runLog.close()
+      appState.close()
+    }
+  })
+
+  it('fails side-effecting RunLog cron schedules closed without a scoped grant', async () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths('mainspring-gateway-cron-runlog-deny-')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'should not run' } }]),
+    })
+    const gateway = createLocalMainspringGateway({
+      runtime: mainspring,
+      runLog,
+      appState,
+    })
+
+    try {
+      const session = mainspring.sessions.create({
+        sessionId: 'cron-runlog-deny-session',
+        workspace: { root: workspaceRoot },
+      })
+      const schedule = gateway.cron.create({
+        sessionId: session.record.sessionId,
+        label: 'Unsafe headless schedule',
+        prompt: 'Write a file without a cron grant.',
+        cronExpr: '0 * * * *',
+        allowedTools: ['file.write'],
+      })
+
+      const run = gateway.cron.runNow(schedule.scheduleId)
+
+      expect(run.status).toBe('failed')
+      expect(MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(1)).toEqual([])
+      expect(runLog.store.listEvents({ runId: run.runId }).map((event) => event.type)).toEqual(
+        expect.arrayContaining(['cron.due', 'policy.decision.recorded', 'run.failed']),
+      )
+      expect(runLog.store.listEvents({ runId: run.runId }).map((event) => event.type)).not.toContain(
+        'input.received',
+      )
+      const decision = runLog.store
+        .listEvents({ runId: run.runId })
+        .find((event) => event.type === 'policy.decision.recorded')?.payload as
+        | { state?: string; reasons?: string[] }
+        | undefined
+      expect(decision).toMatchObject({
+        state: 'deny',
+        reasons: expect.arrayContaining(['headless cron side effects require a scoped grant']),
+      })
+      expect(appState.cronSchedules.get(schedule.scheduleId)?.metadata).toMatchObject({
+        lastDecision: expect.objectContaining({ state: 'deny' }),
+      })
+    } finally {
+      runLog.close()
       appState.close()
     }
   })

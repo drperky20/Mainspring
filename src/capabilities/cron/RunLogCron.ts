@@ -39,6 +39,7 @@ export interface RunLogCronJob {
   enabled: boolean
   sessionId?: string
   workspaceId?: string
+  allowedTools?: string[]
   metadata?: Record<string, unknown> & RunLogCronPolicyMetadata
 }
 
@@ -54,6 +55,7 @@ function cronScheduleHash(input: {
   sessionId?: string
   workspaceId?: string
   allowedTools?: string[]
+  scheduleKey?: string
 }): string {
   return hashApprovalInput({
     agentId: input.agentId,
@@ -61,6 +63,7 @@ function cronScheduleHash(input: {
     sessionId: input.sessionId ?? null,
     workspaceId: input.workspaceId ?? null,
     allowedTools: [...(input.allowedTools ?? [])].sort(),
+    scheduleKey: input.scheduleKey ?? null,
   })
 }
 
@@ -71,6 +74,7 @@ export function createRunLogCronGrant(input: {
   sessionId?: string
   workspaceId?: string
   allowedTools?: string[]
+  scheduleKey?: string
   grantId?: string
   expiresAt?: string
   expiresInMs?: number
@@ -94,10 +98,11 @@ export function createRunLogCronGrant(input: {
   }
 }
 
-function cronUsesSideEffects(agent: AgentSpec): boolean {
+function cronUsesSideEffects(agent: AgentSpec, allowedTools: string[] = []): boolean {
   const capabilities = new Set(agent.capabilities ?? [])
+  const toolNames = new Set([...(agent.tools ?? []), ...allowedTools])
   return (
-    Boolean(agent.tools?.length) ||
+    toolNames.size > 0 ||
     capabilities.has('tools') ||
     capabilities.has('shell') ||
     capabilities.has('files') ||
@@ -117,11 +122,11 @@ export function decideRunLogCron(input: {
   const metadata = input.job.metadata ?? {}
   const explicitMode = metadata.cronMode
   const grant = metadata.cronGrant
-  const sideEffecting = cronUsesSideEffects(input.agent)
+  const allowedTools = grant?.allowedTools ?? input.job.allowedTools ?? input.agent.tools ?? []
+  const sideEffecting = cronUsesSideEffects(input.agent, allowedTools)
   const reasons: string[] = []
   let state: DecisionRecord['state'] = 'allow'
   const mode = explicitMode ?? (sideEffecting ? 'deny' : 'allowlist')
-  const allowedTools = grant?.allowedTools ?? input.agent.tools ?? []
   const expectedPromptHash = hashApprovalInput(input.job.input)
   const expectedScheduleHash = cronScheduleHash({
     agentId: input.job.agentId,
@@ -129,6 +134,10 @@ export function decideRunLogCron(input: {
     sessionId: input.job.sessionId,
     workspaceId: input.job.workspaceId,
     allowedTools,
+    scheduleKey:
+      typeof input.job.metadata?.cronScheduleKey === 'string'
+        ? input.job.metadata.cronScheduleKey
+        : undefined,
   })
 
   if (mode === 'deny') {

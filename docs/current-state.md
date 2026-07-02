@@ -52,6 +52,10 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - scoped cron grants bind agent, prompt hash, schedule hash, allowed tools, expiration, and execution count.
   - due cron rows append `policy.decision.recorded` before `run.queued` or `run.failed`.
   - prompt mutation, grant expiry, execution-limit exhaustion, and schedule mismatch fail closed in focused tests.
+- Gateway cron scheduling now uses the same RunLog cron policy path when the gateway is configured with a RunLog host:
+  - provider-only schedules become ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events.
+  - side-effecting schedules fail closed without a scoped grant.
+  - gateways constructed without a RunLog host keep the mailbox compatibility dispatch path for older embedders and migration verifiers.
 - Local-agent security regression coverage now exists in `src/security/agent-security-regression.test.ts` with a companion matrix in `docs/security-redteam-matrix.md`.
   - The focused corpus covers host shell approval, loader/env-var injection, network-to-shell hard blocks, path traversal, symlink/junction escape, workspace mutation approval, browser/local URL policy, web-fetch SSRF rejection, memory and skill write approval, MCP/tool bridge policy routing, headless cron denial, and cron grant mutation.
   - The matrix explicitly records partial/deferred classes such as cross-agent spoofing, subagent privilege expansion, malicious remote skill payload review, skill memory poisoning, and browser-adapter private-network enforcement.
@@ -66,7 +70,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 
 - The old mailbox/runtime path is still present and still important for existing `createMainspring` SDK/gateway behavior.
 - The default gateway `/runs/start` route is RunLog-backed in the local dev server and in gateways configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways constructed without a RunLog host remain mailbox-compatible for migration tests and older embedders.
-- Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, legacy gateway cron scheduling, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
+- Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, gateway cron grant-review UX, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
 - Some existing docs/scripts still describe older mailbox-first architecture and should be consolidated around RunLog Fabric.
@@ -81,7 +85,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Remote skill marketplace trust, signed catalog distribution, and third-party reputation.
 - General checkpoint replay/retry controls beyond the implemented approval-resume continuation.
 - Child-run/subagent helper APIs beyond the parent-run data model.
-- Full gateway/API migration to RunLog-native cron grants and headless policy.
+- Operator-facing gateway/API UX for creating and reviewing scoped cron grants.
 - Not implemented: hosted multi-tenant auth, real billing, remote marketplace trust, VM isolation, or secure desktop credential vault.
 
 ## Runtime Seams To Preserve During Migration

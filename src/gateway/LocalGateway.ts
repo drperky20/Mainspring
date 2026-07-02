@@ -31,6 +31,13 @@ import {
 } from '../usage/ModelPricing.js'
 import { summarizeUsageLedger, type UsageLedgerSummary } from '../usage/UsageLedger.js'
 import {
+  cronMetadataWithDecision,
+  decideRunLogCron,
+  decisionRecordForRun,
+  type RunLogCronJob,
+  type RunLogCronPolicyMetadata,
+} from '../capabilities/cron/RunLogCron.js'
+import {
   nextCronOccurrence,
   parseCronExpression,
   type CronTimezone,
@@ -674,6 +681,21 @@ function runLogCapabilitiesFromGatewayInput(input: LocalGatewayStartRunInput): R
   return [...capabilities]
 }
 
+function runLogCronCapabilitiesFromGatewayInput(input: LocalGatewayStartRunInput): RunLogCapability[] {
+  return [...new Set<RunLogCapability>([...runLogCapabilitiesFromGatewayInput(input), 'cron'])]
+}
+
+function gatewayCronScheduleKey(input: {
+  cronExpr: string
+  timezone: CronTimezone
+}): string {
+  return `${input.cronExpr.trim()}|${input.timezone}`
+}
+
+function gatewayCronPolicyIntervalMs(): number {
+  return 0
+}
+
 function approvalPolicyFromGatewayMode(value: unknown): RuntimePolicy['approvalPolicy'] | undefined {
   if (typeof value !== 'string') return undefined
   const normalized = value.toLowerCase()
@@ -927,7 +949,8 @@ export class LocalMainspringGateway {
       this.deleteCronSchedule(scheduleId)
       return { scheduleId, deleted: true }
     },
-    runNow: (scheduleId: string): RunRecord => this.runCronScheduleNow(scheduleId, 'manual'),
+    runNow: (scheduleId: string): RunRecord | RunLogRunRecord =>
+      this.runCronScheduleNow(scheduleId, 'manual'),
     status: (): LocalGatewayCronStatus => ({
       enabled: this.cronEnabled,
       running: this.cronTimer !== null,
@@ -1163,6 +1186,7 @@ export class LocalMainspringGateway {
     run: RunLogRunRecord,
     input: LocalGatewayStartRunInput,
     budgetEvaluations: LocalGatewayBudgetEvaluation[],
+    extraMetadata: Record<string, unknown> = {},
   ): void {
     this.appState?.runs.upsert({
       runId: run.runId,
@@ -1179,6 +1203,7 @@ export class LocalMainspringGateway {
         ...(budgetEvaluations.length > 0
           ? { budgetEvaluationIds: budgetEvaluations.map((evaluation) => evaluation.budgetId) }
           : {}),
+        ...extraMetadata,
       },
     })
   }
@@ -2909,7 +2934,7 @@ export class LocalMainspringGateway {
     scheduleId: string,
     trigger: 'manual' | 'scheduler',
     now = this.now(),
-  ): RunRecord {
+  ): RunRecord | RunLogRunRecord {
     const appState = this.requireAppState()
     const schedule = appState.cronSchedules.get(scheduleId)
     if (!schedule) throw new Error(`Unknown cron schedule: ${scheduleId}`)
@@ -2927,6 +2952,9 @@ export class LocalMainspringGateway {
       nextRunAt: nextRunAt ?? '',
       lastError: '',
     })
+    if (this.runLogRuntime) {
+      return this.runRunLogCronSchedule(updatedSchedule, trigger, now, nextRunAt)
+    }
     const run = this.runs.startFromAppState({
       sessionId: updatedSchedule.sessionId,
       input: updatedSchedule.prompt,
@@ -2958,6 +2986,179 @@ export class LocalMainspringGateway {
       metadata: { nextRunAt: nextRunAt ?? null },
     })
     return run
+  }
+
+  private runRunLogCronSchedule(
+    schedule: LocalGatewayCronScheduleRecord,
+    trigger: 'manual' | 'scheduler',
+    now: Date,
+    nextRunAt?: string,
+  ): RunLogRunRecord {
+    const runtime = this.requireRunLogRuntime()
+    const session = this.runtime.storage.stateStore.getSession(schedule.sessionId)
+    if (!session) throw new Error(`Unknown session: ${schedule.sessionId}`)
+    const resolvedInput = this.resolveAppStateRunInput({
+      sessionId: schedule.sessionId,
+      input: schedule.prompt,
+      mode: 'chat',
+      allowedTools: schedule.allowedTools,
+      ...(schedule.workspaceId ? { workspaceId: schedule.workspaceId } : {}),
+      ...(schedule.agentId ? { agentId: schedule.agentId } : {}),
+      ...(schedule.providerProfileId ? { providerProfileId: schedule.providerProfileId } : {}),
+      ...(schedule.computerId ? { computerId: schedule.computerId } : {}),
+      ...(schedule.runtimeProfile ? { runtimeProfile: schedule.runtimeProfile } : {}),
+    })
+    const budgetEvaluations = this.assertRunBudgetAllowed(resolvedInput, session)
+    const agentId = resolvedInput.agentId ?? runtime.defaultAgentId
+    this.ensureRunLogAgent(resolvedInput, agentId)
+    const agent = runtime.store.getAgent(agentId)
+    if (!agent) throw new Error(`Unknown RunLog cron agent: ${agentId}`)
+    const metadata: Record<string, unknown> & RunLogCronPolicyMetadata = {
+      ...(schedule.metadata ?? {}),
+      headless: true,
+      trigger,
+      cronScheduleKey: gatewayCronScheduleKey({
+        cronExpr: schedule.cronExpr,
+        timezone: schedule.timezone,
+      }),
+    }
+    const job: RunLogCronJob = {
+      cronId: schedule.scheduleId,
+      agentId,
+      input: schedule.prompt,
+      intervalMs: gatewayCronPolicyIntervalMs(),
+      nextRunAt: schedule.nextRunAt ?? now.toISOString(),
+      enabled: schedule.enabled,
+      ...(schedule.sessionId ? { sessionId: schedule.sessionId } : {}),
+      ...(resolvedInput.workspaceId ? { workspaceId: resolvedInput.workspaceId } : {}),
+      allowedTools: resolvedInput.allowedTools ?? [],
+      metadata,
+    }
+    const decision = decideRunLogCron({ job, agent, now })
+    const workspaceRoot = resolvedInput.workspaceId
+      ? this.appState?.workspaces.get(resolvedInput.workspaceId)?.root
+      : session.workspaceRoot
+    const run = runtime.store.createRun(
+      {
+        agentId,
+        input: resolvedInput.input,
+        sessionId: resolvedInput.sessionId,
+        workspaceId: resolvedInput.workspaceId,
+        ...(workspaceRoot ? { workspaceRoot } : {}),
+        providerId: resolvedInput.providerId,
+        modelId: resolvedInput.modelId,
+        credentialRef: resolvedInput.credentialRef,
+        allowedTools: resolvedInput.allowedTools ?? [],
+        requestedCapabilities: runLogCronCapabilitiesFromGatewayInput(resolvedInput),
+        metadata: {
+          gatewaySurface: 'runlog',
+          scheduleId: schedule.scheduleId,
+          trigger,
+          headless: true,
+          cronMode: metadata.cronMode ?? (agent.tools?.length ? 'deny' : 'allowlist'),
+          cronDecisionId: decision.decisionId,
+          ...(schedule.providerProfileId ? { providerProfileId: schedule.providerProfileId } : {}),
+          ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
+          ...(resolvedInput.runtimeProfile ? { runtimeProfile: resolvedInput.runtimeProfile } : {}),
+        },
+      },
+      agent,
+    )
+    const runDecision = decisionRecordForRun(decision, run.runId, run.sessionId)
+    runtime.store.appendEvent({
+      runId: run.runId,
+      type: 'run.created',
+      payload: { agentId: run.agentId, sessionId: run.sessionId, source: 'cron', headless: true },
+      idempotencyKey: `run.created:${run.runId}`,
+    })
+    runtime.store.appendEvent({
+      runId: run.runId,
+      type: 'cron.due',
+      payload: {
+        cronId: schedule.scheduleId,
+        dueAt: schedule.nextRunAt ?? now.toISOString(),
+        headless: true,
+        trigger,
+        decisionId: runDecision.decisionId,
+      },
+      idempotencyKey: `cron.due:${run.runId}`,
+    })
+    runtime.store.appendEvent({
+      runId: run.runId,
+      type: 'policy.decision.recorded',
+      payload: runDecision,
+      idempotencyKey: `policy.decision.recorded:${runDecision.decisionId}`,
+    })
+    if (runDecision.state === 'allow') {
+      runtime.store.appendEvent({
+        runId: run.runId,
+        type: 'input.received',
+        payload: { input: resolvedInput.input, source: 'cron', trigger },
+        idempotencyKey: `input.received:${run.runId}`,
+      })
+      runtime.store.appendEvent({
+        runId: run.runId,
+        type: 'run.queued',
+        payload: { source: 'cron', trigger, decisionId: runDecision.decisionId },
+        idempotencyKey: `run.queued:${run.runId}`,
+      })
+    } else {
+      runtime.store.updateRunStatus(run.runId, 'failed')
+      runtime.store.appendEvent({
+        runId: run.runId,
+        type: 'run.failed',
+        payload: {
+          source: 'cron',
+          trigger,
+          cronId: schedule.scheduleId,
+          decisionId: runDecision.decisionId,
+          state: runDecision.state,
+          reasons: runDecision.reasons,
+        },
+        idempotencyKey: `run.failed:${run.runId}:cron-policy`,
+      })
+    }
+    const nextMetadata = cronMetadataWithDecision(metadata, runDecision, {
+      incrementGrantUse: runDecision.state === 'allow' && Boolean(metadata.cronGrant),
+    })
+    this.requireAppState().cronSchedules.update({
+      scheduleId: schedule.scheduleId,
+      metadata: nextMetadata,
+    })
+    this.persistRunLogMetadata(
+      runtime.store.getRun(run.runId) ?? run,
+      {
+        ...resolvedInput,
+        ...(schedule.providerProfileId ? { providerProfileId: schedule.providerProfileId } : {}),
+      },
+      budgetEvaluations,
+      {
+        scheduleId: schedule.scheduleId,
+        trigger,
+        headless: true,
+        cronMode: typeof runDecision.metadata?.cronMode === 'string'
+          ? runDecision.metadata.cronMode
+          : undefined,
+        cronDecisionId: runDecision.decisionId,
+        cronDecisionState: runDecision.state,
+      },
+    )
+    this.requireAppState().auditEvents.create({
+      category: 'cron',
+      action: trigger === 'manual' ? 'schedule.run-now' : 'schedule.triggered',
+      actor: 'local-gateway',
+      targetType: 'schedule',
+      targetId: schedule.scheduleId,
+      runId: run.runId,
+      sessionId: schedule.sessionId,
+      metadata: {
+        nextRunAt: nextRunAt ?? null,
+        decisionId: runDecision.decisionId,
+        state: runDecision.state,
+        ...(runDecision.reasons.length > 0 ? { reasons: runDecision.reasons } : {}),
+      },
+    })
+    return runtime.store.getRun(run.runId) ?? run
   }
 
   private validateCronScheduleInput(

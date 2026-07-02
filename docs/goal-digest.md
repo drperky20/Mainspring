@@ -7901,3 +7901,34 @@ Verification in this slice:
 Next recommended milestone:
 
 - Move gateway cron scheduling to RunLog cron grants.
+
+## 2026-07-02 Gateway Cron RunLog Policy Slice
+
+Goal:
+
+- Move gateway cron tick/run-now dispatch onto the RunLog cron policy path whenever the gateway is configured with a RunLog host, while keeping mailbox compatibility for gateways without RunLog.
+
+Changes:
+
+- Added a gateway cron schedule key into RunLog cron grant hashing so cron expression/timezone changes invalidate scoped grants.
+- Extended `RunLogCronJob` policy input with requested `allowedTools`, so headless policy evaluates the schedule's actual tool surface even when the stored default RunLog agent has no tools.
+- Updated `LocalGateway.runCronScheduleNow()` to create ordinary RunLog runs for RunLog-configured gateways, append `run.created`, `cron.due`, `policy.decision.recorded`, and then either `input.received`/`run.queued` or `run.failed`.
+- Preserved the existing mailbox dispatch path for gateways constructed without `CreateLocalMainspringGatewayOptions.runLog`.
+- Persisted RunLog cron run metadata into gateway app-state rows with schedule id, trigger, headless flag, cron decision id, and decision state.
+- Added focused gateway regressions proving provider-only cron runs through RunLog and side-effecting cron fails closed without a scoped grant.
+- Updated current-state, migration, backlog, local-gateway, automation, and security docs to remove stale "gateway cron migration pending" language and replace it with the narrower truth that operator-facing cron grant UX is still pending.
+
+What this proves:
+
+- RunLog-configured gateway cron no longer bypasses the canonical headless policy decision path.
+- Side-effecting headless gateway schedules fail closed before provider/tool execution unless a scoped grant is present.
+- Legacy/mailbox cron compatibility still exists only for gateways without a RunLog host.
+
+Verification in this slice:
+
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run src/gateway/LocalGateway.test.ts`: passed, 1 file / 34 tests.
+
+Next recommended milestone:
+
+- Add operator-facing cron grant review/create surfaces for gateway/API/console cron schedules.

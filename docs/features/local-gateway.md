@@ -22,6 +22,8 @@ When the gateway is configured with a RunLog SDK host, the default `/runs/start`
 
 The local dev server created by `pnpm gateway:dev` now configures that RunLog host by default. It stores RunLog state under `.mainspring/runlog/runlog.sqlite`, materializes RunLog workspaces under `.mainspring/runlog/workspaces`, and uses env-backed OpenRouter/OpenAI credentials only when the matching key is present. Without a live provider key it uses `EchoProvider` so source checkout bring-up stays local and free. Managed provider profile secrets are resolved host-side for RunLog provider calls through opaque credential refs; raw secret values are not written to RunLog events or browser DTOs.
 
+When a gateway has a RunLog host, cron tick and run-now dispatch create ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events. Provider-only cron schedules queue normally; side-effecting schedules fail closed unless their metadata carries a scoped, unexpired cron grant. Gateways without a RunLog host keep the mailbox-compatible cron path for older embedders and migration verifiers.
+
 Gateway RunLog routes are local development surfaces. They do not create a hosted worker
 pool, do not change host execution limits, and do not create a multi-tenant control plane.
 
@@ -35,6 +37,7 @@ Hosted browser-access URLs are short-lived local bearer URLs for artifact previe
 - It does not provide enterprise SSO.
 - It does not provide secure desktop identity.
 - It does not execute tools or providers outside the runtime.
+- It does not yet provide a polished cron grant review/create UI.
 - Browser DTO sanitization is not a replacement for gateway-side auth, OS permissions, or artifact access checks.
 - Console response guards are regression tripwires, not the primary security boundary.
 
