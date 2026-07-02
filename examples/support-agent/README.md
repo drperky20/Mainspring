@@ -10,7 +10,7 @@ This example is now runnable with no paid key:
 pnpm example:support-agent
 ```
 
-It uses `MockProvider`, runs one real SDK/runtime session, reads an approved support FAQ through `file.read`, and prints a JSON summary of the session, run, events, and tool activity.
+It uses `createRunLogMainspring`, `MockProvider`, the default `file.read` tool, SQLite RunLog state, and `RunLogProjection`. It reads an approved support FAQ through the canonical RunLog tool path and prints a JSON summary of the run, events, policy decision, checkpoint, and tool activity.
 
 ## Shape
 

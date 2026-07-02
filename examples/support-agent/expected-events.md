@@ -2,9 +2,12 @@
 
 The runnable support-agent example should emit a sequence that includes:
 
-- `run.started`
-- `runtime.warning`
+- `run.created`
+- `input.received`
+- `provider.init`
 - `tool.call.requested`
+- `policy.decision.recorded`
 - `tool.call.completed`
-- `assistant.text.done`
+- `checkpoint.saved`
+- `assistant.result`
 - `run.completed`

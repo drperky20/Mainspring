@@ -7360,6 +7360,7 @@ Verification for the focused slice:
 - `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
 - `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
 - `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 436 tests plus build, security, skill provenance, RunLog migration, docs, console browser-safety, and console build.
 - `pnpm exec tsc --noEmit`: passed.
 
 Remaining risk:
@@ -8255,7 +8256,7 @@ Still honest:
 
 - This proves a read-only `file.read` workflow, not memory writes, browser automation, external channel sends, subagents, or live provider behavior.
 - Host file access is still local host access, not containment.
-- Coding, support, agency-client, and local-first examples still exercise the compatibility SDK host until migrated or deliberately retained.
+- At this point in the sequence, coding, support, agency-client, and local-first examples still exercised the compatibility SDK host until migrated or deliberately retained.
 
 Verification in this slice:
 
@@ -8272,3 +8273,42 @@ Verification in this slice:
 Next recommended milestone:
 
 - Move `support-agent` to `createRunLogMainspring` as the next read-only FAQ workflow, or migrate `local-first-agent` once RunLog memory review coverage is ready.
+
+## 2026-07-02 RunLog Support Agent Example Slice
+
+Goal:
+
+- Move the support-agent runnable example from the compatibility mailbox runtime onto the canonical RunLog SDK host.
+
+Changes:
+
+- Rewrote `examples/support-agent/run.mjs` to use `createRunLogMainspring`, `RunIntent`, the default `file.read` tool, RunLog policy decisions, tool checkpoints, and `RunLogProjection`.
+- Updated the support-agent README, sample run, and expected events to use RunLog event names and lifecycle.
+- Updated examples, getting-started, current-state, migration, and backlog docs so `support-agent` is no longer described as a compatibility-host example.
+
+What this proves:
+
+- A no-key local support workflow can read approved FAQ content through the canonical RunLog tool path.
+- Read-only support materials emit `policy.decision.recorded`, `tool.call.completed`, `checkpoint.saved`, `assistant.result`, and `run.completed` through RunLog.
+- The example reports relative workspace paths and does not require browser storage, paid provider credentials, or the legacy mailbox runtime.
+
+Still honest:
+
+- This proves a read-only `file.read` workflow, not customer message sending, customer-record writes, refunds, discounts, escalations, browser automation, memory writes, subagents, or live provider behavior.
+- Host file access is still local host access, not a security boundary.
+- Coding, agency-client, and local-first examples still exercise the compatibility SDK host until migrated or deliberately retained.
+
+Verification in this slice:
+
+- `pnpm example:support-agent`: passed with `runtimePath: "runlog"`, one `allow` policy decision, a `tool` checkpoint, and `pendingApprovals: 0`.
+- `pnpm examples:check`: passed and now runs `support-agent` through the RunLog SDK host.
+- `pnpm agentic:check`: passed and included the support-agent scenario.
+- `pnpm typecheck`: passed.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm release:check`: passed end to end, including examples smoke, agentic harness, desktop systems, optional verifier diagnostics, package dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Move the remaining write-heavy examples to `createRunLogMainspring` where the RunLog approval path already covers their needs, or migrate `local-first-agent` once RunLog memory review coverage is ready.
