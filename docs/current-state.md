@@ -20,6 +20,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `src/sdk/RunLogMainspring.ts` exports `createRunLogMainspring`.
   - New SDK code can create `RunIntent` records, drain through `RunLogKernel`, inspect `RunLogProjection`, and approve/deny pending RunLog approval requests.
   - `src/sdk/RunLogMainspring.test.ts` proves provider-only runs and approved tool resume through the public handle.
+  - `pnpm example:coding-agent` now uses `createRunLogMainspring` for a read-then-approved-write coding workflow.
   - `pnpm example:personal-assistant` now uses `createRunLogMainspring` for a read-only `file.read` workspace tool run.
   - `pnpm example:support-agent` now uses `createRunLogMainspring` for a read-only approved-FAQ `file.read` workspace tool run.
   - `pnpm example:agency-client-agent` now uses `createRunLogMainspring` for a read-then-approved-write client deliverable workflow.
@@ -79,7 +80,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Prototype Or Migration Surfaces
 
 - The old mailbox/runtime path is still present and still important for existing `createMainspring` SDK/gateway behavior.
-- Some compatibility examples still exercise the old mailbox/runtime path during migration, especially coding and memory-focused flows.
+- The `local-first-agent` compatibility example still exercises the old mailbox/runtime path during migration for memory-focused workflow coverage.
 - The default gateway `/runs/start` route is RunLog-backed in the local dev server and in gateways configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways constructed without a RunLog host remain mailbox-compatible for migration tests and older embedders.
 - Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
 - Desktop packaging is experimental and Windows-focused.

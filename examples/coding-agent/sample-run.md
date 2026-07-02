@@ -8,9 +8,12 @@ pnpm example:coding-agent
 
 Expected flow:
 
-1. Create a local session rooted in `examples/coding-agent/workspace`.
-2. Start one run through the SDK and mailbox-backed runtime path.
-3. The mock provider requests `file.write`.
-4. The script resolves the approval through the normal approval API.
-5. The tool writes `workspace/reports/next-step.txt`.
-6. The provider returns a final assistant result.
+1. Create temporary SQLite RunLog state rooted under `examples/coding-agent`.
+2. Start one `RunIntent` through `createRunLogMainspring`.
+3. The mock provider requests `file.read` for the workspace README.
+4. `RunLogExecutor` records an allowed policy decision, executes the read through `ToolRegistry`, and checkpoints the tool result.
+5. The mock provider requests `file.write` for `workspace/reports/next-step.txt`.
+6. `RunLogExecutor` records a `requires_approval` policy decision and pauses the run.
+7. The script approves the exact write request with a scoped RunLog receipt.
+8. The approved resume writes the report through `ToolRegistry`, checkpoints the tool result, and returns a final assistant result.
+9. The example prints a JSON summary and removes temporary RunLog state plus the generated report.

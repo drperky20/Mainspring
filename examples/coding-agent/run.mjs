@@ -1,143 +1,200 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MockProvider, createMainspring } from '../../dist/index.js'
+import { MockProvider, createRunLogMainspring } from '../../dist/index.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const repoRoot = path.resolve(__dirname, '..', '..')
 const workspaceRoot = path.join(__dirname, 'workspace')
 const runtimeRoot = fs.mkdtempSync(path.join(__dirname, '.mainspring-'))
-const sessionsRoot = path.join(runtimeRoot, 'sessions')
+const planPath = path.join(workspaceRoot, 'README.md')
 const outputPath = path.join(workspaceRoot, 'reports', 'next-step.txt')
 const reportsRoot = path.dirname(outputPath)
+const managedWorkspaceRoot = path.join(workspaceRoot, 'coding-agent-workspace')
 
 fs.mkdirSync(workspaceRoot, { recursive: true })
-fs.mkdirSync(sessionsRoot, { recursive: true })
 fs.writeFileSync(
-  path.join(workspaceRoot, 'README.md'),
+  planPath,
   '# Coding Agent Workspace\n\nThis workspace is used by the runnable coding-agent example.\n',
 )
 
-const provider = new MockProvider([
-  {
-    type: 'event',
-    event: {
-      type: 'tool_call',
-      name: 'file.write',
-      input: {
-        path: 'reports/next-step.txt',
-        data: 'Run targeted tests before broad verification.\n',
-      },
-      toolCallId: 'toolcall_coding_agent_write',
-    },
-  },
-  {
-    type: 'await_push',
-    produce: { type: 'progress', message: 'waiting for approval replay' },
-  },
-  {
-    type: 'await_push',
-    produce: (message) => {
-      const parsed = JSON.parse(message)
-      return {
-        type: 'result',
-        text:
-          parsed.status === 'completed'
-            ? 'Coding agent wrote the next-step report and is ready for review.'
-            : `Coding agent stopped after tool status: ${parsed.status ?? 'unknown'}`,
-      }
-    },
-  },
-])
+const provider = new MockProvider((input) => {
+  const toolMessages = input.messages?.filter((message) => message.role === 'tool') ?? []
+  const writeResult = toolMessages
+    .map((message) => JSON.parse(message.content))
+    .find((message) => message.toolCallId === 'toolcall_coding_agent_write' && message.status === 'completed')
 
-const mainspring = createMainspring({
-  sessionsRoot,
-  workspaceRoot,
-  provider,
-  pollIntervalMs: 10,
+  if (writeResult) {
+    return [
+      {
+        type: 'event',
+        event: {
+          type: 'result',
+          text: 'Coding agent wrote the next-step report and is ready for review.',
+        },
+      },
+    ]
+  }
+
+  return [
+    {
+      type: 'event',
+      event: {
+        type: 'tool_call',
+        name: 'file.read',
+        input: { path: 'README.md' },
+        toolCallId: 'toolcall_coding_agent_read',
+      },
+    },
+    {
+      type: 'await_push',
+      produce: (message) => {
+        const parsed = JSON.parse(message)
+        const readOk = parsed.status === 'completed'
+        return {
+          type: 'tool_call',
+          name: 'file.write',
+          input: {
+            path: 'reports/next-step.txt',
+            data: readOk
+              ? 'Run targeted tests before broad verification.\n'
+              : 'Read failed; pause before changing the workspace.\n',
+          },
+          toolCallId: 'toolcall_coding_agent_write',
+        }
+      },
+    },
+  ]
 })
 
-await mainspring.start()
+const mainspring = createRunLogMainspring({
+  rootPath: runtimeRoot,
+  workspaceRoot,
+  provider,
+  approvalReceiptKey: 'example-coding-agent-approval-key',
+  agent: {
+    agentId: 'agent_coding',
+    instructions: 'Read the coding workspace plan, then write a concise next-step report after approval.',
+    capabilities: ['provider', 'tools', 'files'],
+    tools: ['file.read', 'file.write'],
+    approvalPolicy: 'balanced',
+    providerId: 'mock',
+    modelId: 'mock/coding-agent',
+  },
+})
 
 try {
-  const session = mainspring.sessions.create({
-    metadata: {
-      example: 'coding-agent',
-      businessCase: 'workspace-scoped coding assistant',
-    },
-    workspace: { root: workspaceRoot },
-  })
-
-  const run = session.runs.start({
+  const run = mainspring.runs.start({
     input: 'Read the coding workspace plan and write one safe next-step report.',
-    allowedTools: ['file.write'],
-    mode: 'chat',
+    sessionId: 'example-coding-agent-session',
+    workspaceId: 'coding-agent-workspace',
+    workspaceRoot,
     metadata: {
       example: 'coding-agent',
+      runtimePath: 'runlog',
+      businessCase: 'workspace-scoped coding assistant',
       requiresReview: true,
     },
   })
 
-  const streamPromise = (async () => {
-    const events = []
-    for await (const event of run.events()) events.push(event)
-    return events
-  })()
-
-  const startedAt = Date.now()
-  for (;;) {
-    const approval = mainspring.approvals.list()[0]
-    if (approval) {
-      mainspring.approvals.approve({
-        sessionId: approval.sessionId,
-        runId: approval.runId,
-        approvalId: approval.approvalId,
-        reason: 'example auto-approval for local coding-agent walkthrough',
-      })
-      break
-    }
-    if (Date.now() - startedAt > 5_000) {
-      throw new Error('Timed out waiting for coding-agent example approval.')
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25))
-  }
-
-  const events = await streamPromise
-  const result = await run.result()
-  const approvals = mainspring.approvals.list()
-  const toolCalls = run.toolCalls().map((event) => ({
-    type: event.type,
-    name: event.payload?.name,
-    payload: event.payload,
-  }))
-  if (!fs.existsSync(outputPath)) {
+  const [paused] = await run.drainUntilIdle()
+  const pausedProjection = run.projection()
+  const pendingApproval = pausedProjection.pendingApprovals[0]
+  if (paused?.status !== 'awaiting_approval' || !pendingApproval?.approvalId) {
+    const debugProjection = run.projection()
     throw new Error(
-      `Coding-agent example did not produce ${outputPath}. Events: ${JSON.stringify(events.map((event) => ({ type: event.type, payload: event.payload })), null, 2)} Tool calls: ${JSON.stringify(toolCalls, null, 2)} Remaining approvals: ${JSON.stringify(approvals, null, 2)}`,
+      `Expected RunLog approval pause, got ${paused?.status ?? 'no summary'} with ${
+        pausedProjection.pendingApprovals.length
+      } approvals. Events: ${debugProjection.events.map((event) => event.type).join(', ')}. Decisions: ${debugProjection.policyDecisions
+        .map((decision) => `${decision.toolName ?? decision.operation}:${decision.state}`)
+        .join(', ')}.`,
     )
   }
+  if (fs.existsSync(outputPath)) {
+    throw new Error('file.write executed before approval.')
+  }
+
+  const receipt = run.approve({
+    actor: 'example-operator',
+    reason: 'Approve the local workspace report write for the coding-agent walkthrough.',
+    expiresInMs: 60_000,
+  })
+  const [resumed] = await run.drainUntilIdle()
+  const projection = run.projection()
+  const finalText = run.result()
+  const eventTypes = projection.events.map((event) => event.type)
+
+  if (receipt.decision !== 'approved') {
+    throw new Error(`Expected approved RunLog receipt, got ${receipt.decision}.`)
+  }
+  if (resumed?.status !== 'completed' || run.status() !== 'completed') {
+    throw new Error(`Expected completed RunLog run, got ${resumed?.status ?? run.status()}.`)
+  }
+  if (finalText !== 'Coding agent wrote the next-step report and is ready for review.') {
+    throw new Error(`Unexpected coding-agent result: ${finalText}`)
+  }
+  if (!fs.existsSync(outputPath)) {
+    throw new Error(`Coding-agent example did not produce ${outputPath}.`)
+  }
   const reportText = fs.readFileSync(outputPath, 'utf8')
+  if (reportText !== 'Run targeted tests before broad verification.\n') {
+    throw new Error(`Unexpected coding-agent report contents: ${reportText}`)
+  }
+  for (const required of [
+    'run.created',
+    'input.received',
+    'provider.init',
+    'tool.call.requested',
+    'policy.decision.recorded',
+    'tool.call.completed',
+    'approval.requested',
+    'run.awaiting_approval',
+    'approval.approved',
+    'approval.receipt.used',
+    'assistant.result',
+    'run.completed',
+  ]) {
+    if (!eventTypes.includes(required)) {
+      throw new Error(`Coding-agent example missed required RunLog event ${required}; saw ${eventTypes.join(', ')}`)
+    }
+  }
 
   console.log(
     JSON.stringify(
       {
         example: 'coding-agent',
-        sessionId: session.record.sessionId,
+        runtimePath: 'runlog',
         runId: run.record.runId,
-        workspaceRoot,
-        outputPath,
-        eventTypes: events.map((event) => event.type),
-        finalText: result,
+        sessionId: run.record.sessionId,
+        workspace: path.relative(repoRoot, workspaceRoot).replaceAll('\\', '/'),
+        planPath: path.relative(repoRoot, planPath).replaceAll('\\', '/'),
+        outputPath: path.relative(repoRoot, outputPath).replaceAll('\\', '/'),
+        status: run.status(),
+        finalText,
         reportText,
-        approvalsResolved: events.filter((event) => event.type === 'approval.approved').length,
-        usageEvents: run.usage(),
-        toolCalls,
+        approvalId: pendingApproval.approvalId,
+        receiptId: receipt.receiptId,
+        eventTypes,
+        checkpointKinds: projection.checkpoints.map((checkpoint) => checkpoint.kind).filter(Boolean),
+        pendingApprovals: projection.pendingApprovals.length,
+        approvalDecisions: projection.approvalDecisions.map((decision) => decision.decision),
+        policyDecisions: projection.policyDecisions.map((decision) => decision.state),
+        usageEvents: projection.usage,
+        toolCalls: projection.toolCalls.map((toolCall) => ({
+          toolCallId: toolCall.toolCallId,
+          name: toolCall.name,
+          status: toolCall.status,
+          payload: toolCall.payload,
+        })),
       },
       null,
       2,
     ),
   )
 } finally {
-  await mainspring.stop()
+  mainspring.close()
   fs.rmSync(runtimeRoot, { recursive: true, force: true })
   fs.rmSync(reportsRoot, { recursive: true, force: true })
+  fs.rmSync(managedWorkspaceRoot, { recursive: true, force: true })
 }

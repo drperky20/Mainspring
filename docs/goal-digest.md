@@ -8352,3 +8352,43 @@ Verification in this slice:
 Next recommended milestone:
 
 - Move `coding-agent` to `createRunLogMainspring` to cover another approval-gated file mutation flow, or migrate `local-first-agent` after confirming RunLog memory tools can preserve the current memory walkthrough.
+
+## 2026-07-02 RunLog Coding Agent Example Slice
+
+Goal:
+
+- Move the coding-agent runnable example from the compatibility mailbox runtime onto the canonical RunLog SDK host.
+
+Changes:
+
+- Rewrote `examples/coding-agent/run.mjs` to use `createRunLogMainspring`, `RunIntent`, `file.read`, approval-gated `file.write`, scoped RunLog approval receipts, and `RunLogProjection`.
+- Updated the coding-agent README, sample run, and expected events to use RunLog event names and lifecycle.
+- Updated examples, getting-started, operations, current-state, migration, and backlog docs so `coding-agent` is no longer described as a compatibility-host example.
+
+What this proves:
+
+- A no-key local coding workflow can read workspace context, pause before a workspace write, approve that exact request, resume through `ToolRegistry`, and complete with a post-tool assistant result.
+- The RunLog path records `policy.decision.recorded` states for the read, write approval requirement, and approved resume.
+- The example reports relative workspace paths and keeps host file execution labeled as unsafe host execution through the tool result capabilities.
+
+Still honest:
+
+- This proves a local read-then-write file workflow, not shell execution, patch artifacts, test execution, browser automation, memory writes, subagents, or live provider behavior.
+- Host file writes are still local host writes. Approval gating is not containment.
+- `local-first-agent` still exercises the compatibility SDK host until RunLog memory tooling is migrated or deliberately retained.
+
+Verification in this slice:
+
+- `pnpm example:coding-agent`: passed with `runtimePath: "runlog"`, one approved receipt, checkpoint kinds `tool`, `approval`, `tool`, `tool`, and policy decisions `allow`, `requires_approval`, `allow`.
+- `pnpm examples:check`: passed and now runs `coding-agent` through the RunLog SDK host.
+- `pnpm agentic:check`: passed and included the coding-agent scenario.
+- `pnpm typecheck`: passed.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK` after rewording the backlog risk away from unsupported containment language.
+- `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 436 tests plus build, security, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end, including examples smoke, agentic harness, desktop systems, optional verifier diagnostics, package dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Migrate `local-first-agent` if RunLog memory tools can preserve the current memory write/read walkthrough, or switch to cleanup/research/review artifacts if the memory example still depends on mailbox-only behavior.

@@ -10,14 +10,16 @@ This example is the current default runnable example in the repo.
 pnpm example:coding-agent
 ```
 
-It uses `MockProvider`, writes one approved report into the example workspace, and prints a JSON summary containing the session, run, event types, resolved approval count, and final assistant text.
+It uses `createRunLogMainspring`, `MockProvider`, SQLite RunLog state, the built-in `file.read` and `file.write` tools, scoped RunLog approval receipts, and `RunLogProjection`.
+
+The run reads the workspace README, pauses before writing a next-step report, approves that exact local workspace write, resumes through `ToolRegistry`, prints a JSON summary, and removes temporary runtime state.
 
 ## Shape
 
 - Workspace: one repository checkout.
-- Tools: `file.read`, `file.write`, `shell.exec`.
-- Policy: source mutation and shell require approval.
-- Artifacts: patch, test logs, screenshots, coverage reports.
+- Tools in this runnable walkthrough: `file.read`, `file.write`.
+- Policy: workspace mutation requires approval.
+- Future coding-agent shape: shell execution, patch artifacts, test logs, screenshots, and coverage reports.
 
 ## Guardrails
 
@@ -25,6 +27,7 @@ It uses `MockProvider`, writes one approved report into the example workspace, a
 - Run targeted tests before broad tests.
 - Store command exit code and truncated output.
 - Never expose environment secrets to the model.
+- Host file tools are not containment; this example demonstrates approval-gated local workspace mutation, not a sandbox.
 
 ## Example Artifacts
 
