@@ -1,6 +1,6 @@
 import path from 'node:path'
 import type { RuntimePolicy } from '#protocol'
-import type { ProviderEvent, QueryInput } from '../providers/types.js'
+import type { ProviderEvent, ProviderMessage, QueryInput } from '../providers/types.js'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
 import { ToolRegistry, type RuntimeTool } from '../tools/ToolRegistry.js'
 import {
@@ -49,16 +49,53 @@ function providerQueryInput(input: {
   agent: AgentSpec
   workspaceRoot: string
   tools: RuntimeTool[]
+  messages?: ProviderMessage[]
+  prompt?: string
 }): QueryInput {
   return {
-    prompt: input.run.input,
+    prompt: input.prompt ?? input.run.input,
     sessionId: input.run.sessionId,
     cwd: input.workspaceRoot,
     systemPrompt: input.agent.instructions,
     providerId: input.run.providerId ?? input.agent.providerId,
     model: input.run.modelId ?? input.agent.modelId,
+    messages: input.messages,
     tools: input.tools.map((tool) => ({ manifest: tool.manifest })),
   }
+}
+
+function providerContinuationMessages(input: {
+  run: RunRecord
+  request: RunLogApprovalRequestSnapshot
+  output: unknown
+}): ProviderMessage[] {
+  return [
+    {
+      role: 'user',
+      content: input.run.input,
+    },
+    {
+      role: 'assistant',
+      content: null,
+      toolCalls: [
+        {
+          id: input.request.toolCallId,
+          name: input.request.toolName,
+          arguments: JSON.stringify(input.request.toolInput ?? {}),
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      toolCallId: input.request.toolCallId,
+      name: input.request.toolName,
+      content: JSON.stringify({
+        toolCallId: input.request.toolCallId,
+        status: 'completed',
+        output: input.output,
+      }),
+    },
+  ]
 }
 
 function publicApprovalRequestSnapshot(
@@ -112,54 +149,21 @@ export class RunLogExecutor {
         })
         finalStatus = this.store.getRun(run.runId)?.status ?? 'failed'
       } else {
-        const provider = this.options.providerRouter.resolve({ run, agent })
-        const query = provider.query(
-          providerQueryInput({
+        const result = await this.runProviderQuery({
+          run,
+          agent,
+          workspaceRoot: workspaceLease.root,
+          selectedTools,
+          policy,
+          queryInput: providerQueryInput({
             run,
             agent,
             workspaceRoot: workspaceLease.root,
             tools: selectedTools,
           }),
-        )
-        const toolRegistry = this.createToolRegistry({
-          run,
-          workspaceRoot: workspaceLease.root,
-          policy,
-          tools: selectedTools,
         })
-
-        for await (const event of query.events) {
-          await this.recordProviderEvent({
-            run,
-            agent,
-            event,
-            query,
-            toolRegistry,
-            selectedTools,
-            workspaceRoot: workspaceLease.root,
-            policy,
-          })
-          if (event.type === 'tool_call') {
-            checkpointsAppended += this.checkpoint(run.runId, 'tool', {
-              toolName: event.name,
-              toolCallId: event.toolCallId,
-            })
-          }
-          if (event.type === 'usage') {
-            checkpointsAppended += this.checkpoint(run.runId, 'provider', { usage: event.usage })
-          }
-          const latest = this.store.getRun(run.runId)
-          if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') break
-        }
-
-        const latest = this.store.getRun(run.runId)
-        if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') {
-          finalStatus = latest.status
-        } else {
-          finalStatus = 'completed'
-          this.store.updateRunStatus(run.runId, 'completed')
-          this.store.appendEvent({ runId: run.runId, type: 'run.completed', payload: {} })
-        }
+        checkpointsAppended += result.checkpointsAppended
+        finalStatus = result.status
       }
     } catch (error) {
       finalStatus = 'failed'
@@ -235,6 +239,59 @@ export class RunLogExecutor {
       payload: { kind, seq: latestSeq },
     })
     return 1
+  }
+
+  private async runProviderQuery(input: {
+    run: RunRecord
+    agent: AgentSpec
+    workspaceRoot: string
+    selectedTools: RuntimeTool[]
+    policy: RuntimePolicy
+    queryInput: QueryInput
+  }): Promise<{ status: RunRecord['status']; checkpointsAppended: number }> {
+    let checkpointsAppended = 0
+    const provider = this.options.providerRouter.resolve({ run: input.run, agent: input.agent })
+    const query = provider.query(input.queryInput)
+    const toolRegistry = this.createToolRegistry({
+      run: input.run,
+      workspaceRoot: input.workspaceRoot,
+      policy: input.policy,
+      tools: input.selectedTools,
+    })
+
+    for await (const event of query.events) {
+      await this.recordProviderEvent({
+        run: input.run,
+        agent: input.agent,
+        event,
+        query,
+        toolRegistry,
+        selectedTools: input.selectedTools,
+        workspaceRoot: input.workspaceRoot,
+        policy: input.policy,
+      })
+      if (event.type === 'tool_call') {
+        checkpointsAppended += this.checkpoint(input.run.runId, 'tool', {
+          toolName: event.name,
+          toolCallId: event.toolCallId,
+        })
+      }
+      if (event.type === 'usage') {
+        checkpointsAppended += this.checkpoint(input.run.runId, 'provider', { usage: event.usage })
+      }
+      const latest = this.store.getRun(input.run.runId)
+      if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') {
+        return { status: latest.status, checkpointsAppended }
+      }
+    }
+
+    const latest = this.store.getRun(input.run.runId)
+    if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') {
+      return { status: latest.status, checkpointsAppended }
+    }
+    this.store.updateRunStatus(input.run.runId, 'completed')
+    this.store.appendEvent({ runId: input.run.runId, type: 'run.completed', payload: {} })
+    return { status: 'completed', checkpointsAppended }
   }
 
   private async recordProviderEvent(input: {
@@ -496,13 +553,26 @@ export class RunLogExecutor {
         toolCallId: request.toolCallId,
         resumedFromApproval: input.receipt.approvalId,
       })
-      this.store.updateRunStatus(input.run.runId, 'completed')
-      this.store.appendEvent({
-        runId: input.run.runId,
-        type: 'run.completed',
-        payload: { resumedFromApproval: input.receipt.approvalId },
+      const continuation = await this.runProviderQuery({
+        run: input.run,
+        agent: input.agent,
+        workspaceRoot: input.workspaceLease.root,
+        selectedTools: input.selectedTools,
+        policy: input.policy,
+        queryInput: providerQueryInput({
+          run: input.run,
+          agent: input.agent,
+          workspaceRoot: input.workspaceLease.root,
+          tools: input.selectedTools,
+          prompt: '',
+          messages: providerContinuationMessages({
+            run: input.run,
+            request,
+            output: result.output,
+          }),
+        }),
       })
-      return checkpoints
+      return checkpoints + continuation.checkpointsAppended
     }
     if (result.status === 'policy_blocked') {
       this.store.updateRunStatus(input.run.runId, 'failed')

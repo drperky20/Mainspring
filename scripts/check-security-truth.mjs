@@ -139,6 +139,8 @@ const claimRules = [
       /approval resume now has scoped signed receipts/i,
       /scoped approval resume exists for approved tool boundaries/i,
       /approved receipts can resume a paused tool after SQLite-backed restart/i,
+      /post-tool assistant result without replaying side effects/i,
+      /approved tool resume can feed a compact result into provider continuation/i,
       /disallowed wording/i,
       /do not claim/i,
     ],

@@ -22,6 +22,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - approval requests persist private run/tool/input/workspace/policy/tool-manifest/provider snapshots in SQLite.
   - approval and denial decisions append durable RunLog events.
   - approved receipts can resume a paused tool after SQLite-backed restart, validate the original snapshot, mark the receipt used, and execute only through `ToolRegistry`.
+  - approved tool results are replayed to the provider as reconstructed user/assistant-tool/tool messages so the run can complete with a post-tool assistant result.
   - mutation, expiry, tool-manifest drift, workspace drift, and replay attempts fail closed in focused tests.
 
 ## Prototype Or Migration Surfaces
@@ -38,7 +39,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Memory retrieval adapter connected to RunLog context assembly.
-- Continuing a resumed approval run back into the provider loop after the approved tool result; the current RunLog resume slice executes and completes the approved tool boundary.
+- General checkpoint replay/retry controls beyond the implemented approval-resume continuation.
 - Child-run/subagent helper APIs beyond the parent-run data model.
 - Not implemented: hosted multi-tenant auth, real billing, remote marketplace trust, VM isolation, or secure desktop credential vault.
 

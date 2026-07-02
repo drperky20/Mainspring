@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SqliteRunLogStore } from '../adapters/sqlite/SqliteRunLogStore.js'
 import { LocalWorkspaceAdapter } from '../capabilities/workspace/LocalWorkspaceAdapter.js'
+import type { QueryInput } from '../providers/types.js'
 import { MockProvider } from '../providers/MockProvider.js'
 import { builtinManifest, type RuntimeTool } from '../tools/ToolRegistry.js'
 import { projectRunLogRun } from '../hosts/runlog/RunLogProjection.js'
@@ -261,10 +262,25 @@ describe('RunLogKernel', () => {
 
     const secondStore = new SqliteRunLogStore({ dbPath })
     stores.push(secondStore)
+    let continuationInput: QueryInput | undefined
     const secondKernel = new RunLogKernel({
       store: secondStore,
       tools: [approvalTool(executions, { approvalRequired: true })],
-      providerRouter: new SingleProviderRouter(new MockProvider([])),
+      providerRouter: new SingleProviderRouter(
+        new MockProvider((input) => {
+          continuationInput = input
+          const toolMessage = input.messages?.find((message) => message.role === 'tool')
+          return [
+            {
+              type: 'event',
+              event: {
+                type: 'result',
+                text: `continued:${Boolean(toolMessage?.content.includes('"executions":1'))}`,
+              },
+            },
+          ]
+        }),
+      ),
     })
     const receipt = secondKernel.approveRunLogApproval({
       approvalId,
@@ -277,6 +293,23 @@ describe('RunLogKernel', () => {
 
     expect(summary?.status).toBe('completed')
     expect(executions.count).toBe(1)
+    expect(projection.assistantText).toBe('continued:true')
+    expect(continuationInput?.prompt).toBe('')
+    expect(continuationInput?.messages?.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'tool',
+    ])
+    expect(continuationInput?.messages?.[1]).toMatchObject({
+      role: 'assistant',
+      toolCalls: [
+        {
+          id: 'call_restart_approval',
+          name: 'tool.approval',
+          arguments: JSON.stringify({ value: 42 }),
+        },
+      ],
+    })
     expect(projection.pendingApprovals).toHaveLength(0)
     expect(projection.approvalDecisions[0]?.decision).toBe('approved')
     expect(projection.events.map((event) => event.type)).toEqual(

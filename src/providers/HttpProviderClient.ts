@@ -725,10 +725,10 @@ function parseOpenAIUsage(value: unknown, headers?: Headers): ProviderUsage | un
 }
 
 function createReplayMessages(input: QueryInput): ProviderMessage[] {
-  const history: ProviderMessage[] = [
-    ...(input.messages ?? []),
-    { role: 'user', content: input.prompt },
-  ]
+  const history: ProviderMessage[] = [...(input.messages ?? [])]
+  if (input.prompt.trim()) {
+    history.push({ role: 'user', content: input.prompt })
+  }
   return repairProviderMessageHistory(history).messages
 }
 

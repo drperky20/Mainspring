@@ -7331,6 +7331,43 @@ At the start of each continuation:
 
 Do not mark broad product features complete because scaffolds or docs exist. Be explicit about partial work.
 
+## 2026-07-01 RunLog Approval Resume Provider Continuation Slice
+
+Implemented provider continuation after scoped approval resume.
+
+What changed:
+
+- Refactored `RunLogExecutor` so normal provider execution and approval-resume continuation use the same provider event loop.
+- After an approved tool resume, the executor now reconstructs provider messages:
+  - original user prompt
+  - assistant tool call with the original tool call id/name/arguments
+  - tool result message with the approved tool output
+- The resumed run then asks the provider for the post-tool assistant result instead of completing at the tool boundary.
+- Kept the one-time-use receipt marking before side-effect execution, so provider continuation cannot replay the approved side effect.
+- Updated `HttpProviderClient` replay handling so continuation queries can provide message history without an extra empty user prompt.
+- Updated RunLog approval-resume tests to prove the continuation query receives the reconstructed messages and the projected assistant text comes from the post-tool provider result.
+- Updated `docs/current-state.md`, `docs/security-truth-matrix.md`, and `docs/implementation-backlog.md`.
+
+Verification:
+
+- `pnpm exec vitest run src/core/RunLogKernel.test.ts src/providers/HttpProviderClient.test.ts`: passed, 2 files / 26 tests.
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm verify`: passed, including 57 test files / 395 tests, build, security guards, docs check, console typecheck, console browser-safety check, and console build.
+- `pnpm release:check`: passed end to end, including verify, security truth, gateway systems, gateway help, examples smoke, agentic harness, desktop systems, release workflow, optional verifiers, package surface, package dry-runs, npm dry-run, and Docker Compose config.
+
+What this proves:
+
+- A paused approval run can restart, approve, execute the exact approved tool once, replay the approved tool result into provider context, and complete with provider-produced assistant text.
+- Stale approval replay remains blocked by one-time receipt state and stale-decision checks from the prior slice.
+
+Remaining risks:
+
+- General checkpoint replay/retry controls beyond the implemented approval-resume continuation are still incomplete.
+- Public SDK/gateway/console surfaces are not fully RunLog-native yet.
+- Host shell execution remains unsandboxed, and provider credentials must remain host-side.
+
 ## 2026-07-01 Durable RunLog Approval Receipt Resume Slice
 
 Implemented the scoped receipt-resume milestone for the TypeScript-native RunLog Fabric.
