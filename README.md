@@ -66,6 +66,8 @@ pnpm console:dev
 
 `pnpm gateway:dev` stores local RunLog state under `.mainspring/runlog` and falls back to `EchoProvider` when no OpenRouter/OpenAI env credential is configured.
 
+The gateway and console are separate local processes; the console connects to the gateway when opened with the `mainspringConsoleSource=local-gateway-dev` query.
+
 Open the console with:
 
 ```text

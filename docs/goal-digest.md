@@ -8425,3 +8425,44 @@ Verification in this slice:
 Next recommended milestone:
 
 - Add taint labels beyond scan findings for web/email/file-derived memory and skill mutations, or continue retiring legacy mailbox/gateway surfaces now that runnable examples use the RunLog SDK host.
+
+## 2026-07-02 Research And Model Review Artifact Slice
+
+Goal:
+
+- Make the external agent-runtime research and no-GPT-5.5 model review pass durable inside the repo, then turn the concrete findings into the next backlog slice.
+
+Changes:
+
+- Added `docs/research/agent-runtime-synthesis.md` with a RunLog-grounded synthesis of Hermes, OpenClaw, Claude Code, Codex, opencode, Pi/Inflection, Cursor, Aider, OpenHands, Devin, GitHub Copilot, Jules, Goose, Temporal, LangGraph, OpenAI Agents tracing/guardrails, and BullMQ.
+- Added `docs/reviews/gpt-5.3-codex-spark-migration-review.md` from Dalton's migration review.
+- Added `docs/reviews/gpt-5.4-security-architecture-review.md` from Russell's security architecture review.
+- Added `docs/reviews/gpt-5.4-mini-docs-review.md` from Curie's documentation review.
+- Updated `docs/sdk.md` so the public surfaces list mirrors package exports, including `mainspring/adapters/local-blob`, `mainspring/compat`, and `mainspring/gateway/browser-safety`.
+- Updated `README.md` to clarify that `pnpm gateway:dev` and `pnpm console:dev` are separate local processes.
+- Updated `docs/implementation-backlog.md` to mark the research/review artifact task complete and add follow-up rows for local gateway browser-origin auth hardening, explicit RunLog approval signing keys outside local-dev/test, browser redirect/navigation revalidation, and memory/skill taint labels.
+
+What this proves:
+
+- The redesign research is tied back to Mainspring's implemented RunLog Fabric instead of living as a loose planning prompt.
+- The review pass used only allowed model families: GPT-5.4, GPT-5.4 Mini, and GPT-5.3 Codex Spark. GPT-5.5 was not used.
+- The backlog now captures the accepted security and documentation findings as repo-visible next work.
+
+Still honest:
+
+- This slice did not implement the gateway CORS/CSRF hardening, mandatory non-local RunLog receipt key, browser post-navigation revalidation, or taint-label semantics.
+- The legacy mailbox, `SessionRuntimeSupervisor`, and `RuntimeKernel` compatibility path remains present while the RunLog migration continues.
+- Host shell execution remains unsafe host execution; browser/localStorage provider auth remains prototype-only; HyperCells, VM isolation, operator roles, billing, and secure desktop secrets remain unimplemented.
+
+Verification in this slice:
+
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK` after rewording research/review notes away from guarded public-claim terms.
+- `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm typecheck`: passed.
+- `pnpm verify`: passed, 60 files / 436 tests plus build, security, sensitive-patterns, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end, including gateway systems, examples smoke, agentic harness, desktop systems, optional verifier diagnostics, package dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Harden the local gateway browser-origin/auth boundary, then require explicit RunLog approval signing keys outside local-dev/test profiles.

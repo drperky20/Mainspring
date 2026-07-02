@@ -141,18 +141,25 @@ const followUp = session.runs.start({
 
 ## Public Surfaces
 
+This list mirrors the public `package.json` exports. `mainspring/compat` is a
+temporary migration surface for legacy mailbox/runtime users, not the preferred
+path for new runtime work.
+
 - `mainspring`
 - `mainspring/sdk`
 - `mainspring/core`
 - `mainspring/adapters`
 - `mainspring/adapters/sqlite`
+- `mainspring/adapters/local-blob`
 - `mainspring/capabilities`
 - `mainspring/hosts/runlog`
+- `mainspring/compat`
 - `mainspring/contracts`
 - `mainspring/protocol`
 - `mainspring/protocol/node`
 - `mainspring/control`
 - `mainspring/gateway`
+- `mainspring/gateway/browser-safety`
 - `mainspring/gateway/server`
 
 Use the local gateway when you need clients, workspaces, agents, provider profiles, budgets, cron, marketplace, deployments, or console snapshots.
