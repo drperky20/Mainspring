@@ -112,6 +112,7 @@ describe('RunLogMainspring SDK host', () => {
         capabilities: ['provider', 'tools'],
       },
       approvalReceiptKey: 'test-runlog-sdk-approval-key',
+      approvalReceiptKeyMode: 'configured',
     })
 
     const run = app.runs.start({ input: 'Use reviewed tool.' })
@@ -130,5 +131,42 @@ describe('RunLogMainspring SDK host', () => {
     expect(executions.count).toBe(1)
     expect(run.projection().pendingApprovals).toHaveLength(0)
     expect(run.result()).toBe('approved:true')
+  })
+
+  it('fails closed when configured approval receipt key mode has no key', async () => {
+    const root = tempRoot()
+    const executions = { count: 0 }
+    const app = runtime({
+      rootPath: root,
+      provider: new MockProvider([
+        {
+          type: 'event',
+          event: {
+            type: 'tool_call',
+            name: 'tool.reviewed',
+            toolCallId: 'call_missing_key',
+            input: { sourceMutation: true },
+          },
+        },
+      ]),
+      tools: [approvalTool(executions)],
+      agent: {
+        agentId: 'agent_missing_key',
+        instructions: 'Ask before tool use.',
+        tools: ['tool.reviewed'],
+        approvalPolicy: 'balanced',
+        capabilities: ['provider', 'tools'],
+      },
+      approvalReceiptKeyMode: 'configured',
+    })
+
+    const run = app.runs.start({ input: 'Use reviewed tool.' })
+    await run.drainUntilIdle()
+
+    expect(run.status()).toBe('awaiting_approval')
+    expect(() => run.approve({ actor: 'sdk-test' })).toThrow(
+      /RunLog approval receipt signing key is required/,
+    )
+    expect(executions.count).toBe(0)
   })
 })

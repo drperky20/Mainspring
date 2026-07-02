@@ -528,6 +528,7 @@ export class RunLogExecutor {
       receipt: input.receipt,
       request: currentRequest,
       key: this.options.approvalReceiptKey,
+      keyMode: this.options.approvalReceiptKeyMode,
     })
     const marked = this.store.markApprovalReceiptUsed(input.receipt.receiptId, input.run.runId)
     if (!marked) throw new Error(`RunLog approval receipt was already used: ${input.receipt.receiptId}`)

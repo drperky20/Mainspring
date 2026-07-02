@@ -22,6 +22,8 @@ When the gateway is configured with a RunLog SDK host, the default `/runs/start`
 
 The local dev server created by `pnpm gateway:dev` now configures that RunLog host by default. It stores RunLog state under `.mainspring/runlog/runlog.sqlite`, materializes RunLog workspaces under `.mainspring/runlog/workspaces`, and uses env-backed OpenRouter/OpenAI credentials only when the matching key is present. Without a live provider key it uses `EchoProvider` so source checkout bring-up stays local and free. Managed provider profile secrets are resolved host-side for RunLog provider calls through opaque credential refs; raw secret values are not written to RunLog events or browser DTOs.
 
+`MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=configured` makes RunLog approval receipt signing fail closed unless `MAINSPRING_RUNLOG_APPROVAL_KEY` is set. The default `local-dev` mode keeps no-key source checkout examples ergonomic and should not be used for non-local deployments.
+
 When a gateway has a RunLog host, cron tick and run-now dispatch create ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events. Provider-only cron schedules queue normally; side-effecting schedules fail closed unless their metadata carries a scoped, unexpired cron grant. Operators can call `GET /cron/:scheduleId/grant` to preview the current grant decision and `POST /cron/:scheduleId/grant` to create an expiring scoped grant derived from the current schedule. The React console also exposes review/create controls that display the grant state without raw prompt hashes or secret refs. Gateways without a RunLog host keep the mailbox-compatible cron path for older embedders and migration verifiers.
 
 Staged memory/skill provenance reviews are exposed through local gateway routes:
@@ -47,6 +49,7 @@ Hosted-auth bootstrap and login are still local operator flows, but browser-orig
 - It does not provide enterprise SSO.
 - It does not provide secure desktop identity.
 - It does not accept arbitrary browser origins for hosted-auth bootstrap/login.
+- It does not make the local-dev RunLog approval receipt key suitable for non-local deployments.
 - It does not execute tools or providers outside the runtime.
 - It does not prove remote skill marketplace trust or third-party reputation.
 - Browser DTO sanitization is not a replacement for gateway-side auth, OS permissions, or artifact access checks.

@@ -85,6 +85,7 @@ export class RunLogKernel {
       expiresAt: input.expiresAt,
       expiresInMs: input.expiresInMs,
       key: this.options.approvalReceiptKey,
+      keyMode: this.options.approvalReceiptKeyMode,
     })
     this.options.store.putApprovalReceipt(receipt)
     this.options.store.appendEvent({
@@ -123,6 +124,7 @@ export class RunLogKernel {
       expiresAt: input.expiresAt,
       expiresInMs: input.expiresInMs,
       key: this.options.approvalReceiptKey,
+      keyMode: this.options.approvalReceiptKeyMode,
     })
     this.options.store.putApprovalReceipt(receipt)
     this.options.store.appendEvent({

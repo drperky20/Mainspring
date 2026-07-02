@@ -48,6 +48,12 @@ export function resolveLocalGatewayCellCapacity(value: string | undefined): numb
   return Number.isInteger(parsed) && parsed >= 1 ? parsed : undefined
 }
 
+export function resolveRunLogApprovalKeyMode(
+  value: string | undefined,
+): 'local-dev' | 'configured' {
+  return value?.trim() === 'configured' ? 'configured' : 'local-dev'
+}
+
 function printHelp(): void {
   console.log(`Mainspring local gateway dev server
 
@@ -64,6 +70,7 @@ Environment:
   MAINSPRING_RUNLOG_DB=.mainspring/runlog/runlog.sqlite
   MAINSPRING_RUNLOG_WORKSPACE_ROOT=.mainspring/runlog/workspaces
   MAINSPRING_RUNLOG_APPROVAL_KEY=
+  MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=local-dev
   MAINSPRING_GATEWAY_MANAGED_SECRET_KEY=.mainspring/gateway-app.sqlite.managed-key
   MAINSPRING_GATEWAY_MANAGED_SECRET_STORE=auto
   MAINSPRING_GATEWAY_MANAGED_SECRET_CREDENTIAL_NAME=
@@ -99,6 +106,9 @@ async function main(): Promise<void> {
   )
   const runLogWorkspaceRoot = path.resolve(
     process.env.MAINSPRING_RUNLOG_WORKSPACE_ROOT || path.join(runLogRoot, 'workspaces'),
+  )
+  const runLogApprovalKeyMode = resolveRunLogApprovalKeyMode(
+    process.env.MAINSPRING_RUNLOG_APPROVAL_KEY_MODE,
   )
   const managedSecretKeyPath = path.resolve(
     process.env.MAINSPRING_GATEWAY_MANAGED_SECRET_KEY || `${appDbPath}.managed-key`,
@@ -162,6 +172,7 @@ async function main(): Promise<void> {
       capabilities: ['provider'],
     },
     approvalReceiptKey: process.env.MAINSPRING_RUNLOG_APPROVAL_KEY,
+    approvalReceiptKeyMode: runLogApprovalKeyMode,
     secretResolver: (ref) =>
       ref.kind === 'env'
         ? process.env[ref.key]

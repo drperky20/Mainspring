@@ -8,6 +8,7 @@ Mainspring treats agents as untrusted workers.
 - tool manifests
 - canonical RunLog `DecisionRecord` events for guarded tool executions
 - approval receipts
+- RunLog approval receipt configured-key mode for non-local hosts; local-dev fallback is explicit
 - file workspace containment
 - output redaction and truncation
 - gateway JSON/SSE text redaction for browser-unsafe path markers and common provider key environment markers
@@ -38,6 +39,7 @@ Mainspring treats agents as untrusted workers.
 - The desktop shell is not a secret vault.
 - Local hosted auth is not enterprise SSO.
 - Local browser-origin checks reduce cross-site localhost risk, but they are not a hosted identity system.
+- RunLog local-dev approval receipt fallback is for examples/tests/local development only.
 - Local budget enforcement is not payment billing.
 - RunLog cron grants are scheduling authority checks, not process containment.
 

@@ -41,6 +41,7 @@ export interface CreateRunLogMainspringOptions {
   tools?: RuntimeTool[]
   policy?: RuntimePolicy
   approvalReceiptKey?: string
+  approvalReceiptKeyMode?: 'local-dev' | 'configured'
   secretResolver?: RuntimeSecretResolver
   workerId?: string
   leaseMs?: number
@@ -121,6 +122,7 @@ export class RunLogMainspring {
       defaultWorkspaceRoot: workspaceRoot,
       policy: options.policy,
       approvalReceiptKey: options.approvalReceiptKey,
+      approvalReceiptKeyMode: options.approvalReceiptKeyMode ?? 'local-dev',
       secretResolver: options.secretResolver,
       workerId: options.workerId,
       leaseMs: options.leaseMs,

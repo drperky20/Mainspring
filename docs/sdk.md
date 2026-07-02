@@ -75,6 +75,12 @@ if (pending?.approvalId) {
 }
 ```
 
+By default, `createRunLogMainspring` keeps the local-dev approval receipt key
+fallback for no-key examples and tests. Non-local hosts should set
+`approvalReceiptKeyMode: "configured"` and provide `approvalReceiptKey` or
+`MAINSPRING_RUNLOG_APPROVAL_KEY`; configured mode fails closed instead of using
+the local-dev fallback.
+
 This host does not add a second runtime spine. It uses:
 
 ```text

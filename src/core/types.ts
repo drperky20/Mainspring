@@ -271,6 +271,7 @@ export interface RunExecutorOptions {
   defaultWorkspaceRoot?: string
   policy?: RuntimePolicy
   approvalReceiptKey?: string
+  approvalReceiptKeyMode?: 'local-dev' | 'configured'
   secretResolver?: RuntimeSecretResolver
   maxToolIterations?: number
 }

@@ -8505,3 +8505,42 @@ Verification in this slice:
 Next recommended milestone:
 
 - Require explicit RunLog approval signing keys outside local-dev/test profiles.
+
+## 2026-07-02 RunLog Approval Signing Key Mode Slice
+
+Goal:
+
+- Close the accepted review finding that RunLog approval receipts silently used the static local-dev signing key whenever no configured key was present.
+
+Changes:
+
+- Added `approvalReceiptKeyMode: "local-dev" | "configured"` to `CreateRunLogMainspringOptions` and RunLog executor options.
+- Updated RunLog approval receipt signing and verification so configured mode fails closed if neither `approvalReceiptKey` nor `MAINSPRING_RUNLOG_APPROVAL_KEY` is set.
+- Preserved the explicit local-dev fallback mode for no-key examples, tests, and source checkout development.
+- Updated `pnpm gateway:dev` to accept `MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=local-dev|configured`.
+- Extended `src/sdk/RunLogMainspring.test.ts` so configured mode with a key still resumes approved tools and configured mode without a key throws before issuing a receipt.
+- Updated SDK, local gateway, security, and backlog docs with the new key mode.
+
+What this proves:
+
+- Non-local hosts now have a code-backed fail-closed mode for RunLog approval receipt signing.
+- Local no-key examples and test fixtures remain ergonomic, but the fallback is explicit instead of hidden.
+
+Still honest:
+
+- This does not rotate existing local-dev receipts or create hosted secret management.
+- This does not harden the legacy mailbox approval flow.
+- Callers must choose configured mode for non-local/release lanes and provide a real key.
+
+Verification in this slice:
+
+- `pnpm exec vitest run src/sdk/RunLogMainspring.test.ts`: passed, 3 tests.
+- `pnpm gateway:dev:help`: passed and prints `MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=local-dev`.
+- `pnpm typecheck`: passed.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 437 tests plus build, security, sensitive-patterns, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end, including gateway systems, examples smoke, agentic harness, desktop systems, optional verifier diagnostics, package dry-runs, and Docker Compose config.
+
+Next recommended milestone:
+
+- Revalidate browser adapter URLs after redirects/navigation, or add taint labels for memory and skill mutations.

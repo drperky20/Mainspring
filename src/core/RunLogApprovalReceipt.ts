@@ -30,10 +30,16 @@ export function stableRunLogHash(value: unknown): string {
 
 export function resolveRunLogApprovalKey(input?: {
   key?: string
+  mode?: 'local-dev' | 'configured'
 }): { key: string; keyId: string; localDevFallback: boolean } {
   const key = input?.key ?? process.env.MAINSPRING_RUNLOG_APPROVAL_KEY
   if (key && key.trim()) {
     return { key, keyId: 'configured', localDevFallback: false }
+  }
+  if (input?.mode === 'configured') {
+    throw new Error(
+      'RunLog approval receipt signing key is required when approvalReceiptKeyMode is configured.',
+    )
   }
   return {
     key: LOCAL_DEV_APPROVAL_RECEIPT_KEY,
@@ -86,9 +92,10 @@ export function createRunLogApprovalReceipt(input: {
   expiresAt?: string
   expiresInMs?: number
   key?: string
+  keyMode?: 'local-dev' | 'configured'
   nonce?: string
 }): RunLogApprovalReceipt {
-  const keyInfo = resolveRunLogApprovalKey({ key: input.key })
+  const keyInfo = resolveRunLogApprovalKey({ key: input.key, mode: input.keyMode })
   const decidedAt = input.decidedAt ?? nowIso()
   const expiresAt =
     input.expiresAt ??
@@ -144,10 +151,11 @@ export function assertRunLogApprovalReceipt(input: {
   receipt: RunLogApprovalReceipt
   request: RunLogApprovalRequestSnapshot
   key?: string
+  keyMode?: 'local-dev' | 'configured'
   now?: Date
 }): void {
   const { receipt, request } = input
-  const keyInfo = resolveRunLogApprovalKey({ key: input.key })
+  const keyInfo = resolveRunLogApprovalKey({ key: input.key, mode: input.keyMode })
   const expectedSignature = signRunLogApprovalReceipt(receiptSigningPayload(receipt), keyInfo.key)
   if (receipt.version !== RUNLOG_APPROVAL_RECEIPT_VERSION) {
     throw new Error('RunLog approval receipt version is unsupported.')
