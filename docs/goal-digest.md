@@ -1,6 +1,6 @@
 # Mainspring Goal Digest
 
-Last updated: 2026-07-01.
+Last updated: 2026-07-02.
 
 This is the durable digest for continuing the full Mainspring product/architecture brief in repo-grounded milestones. Future work should read this file and `docs/current-state.md` before choosing the next milestone.
 
@@ -7330,6 +7330,31 @@ At the start of each continuation:
    - blockers, if any
 
 Do not mark broad product features complete because scaffolds or docs exist. Be explicit about partial work.
+
+## 2026-07-02 Canonical RunLog Policy Decision Slice
+
+Implemented the canonical tool-path `DecisionRecord` layer for the RunLog Fabric runtime.
+
+- Added `src/policy/DecisionRecord.ts` with `allow`, `deny`, `clarify`, `requires_approval`, `stage_for_review`, and `hard_block` states plus surface classification, input/manifest/policy hashes, approval state, and decision ids.
+- Extended `RuntimePolicyGuard` with unapprovable hard blocks for catastrophic filesystem wipes, raw disk operations, fork bombs, network-to-shell installs, credential disclosure, secret env dumping, Git remote/hook mutation, and approval/policy disabling.
+- Updated `ToolRegistry` so every guarded tool execution attempt creates a decision record before approval, block, or execution handling.
+- Updated `RunLogExecutor` so tool-path decisions append durable `policy.decision.recorded` events and related tool/approval events carry `decisionId`.
+- Updated `RunLogProjection` so hosts can inspect `policyDecisions`.
+- Added tests proving allowed tool calls, approval-required tool calls, and hard-blocked shell calls produce durable policy decisions, and that hard blocks still deny execution even with an approval receipt.
+- Updated current-state, implementation backlog, and security docs to distinguish implemented tool-path decisions from pending host-surface adapters.
+
+Preserved runtime seams:
+
+`SDK/control host -> per-session SQLite mailbox -> SessionRuntimeSupervisor -> RuntimeKernel -> AgentProvider.query -> ToolRegistry -> RuntimePolicyGuard / ApprovalReceipt -> tools -> events_out -> SDK/control event projection`.
+
+Verification for the focused slice:
+
+- `pnpm exec vitest run src/policy src/tools src/core`: passed, 4 files / 47 tests.
+
+Remaining risk:
+
+- Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, cron/headless grants, and future subagent creation still need explicit `DecisionRecord` adapters as they become RunLog-native.
+- Host shell execution remains unsafe host process execution, not a sandbox.
 
 ## 2026-07-01 RunLog Approval Resume Provider Continuation Slice
 

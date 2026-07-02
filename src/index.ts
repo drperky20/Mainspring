@@ -167,6 +167,16 @@ export {
   hashApprovalInput,
 } from './policy/ApprovalReceipt.js'
 export type { ApprovalReceipt } from './policy/ApprovalReceipt.js'
+export {
+  createDecisionRecord,
+  decisionStateForPolicyDecision,
+  decisionSurfaceForManifest,
+} from './policy/DecisionRecord.js'
+export type {
+  DecisionRecord,
+  DecisionRecordState,
+  DecisionRecordSurface,
+} from './policy/DecisionRecord.js'
 export { RuntimePolicyGuard } from './policy/PolicyGuard.js'
 export type {
   PolicyDecision,

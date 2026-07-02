@@ -2,6 +2,7 @@ import path from 'node:path'
 import type { RuntimePolicy } from '#protocol'
 import type { ProviderEvent, ProviderMessage, QueryInput } from '../providers/types.js'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
+import type { DecisionRecord } from '../policy/DecisionRecord.js'
 import { ToolRegistry, type RuntimeTool } from '../tools/ToolRegistry.js'
 import {
   assertRunLogApprovalReceipt,
@@ -403,6 +404,7 @@ export class RunLogExecutor {
     const result = await input.toolRegistry.execute({
       key: input.event.name,
       input: input.event.input,
+      toolCallId,
     })
     if (result.status === 'approval_required') {
       const tool = input.selectedTools.find((candidate) => candidate.manifest.key === input.event.name)
@@ -428,6 +430,7 @@ export class RunLogExecutor {
           targetKey: result.approval.targetKey,
           reasons: result.approval.reasons,
           permissionCategories: result.approval.permissionCategories,
+          decisionId: result.decisionRecord.decisionId,
           request: publicApprovalRequestSnapshot(snapshot),
         },
       })
@@ -435,6 +438,7 @@ export class RunLogExecutor {
         approvalId: result.approval.id,
         toolCallId,
         targetKey: result.approval.targetKey,
+        decisionId: result.decisionRecord.decisionId,
       })
       return this.store.appendEvent({
         runId: input.run.runId,
@@ -448,6 +452,8 @@ export class RunLogExecutor {
         name: input.event.name,
         reasons: result.reasons,
         permissionCategories: result.permissionCategories,
+        decisionId: result.decisionRecord.decisionId,
+        hardBlocked: result.decisionRecord.hardBlocked,
       }
       input.query.push(JSON.stringify({ toolCallId, status: 'policy_blocked', payload }))
       return this.store.appendEvent({
@@ -464,6 +470,7 @@ export class RunLogExecutor {
         toolCallId,
         name: input.event.name,
         output: result.output,
+        decisionId: result.decisionRecord.decisionId,
       },
     })
   }
@@ -480,6 +487,7 @@ export class RunLogExecutor {
       workspaceRoot: input.workspaceRoot,
       policy: input.policy,
       emitEvent: () => {},
+      recordDecision: (record) => this.recordPolicyDecision(input.run.runId, record),
       readRecentEvents: ({ limit }) => this.store.listEvents({ runId: input.run.runId, limit }),
     })
     toolRegistry.registerMany(input.tools)
@@ -535,6 +543,7 @@ export class RunLogExecutor {
     const result = await toolRegistry.execute({
       key: request.toolName,
       input: request.toolInput,
+      toolCallId: request.toolCallId,
       approvalReceipt: legacyApprovalReceiptFromRunLog(input.receipt, currentRequest),
     })
     if (result.status === 'completed') {
@@ -546,6 +555,7 @@ export class RunLogExecutor {
           name: request.toolName,
           output: result.output,
           source: 'approved-resume',
+          decisionId: result.decisionRecord.decisionId,
         },
       })
       const checkpoints = this.checkpoint(input.run.runId, 'tool', {
@@ -584,6 +594,8 @@ export class RunLogExecutor {
           name: request.toolName,
           reasons: result.reasons,
           permissionCategories: result.permissionCategories,
+          decisionId: result.decisionRecord.decisionId,
+          hardBlocked: result.decisionRecord.hardBlocked,
         },
       })
       this.store.appendEvent({
@@ -600,5 +612,15 @@ export class RunLogExecutor {
       payload: { message: 'Approved tool requested a second approval during resume.' },
     })
     return 0
+  }
+
+  private recordPolicyDecision(runId: string, record: DecisionRecord): void {
+    this.store.appendEvent({
+      runId,
+      type: 'policy.decision.recorded',
+      payload: record,
+      idempotencyKey: `policy.decision.recorded:${record.decisionId}`,
+      visibility: 'public',
+    })
   }
 }

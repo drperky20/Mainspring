@@ -1,4 +1,5 @@
 import type { RunLogEvent, RunLogStore, RunRecord, RunStatus } from '../../core/types.js'
+import type { DecisionRecord } from '../../policy/DecisionRecord.js'
 
 export interface RunLogRunProjection {
   run: RunRecord
@@ -22,6 +23,7 @@ export interface RunLogRunProjection {
     status: 'requested' | 'completed' | 'failed' | 'blocked'
     payload: unknown
   }>
+  policyDecisions: DecisionRecord[]
   artifacts: unknown[]
   usage: unknown[]
   latestSeq: number
@@ -46,6 +48,7 @@ export function projectRunLogRun(input: {
   const approvalDecisions: RunLogRunProjection['approvalDecisions'] = []
   const resolvedApprovals = new Set<string>()
   const toolCalls: RunLogRunProjection['toolCalls'] = []
+  const policyDecisions: DecisionRecord[] = []
   const artifacts: unknown[] = []
   const usage: unknown[] = []
 
@@ -86,6 +89,9 @@ export function projectRunLogRun(input: {
         payload: event.payload,
       })
     }
+    if (event.type === 'policy.decision.recorded') {
+      policyDecisions.push(event.payload as DecisionRecord)
+    }
     if (event.type === 'artifact.created') artifacts.push(event.payload)
     if (event.type === 'usage.reported') usage.push(event.payload)
   }
@@ -100,6 +106,7 @@ export function projectRunLogRun(input: {
     ),
     approvalDecisions,
     toolCalls,
+    policyDecisions,
     artifacts,
     usage,
     latestSeq: events.at(-1)?.seq ?? 0,

@@ -30,6 +30,7 @@ export interface PolicyDecision {
   approvalRequired: boolean
   reasons: string[]
   permissionCategories: string[]
+  hardBlocked?: boolean
 }
 
 function inputRecord(value: unknown): Record<string, unknown> {
@@ -76,6 +77,37 @@ function isCostSensitiveTool(manifest: ToolManifest | SkillManifest, input?: unk
   )
 }
 
+function shellCommand(input?: unknown): string {
+  const record = inputRecord(input)
+  const value = record.command ?? record.cmd ?? record.script ?? record.args
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map((part) => String(part)).join(' ')
+  return ''
+}
+
+function hardlinePolicyReasons(manifest: ToolManifest | SkillManifest, input?: unknown): string[] {
+  const reasons: string[] = []
+  const command = shellCommand(input).toLowerCase()
+  const shellLike = manifest.permissions.shell === true || command.length > 0
+  if (!shellLike) return reasons
+
+  const hardlinePatterns: Array<[RegExp, string]> = [
+    [/\brm\s+-[^\n\r]*r[^\n\r]*f[^\n\r]*(?:\/|\*)/, 'catastrophic filesystem wipe cannot be approved'],
+    [/\bremove-item\b[^\n\r]*(?:-recurse|-r)[^\n\r]*(?:-force|-fo)[^\n\r]*(?:[a-z]:\\|\/|\*)/i, 'catastrophic filesystem wipe cannot be approved'],
+    [/\b(?:format|mkfs|diskpart|cipher\s+\/w|dd\s+if=)/i, 'raw disk or destructive volume operation cannot be approved'],
+    [/:\s*\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/, 'fork bomb cannot be approved'],
+    [/\b(?:curl|wget|irm|iwr|invoke-webrequest|invoke-restmethod)\b[^\n\r|;&]*(?:\||;|&&)[^\n\r]*(?:sh|bash|zsh|pwsh|powershell|iex|invoke-expression)\b/i, 'network-to-shell execution cannot be approved'],
+    [/\b(?:cat|type|get-content)\b[^\n\r]*(?:\.ssh|id_rsa|\.env|credentials|token|secret|api[_-]?key)/i, 'credential material disclosure cannot be approved'],
+    [/^\s*(?:printenv|env|gci\s+env:|get-childitem\s+env:)\b[^\n\r]*(?:token|secret|key|password|credential)/i, 'secret environment dumping cannot be approved'],
+    [/\b(?:git\s+remote\s+(?:add|set-url|remove|rename)|git\s+config\s+.*hooksPath)\b/i, 'git remote or hook mutation requires a dedicated approved workflow'],
+    [/\b(?:--no-approval|disable-approval|approval[_-]?policy\s*=\s*(?:off|none|disabled))\b/i, 'approval or policy disabling cannot be approved'],
+  ]
+  for (const [pattern, reason] of hardlinePatterns) {
+    if (pattern.test(command)) reasons.push(reason)
+  }
+  return Array.from(new Set(reasons))
+}
+
 export class RuntimePolicyGuard {
   constructor(readonly policy: RuntimePolicy) {}
 
@@ -107,6 +139,17 @@ export class RuntimePolicyGuard {
 
     const categories = permissionCategories(manifest, input.input)
     const reasons: string[] = []
+    const hardlineReasons = hardlinePolicyReasons(manifest, input.input)
+    if (hardlineReasons.length > 0) {
+      categories.push('hardline')
+      return {
+        blocked: true,
+        approvalRequired: false,
+        reasons: hardlineReasons,
+        permissionCategories: Array.from(new Set(categories)),
+        hardBlocked: true,
+      }
+    }
     if (this.policy.budget?.status === 'blocked') {
       reasons.push(
         this.policy.budget.reason

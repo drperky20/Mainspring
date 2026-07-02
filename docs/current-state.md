@@ -1,6 +1,6 @@
 # Current State
 
-Last rewritten: 2026-07-01.
+Last rewritten: 2026-07-02.
 
 This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-local long milestone ledger and is excluded from npm package artifacts.
 
@@ -24,11 +24,18 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - approved receipts can resume a paused tool after SQLite-backed restart, validate the original snapshot, mark the receipt used, and execute only through `ToolRegistry`.
   - approved tool results are replayed to the provider as reconstructed user/assistant-tool/tool messages so the run can complete with a post-tool assistant result.
   - mutation, expiry, tool-manifest drift, workspace drift, and replay attempts fail closed in focused tests.
+- Tool policy decisions are now durable RunLog facts on the canonical tool path:
+  - `ToolRegistry` creates a `DecisionRecord` for every guarded tool execution attempt.
+  - `RunLogExecutor` appends `policy.decision.recorded` before approval, block, or completion handling.
+  - decision states are `allow`, `deny`, `clarify`, `requires_approval`, `stage_for_review`, and `hard_block`.
+  - tool completion, approval, and block events carry the related `decisionId`.
+  - hard-block shell patterns such as catastrophic wipes, fork bombs, credential dumping, Git remote/hook mutation, approval disabling, and network-to-shell execution cannot be approved by a receipt.
 
 ## Prototype Or Migration Surfaces
 
 - The old mailbox/runtime path is still present and still important for existing SDK/gateway behavior.
 - Gateway and console remain mid-migration; they should consume RunLog projections rather than grow new parallel runtime state.
+- Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, cron/headless grants, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
 - Some existing docs/scripts still describe older mailbox-first architecture and should be consolidated around RunLog Fabric.
@@ -48,6 +55,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Provider calls go through `AgentProvider.query`.
 - Tool side effects go through `ToolRegistry`.
 - Risk decisions go through `RuntimePolicyGuard` and approval receipts.
+- Tool-path policy decisions must emit `policy.decision.recorded` before the tool executor is reached.
 - Durable events remain the public trace boundary.
 - RunLog approval decisions must keep using scoped signed receipts and one-time-use receipt rows.
 - Host projections must sanitize browser-facing DTOs.

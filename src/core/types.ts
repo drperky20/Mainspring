@@ -75,6 +75,7 @@ export type RunLogEventType =
   | 'run.queued'
   | 'run.claimed'
   | 'provider.init'
+  | 'policy.decision.recorded'
   | 'assistant.delta'
   | 'assistant.result'
   | 'tool.call.requested'

@@ -13,21 +13,28 @@ import {
   assertApprovalReceipt,
   type ApprovalReceipt,
 } from '../policy/ApprovalReceipt.js'
+import { createDecisionRecord, type DecisionRecord } from '../policy/DecisionRecord.js'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
 
 export interface ToolExecutionInput {
   key: string
   input?: unknown
+  toolCallId?: string
   approvalReceipt?: ApprovalReceipt
 }
 
 export type ToolExecutionResult =
-  | { status: 'completed'; output: unknown }
-  | { status: 'approval_required'; approval: RuntimeApprovalRequest }
+  | { status: 'completed'; output: unknown; decisionRecord: DecisionRecord }
+  | {
+      status: 'approval_required'
+      approval: RuntimeApprovalRequest
+      decisionRecord: DecisionRecord
+    }
   | {
       status: 'policy_blocked'
       reasons: string[]
       permissionCategories: string[]
+      decisionRecord: DecisionRecord
     }
 
 export interface RuntimeToolContext {
@@ -70,6 +77,7 @@ export interface ToolRegistryOptions {
   policy: RuntimePolicyGuard | RuntimePolicy
   readRecentEvents?: (input: { runId: string; limit?: number }) => unknown[] | Promise<unknown[]>
   emitEvent?: (event: MainspringEvent) => void
+  recordDecision?: (record: DecisionRecord) => void
 }
 
 export class ToolRegistry {
@@ -124,6 +132,19 @@ export class ToolRegistry {
       input: input.input,
       approved: Boolean(input.approvalReceipt),
     })
+    const decisionRecord = createDecisionRecord({
+      runId: this.options.runId,
+      ...(this.options.sessionId ? { sessionId: this.options.sessionId } : {}),
+      ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
+      operation: 'tool.execute',
+      manifest: tool.manifest,
+      toolInput: input.input,
+      policy: this.policy.policy,
+      decision,
+      approved: Boolean(input.approvalReceipt),
+      metadata: { capability: 'tool', toolType: tool.manifest.toolType },
+    })
+    this.options.recordDecision?.(decisionRecord)
 
     if (decision.approvalRequired) {
       const approval = buildApprovalRequest({
@@ -135,7 +156,7 @@ export class ToolRegistry {
         metadata: { capability: 'tool', toolType: tool.manifest.toolType },
       })
       this.emitEvent(approvalRequestedEvent({ runId: this.options.runId, approval }))
-      return { status: 'approval_required', approval }
+      return { status: 'approval_required', approval, decisionRecord }
     }
 
     if (decision.blocked) {
@@ -143,6 +164,7 @@ export class ToolRegistry {
         status: 'policy_blocked',
         reasons: decision.reasons,
         permissionCategories: decision.permissionCategories,
+        decisionRecord,
       }
     }
 
@@ -159,7 +181,7 @@ export class ToolRegistry {
         : undefined,
       emitEvent: this.emitEvent,
     })
-    return { status: 'completed', output }
+    return { status: 'completed', output, decisionRecord }
   }
 
   private registeredManifests(): ToolManifest[] {
