@@ -13,6 +13,7 @@ const scenarioResults = []
 
 await runScenario('coding-agent example', () => runNode(['examples/coding-agent/run.mjs']))
 await runScenario('provider-run RunLog example', () => runNode(['examples/provider-run/run.mjs']))
+await runScenario('tool-approval RunLog example', () => runNode(['examples/tool-approval/run.mjs']))
 await runScenario('personal-assistant example', () => runNode(['examples/personal-assistant/run.mjs']))
 await runScenario('support-agent example', () => runNode(['examples/support-agent/run.mjs']))
 await runScenario('agency-client-agent example', () => runNode(['examples/agency-client-agent/run.mjs']))

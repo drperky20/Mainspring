@@ -51,6 +51,12 @@ Run the smallest RunLog-native example. It does not need a paid provider key:
 pnpm example:provider-run
 ```
 
+Run a RunLog-native approval example:
+
+```bash
+pnpm example:tool-approval
+```
+
 Run the local gateway and console:
 
 ```bash

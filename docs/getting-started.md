@@ -29,7 +29,7 @@ Run all examples:
 pnpm examples:check
 ```
 
-`provider-run` uses the canonical RunLog SDK host and does not require a live provider key. The other examples keep the compatibility SDK host covered while migration continues. The examples do not provide containment; host tool examples inherit the normal local runtime limits.
+`provider-run` uses the canonical RunLog SDK host and does not require a live provider key. `tool-approval` uses the same host to show an approval-gated workspace write. The other examples keep the compatibility SDK host covered while migration continues. The examples do not provide containment; host tool examples inherit the normal local runtime limits.
 
 ## Run The Gateway And Console
 

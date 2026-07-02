@@ -8084,3 +8084,45 @@ Verification in this slice:
 Next recommended milestone:
 
 - Move the remaining compatibility examples that do not need mailbox-only behavior to `createRunLogMainspring`, or add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the existing sanitized browser DTO boundary.
+
+## 2026-07-02 RunLog Tool Approval Example Slice
+
+Goal:
+
+- Prove the public RunLog SDK host can pause a provider-requested workspace mutation for approval, issue a scoped receipt, resume ToolRegistry execution, and complete provider continuation.
+
+Changes:
+
+- Added `examples/tool-approval`, a RunLog-native example using `createRunLogMainspring`, `MockProvider`, the built-in `file.write` tool, `RuntimePolicyGuard`, scoped RunLog approval receipts, and `RunLogProjection`.
+- Added `pnpm example:tool-approval`.
+- Added the tool-approval example to `pnpm examples:smoke`, `pnpm examples:check`, and `pnpm agentic:check`.
+- Updated README, examples, getting-started, operations, migration, and backlog docs so the public examples now include both RunLog provider-only and RunLog approval-gated tool flows.
+
+What this proves:
+
+- A no-key source checkout now has a canonical RunLog example that reaches `approval.requested`, waits before file mutation, approves the exact request, uses the receipt, runs `file.write`, and completes provider continuation.
+- The example validates that `reports/approved-note.txt` does not exist before approval and contains the expected text only after approved resume.
+- The example surfaces RunLog event types, checkpoint kinds, pending approval count, approval decisions, receipt id, final text, and workspace-relative output path.
+
+Still honest:
+
+- This proves a workspace-scoped `file.write` approval path, not shell, browser, memory, skills, subagents, or live-provider behavior.
+- Host file tools are not containment; the example demonstrates approval and workspace scoping, not a sandbox.
+- Compatibility examples still exist for mailbox-only approval/replay and local tool flows until each path is migrated or deliberately retained as compatibility coverage.
+
+Verification in this slice:
+
+- `pnpm example:tool-approval`: passed and emitted `approval.requested`, `approval.approved`, `approval.receipt.used`, `tool.call.completed`, and `run.completed`.
+- `pnpm examples:check`: passed and ran `provider-run`, `tool-approval`, then the compatibility examples.
+- `pnpm agentic:check`: passed and included `tool-approval RunLog example`.
+- `pnpm typecheck`: passed.
+- `pnpm docs:check`: passed with `MAINSPRING_DOCS_SURFACE_CHECK_OK`.
+- `pnpm security:truth`: passed with `MAINSPRING_SECURITY_TRUTH_CHECK_OK` and `MAINSPRING_RELEASE_CLAIMS_CHECK_OK`.
+- `pnpm package:check`: passed with `MAINSPRING_PACKAGE_SURFACE_CHECK_OK`.
+- `pnpm verify`: passed, 60 files / 436 tests plus build, security, skill provenance, RunLog migration, docs, console browser-safety, and console build.
+- `pnpm release:check`: passed end to end after cleanup hardening, including gateway systems, examples smoke, agentic harness, desktop systems, optional verifiers, package dry-runs, and Docker Compose config.
+- Package dry-runs listed 456 files and did not include generated `approved-note.txt` output.
+
+Next recommended milestone:
+
+- Migrate another compatibility example that does not require mailbox-only behavior, or add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the sanitized gateway/console DTO boundary.

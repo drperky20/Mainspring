@@ -1,0 +1,9 @@
+{
+  "agentId": "agent_tool_approval",
+  "instructions": "Use file.write only after approval and then summarize the result.",
+  "capabilities": ["provider", "tools", "files"],
+  "tools": ["file.write"],
+  "approvalPolicy": "balanced",
+  "providerId": "mock",
+  "modelId": "mock/runlog-tool-approval"
+}

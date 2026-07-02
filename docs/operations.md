@@ -22,7 +22,7 @@ It runs `optional-verifiers:check` so optional verifier prerequisite diagnostics
 
 `openrouter:e2e` is also optional. It requires `OPENROUTER_API_KEY` and network access, is not part of `release:check`, and reports missing credentials with `MAINSPRING_OPENROUTER_E2E_PREREQUISITES_BLOCKED` without echoing key values. When credentials are present, it runs a live OpenRouter request through `createMainspring`, a temporary per-session SQLite mailbox, `SessionRuntimeSupervisor`, `RuntimeKernel`, provider query, and `events_out`; it verifies terminal runtime events, provider-init warning detail, assistant output, usage when reported, and no key echo in the event journal.
 
-`examples:check` is an alias for the runnable examples smoke suite. It includes the RunLog-native `provider-run` example plus the compatibility examples that still exercise mailbox approval, replay, memory, and local tool flows during migration.
+`examples:check` is an alias for the runnable examples smoke suite. It includes the RunLog-native `provider-run` and `tool-approval` examples plus the compatibility examples that still exercise mailbox approval, replay, memory, and local tool flows during migration.
 
 ## Focused Checks
 
