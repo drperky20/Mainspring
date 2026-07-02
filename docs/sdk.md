@@ -141,5 +141,7 @@ exposes explicit RunLog routes:
 - `GET /runlog/runs/:runId/events`
 - `POST /runlog/approvals/:approvalId/resolve`
 
-The legacy `/runs/start` route remains mailbox-compatible until its existing DTO and
-example coverage can move safely.
+The default `/runs/start` route uses the RunLog host when the gateway is configured
+with one, while gateways without a RunLog host remain mailbox-compatible. The route
+keeps the compact compatibility dispatch DTO; RunLog-aware clients can use the
+explicit `/runlog/...` routes for full projection data.

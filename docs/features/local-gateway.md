@@ -18,11 +18,7 @@ It provides:
 - deployment target/run metadata
 - optional hosted-auth mode
 
-The default `/runs/start` route still enqueues mailbox-compatible SDK runs. The explicit
-`/runlog/runs/start`, `/runlog/runs/:runId/events`, and
-`/runlog/approvals/:approvalId/resolve` routes use the optional RunLog SDK host when
-configured, create `RunIntent` records, drain through `RunLogKernel`, and return
-`RunLogProjection`-based responses.
+When the gateway is configured with a RunLog SDK host, the default `/runs/start` route creates a `RunIntent`, drains through `RunLogKernel`, and returns the compact compatibility run dispatch DTO. Gateways without a RunLog host keep the mailbox-compatible SDK run path. The explicit `/runlog/runs/start`, `/runlog/runs/:runId/events`, and `/runlog/approvals/:approvalId/resolve` routes expose `RunLogProjection`-based responses for RunLog-aware clients.
 
 Gateway RunLog routes are local development surfaces. They do not create a hosted worker
 pool, do not change host execution limits, and do not create a multi-tenant control plane.

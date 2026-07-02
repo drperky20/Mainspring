@@ -2005,6 +2005,89 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('uses RunLog for the default run start endpoint when a RunLog runtime is configured', async () => {
+    const root = makeTempRoot('mainspring-gateway-default-runlog-route-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'legacy idle' } }]),
+      pollIntervalMs: 10,
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'session_default_runlog_gateway',
+      workspace: { root: workspaceRoot },
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'default route via runlog' } }]),
+      agent: {
+        agentId: 'agent_default_runlog_gateway',
+        instructions: 'Answer through the default RunLog gateway route.',
+        capabilities: ['provider'],
+      },
+      approvalReceiptKey: 'gateway-default-runlog-route-test-key',
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    const started = await server.start()
+    try {
+      const startedRun = await fetch(`${started.url}/runs/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.record.sessionId,
+          input: 'Use the default route with RunLog.',
+          mode: 'chat',
+          allowedTools: [],
+        }),
+      }).then((response) => response.json())
+
+      expect(startedRun).toMatchObject({
+        run: {
+          sessionId: session.record.sessionId,
+          status: 'completed',
+        },
+      })
+      const runId = startedRun.run.runId as string
+      expect(runId).toMatch(/^run_/)
+      expect(JSON.stringify(startedRun)).not.toContain('Use the default route with RunLog.')
+
+      const projection = await fetch(`${started.url}/runlog/runs/${encodeURIComponent(runId)}/events`).then(
+        (response) => response.json(),
+      )
+      expect(projection).toMatchObject({
+        run: {
+          runId,
+          sessionId: session.record.sessionId,
+          agentId: 'agent_default_runlog_gateway',
+          status: 'completed',
+        },
+        assistantText: 'default route via runlog',
+      })
+
+      const snapshot = await fetch(`${started.url}/snapshot`).then((response) => response.json())
+      expect(snapshot.runLog.runs).toEqual([
+        expect.objectContaining({
+          runId,
+          sessionId: session.record.sessionId,
+          status: 'completed',
+          assistantText: 'default route via runlog',
+        }),
+      ])
+      expect(snapshot.runs).toEqual([])
+    } finally {
+      await server.stop()
+      runLog.close()
+      appState.close()
+    }
+  })
+
   it('routes deployment target create/update/plan/execute through the gateway deployment lane', async () => {
     const createInputs: unknown[] = []
     const updateInputs: unknown[] = []

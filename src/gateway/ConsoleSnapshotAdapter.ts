@@ -1,6 +1,7 @@
 import { sanitizeRuntimeResponse } from '#protocol'
 import type { RunEvent, RuntimeHealth } from '../contracts/runtime.js'
 import type { RunRecord } from '../contracts/runtime.js'
+import type { RunRecord as RunLogRunRecord } from '../core/types.js'
 import { listStoredMemoryEntries } from '../memory/MemoryStore.js'
 import { redactBrowserUnsafeGatewayText } from './browserSafety.js'
 import type {
@@ -114,7 +115,7 @@ export interface ConsoleGatewayRunEvent {
 export interface ConsoleGatewayRunDispatch {
   runId: string
   sessionId: string
-  status: RunRecord['status']
+  status: RunRecord['status'] | RunLogRunRecord['status']
   createdAt?: string
 }
 
@@ -924,7 +925,7 @@ function consoleRun(record: LocalGatewayRunProjection): ConsoleGatewayRun {
   }
 }
 
-export function consoleRunDispatch(record: RunRecord): ConsoleGatewayRunDispatch {
+export function consoleRunDispatch(record: RunRecord | RunLogRunRecord): ConsoleGatewayRunDispatch {
   return {
     runId: record.runId,
     sessionId: record.sessionId,

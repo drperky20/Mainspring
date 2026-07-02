@@ -22,6 +22,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `src/sdk/RunLogMainspring.test.ts` proves provider-only runs and approved tool resume through the public handle.
 - Explicit RunLog gateway/API lane:
   - `CreateLocalMainspringGatewayOptions.runLog` accepts a `RunLogMainspring` host.
+  - When that host is configured, the default HTTP `POST /runs/start` route creates a RunLog-backed run through `RunIntent` and returns the compact compatibility run dispatch DTO.
   - `/runlog/runs/start` creates `RunIntent` records and returns sanitized `RunLogProjection` responses.
   - `/runlog/runs/:runId/events` tails the same projection.
   - `/runlog/approvals/:approvalId/resolve` approves or denies through scoped RunLog receipts and returns the updated projection.
@@ -62,7 +63,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Prototype Or Migration Surfaces
 
 - The old mailbox/runtime path is still present and still important for existing `createMainspring` SDK/gateway behavior.
-- The default gateway `/runs/start` route remains mailbox-compatible. Gateway and console now have an optional sanitized RunLog projection lane, but default run creation still needs migration before the old route can be called RunLog-native.
+- The default gateway `/runs/start` route is RunLog-backed only when the gateway is configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways without a RunLog host remain mailbox-compatible.
 - Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, legacy gateway cron scheduling, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
@@ -71,7 +72,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Not Implemented Yet
 
 - Full replacement of `RuntimeKernel` and per-session mailbox execution with RunLog execution.
-- Default gateway/API/console run creation through RunLog. Direct SDK embedding, explicit `/runlog` gateway routes, and console-visible RunLog projections exist; the default gateway route still needs migration.
+- Default gateway/API/console run creation through RunLog for gateway configurations that do not yet provide a RunLog host. Direct SDK embedding, explicit `/runlog` gateway routes, conditional default `/runs/start` RunLog ingress, and console-visible RunLog projections exist.
 - Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Memory retrieval adapter connected to RunLog context assembly.

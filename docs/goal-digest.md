@@ -7800,3 +7800,33 @@ Verification in this slice:
 Next recommended milestone:
 
 - Decide whether to flip the default gateway `/runs/start` route to RunLog behind compatibility DTO tests, or first add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the sanitized console boundary.
+
+## 2026-07-02 Default Gateway RunLog Start Slice
+
+Goal:
+
+- Move the default HTTP `/runs/start` route to RunIntent-backed RunLog execution when the gateway is configured with a RunLog host, while preserving mailbox compatibility for gateways without RunLog.
+
+Changes:
+
+- Updated `LocalGatewayHttpServer` so `POST /runs/start` prefers `gateway.runLog.runs.start()` when `CreateLocalMainspringGatewayOptions.runLog` is configured.
+- Kept the default route response as the compact compatibility `{ run }` dispatch DTO, avoiding raw prompt/input leakage.
+- Widened the console dispatch DTO status type so it can represent RunLog `awaiting_approval` runs as well as legacy `waiting_approval` runs.
+- Filtered app-state rows marked `metadata.runtime === 'runlog'` out of the legacy `snapshot.runs` projection so RunLog runs do not masquerade as mailbox runs.
+- Added a gateway server regression proving default `/runs/start` creates a RunLog-backed run, returns only the compact dispatch DTO, exposes full state through `/runlog/runs/:runId/events`, and appears under the sanitized snapshot `runLog` projection.
+- Updated current-state, local-gateway, SDK, migration, and backlog docs with the conditional default-route truth.
+
+What this proves:
+
+- The default HTTP run-start route can now be RunLog-backed without breaking non-RunLog gateway tests or returning raw run input to browser clients.
+- RunLog app-state metadata is separated from legacy mailbox run projections.
+- Existing gateways without a RunLog host remain mailbox-compatible.
+
+Verification in this slice:
+
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run src/gateway/server/createLocalGatewayServer.test.ts src/gateway/ConsoleSnapshotAdapter.test.ts apps/console/src/localGatewayClient.test.ts apps/console/src/dashboardProjection.test.ts`: passed, 4 files / 36 tests.
+
+Next recommended milestone:
+
+- Configure the local gateway dev server with a RunLog host by default once provider/profile and examples are covered, or migrate gateway cron scheduling to RunLog cron grants.

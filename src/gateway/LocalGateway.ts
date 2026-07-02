@@ -1265,6 +1265,10 @@ export class LocalMainspringGateway {
     const byRunId = new Map<string, LocalGatewayRunProjection>()
 
     for (const metadata of this.appState?.runs.list({ sessionId }) ?? []) {
+      const metadataRecord = metadata.metadata && typeof metadata.metadata === 'object'
+        ? metadata.metadata as Record<string, unknown>
+        : {}
+      if (metadataRecord.runtime === 'runlog') continue
       byRunId.set(
         metadata.runId,
         mergeRunProjection(byRunId.get(metadata.runId), {

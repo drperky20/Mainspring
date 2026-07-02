@@ -610,7 +610,7 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/runs/start') {
         const body = await this.readJson(request)
         const parsed = StartRunRequestSchema.parse(body)
-        const run = this.startRun(parsed)
+        const run = await this.startRun(parsed)
         this.writeJson(response, 202, sanitizeGatewayResponse({ run: consoleRunDispatch(run) }))
         return
       }
@@ -829,7 +829,11 @@ export class LocalGatewayHttpServer {
     return method === 'GET' && (path === '/events/stream' || path.startsWith('/artifacts/'))
   }
 
-  private startRun(input: StartRunRequest) {
+  private async startRun(input: StartRunRequest) {
+    if (this.options.gateway.runLog?.available()) {
+      const result = await this.options.gateway.runLog.runs.start(input)
+      return result.run
+    }
     if (input.providerProfileId) {
       return this.options.gateway.runs.startFromAppState(input)
     }
