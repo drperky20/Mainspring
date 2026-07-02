@@ -25,6 +25,10 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `/runlog/runs/start` creates `RunIntent` records and returns sanitized `RunLogProjection` responses.
   - `/runlog/runs/:runId/events` tails the same projection.
   - `/runlog/approvals/:approvalId/resolve` approves or denies through scoped RunLog receipts and returns the updated projection.
+- Console-facing RunLog projection:
+  - `LocalMainspringGateway.snapshot()` can include an optional sanitized RunLog read model for runs known to gateway app-state metadata.
+  - `gatewaySnapshotToConsoleState()` projects RunLog runs, pending approvals, tool calls, and policy decision summaries without exposing raw private event fields.
+  - The React console data-source summary and dashboard projection count RunLog active runs and pending approvals beside legacy compatibility runs.
 - Package subpaths now expose `mainspring/core`, `mainspring/adapters`, `mainspring/adapters/sqlite`, `mainspring/adapters/local-blob`, `mainspring/capabilities`, `mainspring/hosts/runlog`, and `mainspring/compat`.
 - `docs/migration-runlog.md` records the legacy mailbox/`RuntimeKernel` retirement map and `pnpm runlog:migration:check` keeps that map tied to existing source files, package exports, and release checks.
 - Focused tests prove provider-only runs, tool calls, approval pauses, approval/denial decisions, SQLite-backed approval resume, SQLite restart recovery, cron-created runs, lazy workspace materialization, and 1000 idle agents stored as data.
@@ -58,7 +62,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Prototype Or Migration Surfaces
 
 - The old mailbox/runtime path is still present and still important for existing `createMainspring` SDK/gateway behavior.
-- The default gateway `/runs/start` route remains mailbox-compatible. Gateway and console remain mid-migration; they should consume RunLog projections rather than grow new parallel runtime state.
+- The default gateway `/runs/start` route remains mailbox-compatible. Gateway and console now have an optional sanitized RunLog projection lane, but default run creation still needs migration before the old route can be called RunLog-native.
 - Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, legacy gateway cron scheduling, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
@@ -67,7 +71,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Not Implemented Yet
 
 - Full replacement of `RuntimeKernel` and per-session mailbox execution with RunLog execution.
-- Default gateway/API/console run creation through RunLog. Direct SDK embedding and explicit `/runlog` gateway routes exist; the default gateway route still needs migration.
+- Default gateway/API/console run creation through RunLog. Direct SDK embedding, explicit `/runlog` gateway routes, and console-visible RunLog projections exist; the default gateway route still needs migration.
 - Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Memory retrieval adapter connected to RunLog context assembly.

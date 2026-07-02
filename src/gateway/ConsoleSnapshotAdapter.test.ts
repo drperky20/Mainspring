@@ -488,6 +488,60 @@ const sourceSnapshot: LocalGatewaySnapshot = {
       permissionCategories: ['filesystem.write'],
     },
   ],
+  runLog: {
+    configured: true,
+    runs: [
+      {
+        runId: 'runlog_1',
+        sessionId: 'session_1',
+        agentId: 'agent_research filePath=C:\\secret\\runlog-agent.txt',
+        status: 'awaiting_approval',
+        workspaceId: 'workspace_acme',
+        providerId: 'openrouter filePath=C:\\secret\\runlog-provider.txt',
+        modelId: 'anthropic/claude-sonnet-4 filePath=/srv/secret/runlog-model.txt',
+        createdAt: '2026-06-27T11:06:00.000Z',
+        updatedAt: '2026-06-27T11:06:30.000Z',
+        assistantText: 'Need approval before writing artifactPath=C:\\secret\\runlog-output.md',
+        latestSeq: 8,
+        eventCount: 8,
+        lastEventType: 'run.awaiting_approval',
+        pendingApprovals: [
+          {
+            approvalId: 'approval_runlog_1',
+            toolCallId: 'toolcall_runlog_write filePath=C:\\secret\\toolcall.txt',
+          },
+        ],
+        approvalDecisions: [],
+        toolCalls: [
+          {
+            toolCallId: 'toolcall_runlog_write filePath=C:\\secret\\toolcall.txt',
+            name: 'file.write artifactPath=C:\\secret\\tool-name.txt',
+            status: 'requested',
+          },
+        ],
+        policyDecisions: [
+          {
+            decisionId: 'dr_runlog_1',
+            runId: 'runlog_1',
+            sessionId: 'session_1',
+            toolCallId: 'toolcall_runlog_write filePath=C:\\secret\\toolcall.txt',
+            surface: 'file',
+            operation: 'tool.execute',
+            targetKey: 'file.write filePath=C:\\secret\\policy-target.txt',
+            state: 'requires_approval',
+            reasons: ['manifest requires approval'],
+            permissionCategories: ['filesystem:workspace-write'],
+            approved: false,
+            hardBlocked: false,
+            inputHash: 'hash_input',
+            manifestHash: 'hash_manifest',
+            policyHash: 'hash_policy',
+            createdAt: '2026-06-27T11:06:20.000Z',
+          },
+        ],
+      },
+    ],
+  },
 }
 
 describe('gatewaySnapshotToConsoleState', () => {
@@ -512,6 +566,8 @@ describe('gatewaySnapshotToConsoleState', () => {
         auditEvents: 1,
         memoryEntries: 0,
         pendingApprovals: 1,
+        runLogRuns: 1,
+        runLogPendingApprovals: 1,
       })
       expect(consoleState.health).toEqual({
         ok: true,
@@ -641,6 +697,52 @@ describe('gatewaySnapshotToConsoleState', () => {
           targetKey: 'tool:file.write [redacted]',
         },
       ])
+      expect(consoleState.runLog).toEqual({
+        configured: true,
+        runs: [
+          {
+            runId: 'runlog_1',
+            sessionId: 'session_1',
+            agentId: 'agent_research [redacted]',
+            status: 'awaiting_approval',
+            workspaceId: 'workspace_acme',
+            providerId: 'openrouter [redacted]',
+            modelId: 'anthropic/claude-sonnet-4 [redacted]',
+            createdAt: '2026-06-27T11:06:00.000Z',
+            updatedAt: '2026-06-27T11:06:30.000Z',
+            assistantText: 'Need approval before writing [redacted]',
+            latestSeq: 8,
+            eventCount: 8,
+            lastEventType: 'run.awaiting_approval',
+            pendingApprovalCount: 1,
+            approvalDecisionCount: 0,
+            toolCallCount: 1,
+            policyDecisionCount: 1,
+            pendingApprovals: [
+              {
+                approvalId: 'approval_runlog_1',
+                toolCallId: 'toolcall_runlog_write [redacted]',
+              },
+            ],
+            toolCalls: [
+              {
+                toolCallId: 'toolcall_runlog_write [redacted]',
+                name: 'file.write [redacted]',
+                status: 'requested',
+              },
+            ],
+            policyDecisions: [
+              {
+                decisionId: 'dr_runlog_1',
+                state: 'requires_approval',
+                surface: 'file',
+                targetKey: 'file.write [redacted]',
+                toolCallId: 'toolcall_runlog_write [redacted]',
+              },
+            ],
+          },
+        ],
+      })
       expect(consoleState.approvalMetadata).toEqual([
         {
           approvalId: 'approval_meta_1',

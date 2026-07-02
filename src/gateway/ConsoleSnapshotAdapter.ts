@@ -14,6 +14,7 @@ import type {
   LocalGatewayUsageRollup,
   LocalGatewayUsageStatus,
   LocalGatewayRunProjection,
+  LocalGatewayRunLogRunProjection,
   LocalGatewaySessionProjection,
 } from './LocalGateway.js'
 import type { LocalMarketplaceTemplateRecord } from './TemplateMarketplace.js'
@@ -115,6 +116,47 @@ export interface ConsoleGatewayRunDispatch {
   sessionId: string
   status: RunRecord['status']
   createdAt?: string
+}
+
+export interface ConsoleGatewayRunLogRun {
+  runId: string
+  sessionId: string
+  agentId: string
+  status: LocalGatewayRunLogRunProjection['status']
+  workspaceId?: string
+  providerId?: string
+  modelId?: string
+  createdAt: string
+  updatedAt: string
+  assistantText?: string
+  latestSeq: number
+  eventCount: number
+  lastEventType?: string
+  pendingApprovalCount: number
+  approvalDecisionCount: number
+  toolCallCount: number
+  policyDecisionCount: number
+  pendingApprovals: Array<{
+    approvalId?: string
+    toolCallId?: string
+  }>
+  toolCalls: Array<{
+    toolCallId?: string
+    name?: string
+    status: 'requested' | 'completed' | 'failed' | 'blocked'
+  }>
+  policyDecisions: Array<{
+    decisionId: string
+    state: string
+    surface: string
+    targetKey: string
+    toolCallId?: string
+  }>
+}
+
+export interface ConsoleGatewayRunLogSnapshot {
+  configured: boolean
+  runs: ConsoleGatewayRunLogRun[]
 }
 
 export interface ConsoleGatewayApproval {
@@ -513,6 +555,8 @@ export interface ConsoleGatewaySnapshot {
     auditEvents: number
     memoryEntries: number
     pendingApprovals: number
+    runLogRuns?: number
+    runLogPendingApprovals?: number
   }
   clients: ConsoleGatewayClient[]
   workspaces: ConsoleGatewayWorkspace[]
@@ -521,6 +565,7 @@ export interface ConsoleGatewaySnapshot {
   sessions: ConsoleGatewaySession[]
   runs: ConsoleGatewayRun[]
   approvals: ConsoleGatewayApproval[]
+  runLog?: ConsoleGatewayRunLogSnapshot
   approvalMetadata: ConsoleGatewayApprovalMetadata[]
   artifacts: ConsoleGatewayArtifact[]
   toolCalls?: ConsoleGatewayToolCall[]
@@ -550,6 +595,7 @@ export function gatewaySnapshotToConsoleState(
   const sessions = snapshot.sessions.map(consoleSession)
   const runs = snapshot.runs.map(consoleRun)
   const approvals = snapshot.approvals.map(consoleApproval)
+  const runLog = snapshot.runLog ? consoleRunLogSnapshot(snapshot.runLog) : undefined
   const approvalMetadata = snapshot.appState.approvals.map(consoleApprovalMetadata)
   const artifacts = snapshot.appState.artifacts.map(consoleArtifact)
   const toolCalls = (snapshot.appState.toolCalls ?? []).map(consoleToolCall)
@@ -589,6 +635,15 @@ export function gatewaySnapshotToConsoleState(
       auditEvents: auditEvents.length,
       memoryEntries: memoryEntries.length,
       pendingApprovals: approvals.filter((approval) => approval.status === 'pending').length,
+      ...(runLog
+        ? {
+            runLogRuns: runLog.runs.length,
+            runLogPendingApprovals: runLog.runs.reduce(
+              (total, run) => total + run.pendingApprovalCount,
+              0,
+            ),
+          }
+        : {}),
     },
     clients,
     workspaces,
@@ -597,6 +652,7 @@ export function gatewaySnapshotToConsoleState(
     sessions,
     runs,
     approvals,
+    ...(runLog ? { runLog } : {}),
     approvalMetadata,
     artifacts,
     toolCalls,
@@ -688,6 +744,53 @@ function latestBy<T>(items: T[], getTimestamp: (item: T) => string): T | undefin
   return [...items].sort((left, right) =>
     getTimestamp(right).localeCompare(getTimestamp(left)),
   )[0]
+}
+
+function consoleRunLogSnapshot(
+  snapshot: NonNullable<LocalGatewaySnapshot['runLog']>,
+): ConsoleGatewayRunLogSnapshot {
+  return {
+    configured: snapshot.configured,
+    runs: snapshot.runs.map(consoleRunLogRun),
+  }
+}
+
+function consoleRunLogRun(run: LocalGatewayRunLogRunProjection): ConsoleGatewayRunLogRun {
+  return {
+    runId: run.runId,
+    sessionId: run.sessionId,
+    agentId: browserSafePreviewText(run.agentId),
+    status: run.status,
+    ...(run.workspaceId ? { workspaceId: run.workspaceId } : {}),
+    ...(run.providerId ? { providerId: browserSafePreviewText(run.providerId) } : {}),
+    ...(run.modelId ? { modelId: browserSafePreviewText(run.modelId) } : {}),
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    ...(run.assistantText ? { assistantText: browserSafePreviewText(run.assistantText) } : {}),
+    latestSeq: run.latestSeq,
+    eventCount: run.eventCount,
+    ...(run.lastEventType ? { lastEventType: browserSafePreviewText(run.lastEventType) } : {}),
+    pendingApprovalCount: run.pendingApprovals.length,
+    approvalDecisionCount: run.approvalDecisions.length,
+    toolCallCount: run.toolCalls.length,
+    policyDecisionCount: run.policyDecisions.length,
+    pendingApprovals: run.pendingApprovals.map((approval) => ({
+      ...(approval.approvalId ? { approvalId: browserSafePreviewText(approval.approvalId) } : {}),
+      ...(approval.toolCallId ? { toolCallId: browserSafePreviewText(approval.toolCallId) } : {}),
+    })),
+    toolCalls: run.toolCalls.map((call) => ({
+      ...(call.toolCallId ? { toolCallId: browserSafePreviewText(call.toolCallId) } : {}),
+      ...(call.name ? { name: browserSafePreviewText(call.name) } : {}),
+      status: call.status,
+    })),
+    policyDecisions: run.policyDecisions.map((decision) => ({
+      decisionId: browserSafePreviewText(decision.decisionId),
+      state: browserSafePreviewText(decision.state),
+      surface: browserSafePreviewText(decision.surface),
+      targetKey: browserSafePreviewText(decision.targetKey),
+      ...(decision.toolCallId ? { toolCallId: browserSafePreviewText(decision.toolCallId) } : {}),
+    })),
+  }
 }
 
 function consoleMemoryEntries(snapshot: LocalGatewaySnapshot): ConsoleGatewayMemoryEntry[] {

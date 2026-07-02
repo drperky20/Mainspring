@@ -19,6 +19,7 @@ import type {
   RunRecord as RunLogRunRecord,
 } from '../core/types.js'
 import type { RunLogRunProjection } from '../hosts/runlog/RunLogProjection.js'
+import type { DecisionRecord } from '../policy/DecisionRecord.js'
 import { estimateUsageCost } from '../usage/UsageAccounting.js'
 import {
   describeModelPricingCatalog,
@@ -490,11 +491,48 @@ export interface LocalGatewaySnapshot {
   sessions: LocalGatewaySessionProjection[]
   runs: LocalGatewayRunProjection[]
   approvals: MainspringApprovalRecord[]
+  runLog?: LocalGatewayRunLogSnapshot
   cron: LocalGatewayCronStatus
   pricingCatalog: LocalGatewayPricingCatalogStatus
   usageStatus: LocalGatewayUsageStatus
   budgetStatus: LocalGatewayBudgetStatus
   cellStatus: LocalGatewayCellStatus
+}
+
+export interface LocalGatewayRunLogSnapshot {
+  configured: boolean
+  runs: LocalGatewayRunLogRunProjection[]
+}
+
+export interface LocalGatewayRunLogRunProjection {
+  runId: string
+  sessionId: string
+  agentId: string
+  status: RunLogRunRecord['status']
+  workspaceId?: string
+  providerId?: string
+  modelId?: string
+  createdAt: string
+  updatedAt: string
+  assistantText: string
+  latestSeq: number
+  eventCount: number
+  lastEventType?: string
+  pendingApprovals: Array<{
+    approvalId?: string
+    toolCallId?: string
+  }>
+  approvalDecisions: Array<{
+    approvalId?: string
+    receiptId?: string
+    decision: 'approved' | 'denied'
+  }>
+  toolCalls: Array<{
+    toolCallId?: string
+    name?: string
+    status: 'requested' | 'completed' | 'failed' | 'blocked'
+  }>
+  policyDecisions: DecisionRecord[]
 }
 
 function projectSession(session: MainspringSessionRecord): LocalGatewaySessionProjection {
@@ -643,6 +681,39 @@ function approvalPolicyFromGatewayMode(value: unknown): RuntimePolicy['approvalP
   if (normalized.includes('auto')) return 'balanced'
   if (normalized.includes('balanced')) return 'balanced'
   return undefined
+}
+
+function projectLocalRunLogRun(projection: RunLogRunProjection): LocalGatewayRunLogRunProjection {
+  return {
+    runId: projection.run.runId,
+    sessionId: projection.run.sessionId,
+    agentId: projection.run.agentId,
+    status: projection.status,
+    ...(projection.run.workspaceId ? { workspaceId: projection.run.workspaceId } : {}),
+    ...(projection.run.providerId ? { providerId: projection.run.providerId } : {}),
+    ...(projection.run.modelId ? { modelId: projection.run.modelId } : {}),
+    createdAt: projection.run.createdAt,
+    updatedAt: projection.run.updatedAt,
+    assistantText: projection.assistantText,
+    latestSeq: projection.latestSeq,
+    eventCount: projection.events.length,
+    ...(projection.events.at(-1)?.type ? { lastEventType: projection.events.at(-1)?.type } : {}),
+    pendingApprovals: projection.pendingApprovals.map((approval) => ({
+      ...(approval.approvalId ? { approvalId: approval.approvalId } : {}),
+      ...(approval.toolCallId ? { toolCallId: approval.toolCallId } : {}),
+    })),
+    approvalDecisions: projection.approvalDecisions.map((approval) => ({
+      ...(approval.approvalId ? { approvalId: approval.approvalId } : {}),
+      ...(approval.receiptId ? { receiptId: approval.receiptId } : {}),
+      decision: approval.decision,
+    })),
+    toolCalls: projection.toolCalls.map((call) => ({
+      ...(call.toolCallId ? { toolCallId: call.toolCallId } : {}),
+      ...(call.name ? { name: call.name } : {}),
+      status: call.status,
+    })),
+    policyDecisions: projection.policyDecisions,
+  }
 }
 
 function usageEntryIdForEvent(event: RunEvent): string {
@@ -1159,12 +1230,32 @@ export class LocalMainspringGateway {
       sessions,
       runs,
       approvals,
+      ...(this.runLogRuntime ? { runLog: this.projectRunLogSnapshot() } : {}),
       cron: this.cron.status(),
       pricingCatalog: this.pricingCatalogStatus,
       usageStatus: this.usageStatus(),
       budgetStatus: this.budgetStatus(),
       cellStatus: this.cellStatus(),
     }
+  }
+
+  private projectRunLogSnapshot(): LocalGatewayRunLogSnapshot {
+    const runtime = this.runLogRuntime
+    if (!runtime) return { configured: false, runs: [] }
+    const runMetadata = (this.appState?.runs.list() ?? []).filter((record) => {
+      const metadata = record.metadata && typeof record.metadata === 'object'
+        ? record.metadata as Record<string, unknown>
+        : {}
+      return metadata.runtime === 'runlog'
+    })
+    const runs = runMetadata.flatMap((record) => {
+      try {
+        return [projectLocalRunLogRun(runtime.project(record.runId))]
+      } catch {
+        return []
+      }
+    })
+    return { configured: true, runs }
   }
 
   private listRuns(sessionId: string): LocalGatewayRunProjection[] {

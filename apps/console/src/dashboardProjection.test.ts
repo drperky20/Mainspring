@@ -806,4 +806,85 @@ describe('projectConsoleDashboard', () => {
       }),
     ])
   })
+
+  it('projects runlog runs and approvals into operator dashboard rows', () => {
+    const projection = projectConsoleDashboard({
+      ...dashboardSnapshot,
+      runLog: {
+        configured: true,
+        runs: [
+          {
+            runId: 'runlog_waiting',
+            sessionId: 'session_1',
+            agentId: 'agent_research',
+            status: 'awaiting_approval',
+            workspaceId: 'workspace_acme',
+            providerId: 'openrouter',
+            modelId: 'anthropic/claude-sonnet-4',
+            createdAt: '2026-06-27T14:05:00.000Z',
+            updatedAt: '2026-06-27T14:07:00.000Z',
+            latestSeq: 9,
+            eventCount: 9,
+            pendingApprovalCount: 1,
+            approvalDecisionCount: 1,
+            toolCallCount: 1,
+            policyDecisionCount: 1,
+            pendingApprovals: [
+              {
+                approvalId: 'approval_runlog_1',
+                toolCallId: 'tool_call_runlog_1',
+              },
+            ],
+            toolCalls: [
+              {
+                toolCallId: 'tool_call_runlog_1',
+                name: 'shell.exec',
+                status: 'requested',
+              },
+            ],
+            policyDecisions: [
+              {
+                decisionId: 'decision_runlog_1',
+                state: 'requires_approval',
+                surface: 'tool',
+                targetKey: 'tool:shell.exec',
+                toolCallId: 'tool_call_runlog_1',
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(projection.activeRuns[0]).toMatchObject({
+      runId: 'runlog_waiting',
+      status: 'awaiting_approval',
+      needsApproval: true,
+      clientId: 'client_acme',
+      clientName: 'Acme',
+      agentId: 'agent_research',
+      agentName: 'Research Agent',
+      providerId: 'openrouter',
+      providerLabel: 'OpenRouter',
+      modelId: 'anthropic/claude-sonnet-4',
+      lastEventAt: '2026-06-27T14:07:00.000Z',
+    })
+    expect(projection.pendingApprovals[0]).toEqual({
+      approvalId: 'approval_runlog_1',
+      runId: 'runlog_waiting',
+      sessionId: 'session_1',
+      requestedAt: '2026-06-27T14:07:00.000Z',
+      targetKey: 'tool_call_runlog_1',
+      clientId: 'client_acme',
+      clientName: 'Acme',
+      agentId: 'agent_research',
+      agentName: 'Research Agent',
+    })
+    expect(projection.clients[0]).toMatchObject({
+      clientId: 'client_acme',
+      activeRunCount: 3,
+      pendingApprovalCount: 2,
+      status: 'needs-approval',
+    })
+  })
 })

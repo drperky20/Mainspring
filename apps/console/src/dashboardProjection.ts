@@ -43,7 +43,9 @@ export interface ConsoleDashboardClientRow {
 export interface ConsoleDashboardRunRow {
   runId: string
   sessionId: string
-  status: ConsoleGatewaySnapshot['runs'][number]['status']
+  status:
+    | ConsoleGatewaySnapshot['runs'][number]['status']
+    | NonNullable<ConsoleGatewaySnapshot['runLog']>['runs'][number]['status']
   needsApproval: boolean
   eventCount: number
   pendingInboundCount: number
@@ -234,11 +236,21 @@ export function projectConsoleDashboard(
       .map((provider) => [provider.providerId, provider]),
   )
   const pendingApprovalsByRunId = new Map<string, ConsoleGatewaySnapshot['approvals']>()
+  const runLogRuns = snapshot.runLog?.runs ?? []
+  const runLogPendingApprovalsByRunId = new Map<
+    string,
+    NonNullable<ConsoleGatewaySnapshot['runLog']>['runs'][number]['pendingApprovals']
+  >()
 
   for (const approval of snapshot.approvals) {
     if (approval.status !== 'pending') continue
     const existing = pendingApprovalsByRunId.get(approval.runId) ?? []
     pendingApprovalsByRunId.set(approval.runId, [...existing, approval])
+  }
+  for (const run of runLogRuns) {
+    if (run.pendingApprovalCount > 0) {
+      runLogPendingApprovalsByRunId.set(run.runId, run.pendingApprovals)
+    }
   }
 
   const clients = snapshot.clients.map((client) =>
@@ -247,6 +259,7 @@ export function projectConsoleDashboard(
       providerState,
       snapshot,
       pendingApprovalsByRunId,
+      runLogRuns,
     }),
   )
   const clientDetails = snapshot.clients.map((client) =>
@@ -258,53 +271,95 @@ export function projectConsoleDashboard(
     }),
   )
 
-  const activeRuns = snapshot.runs
-    .filter(isActiveRun)
-    .map((run) => {
+  const runLogRunIds = new Set(runLogRuns.map((run) => run.runId))
+  const activeRuns = [
+    ...snapshot.runs
+      .filter((run) => isActiveRun(run) && !runLogRunIds.has(run.runId))
+      .map((run) => {
+        const workspace = run.workspaceId ? workspaceById.get(run.workspaceId) : undefined
+        const client = workspace?.clientId ? clientById.get(workspace.clientId) : undefined
+        const agent = run.agentId ? agentById.get(run.agentId) : undefined
+        const provider =
+          (run.providerProfileId ? providerByProfileId.get(run.providerProfileId) : undefined)
+          ?? (run.providerId ? providerById.get(run.providerId) : undefined)
+        return {
+          runId: run.runId,
+          sessionId: run.sessionId,
+          status: run.status,
+          needsApproval: (pendingApprovalsByRunId.get(run.runId)?.length ?? 0) > 0,
+          eventCount: run.eventCount,
+          pendingInboundCount: run.pendingInboundCount,
+          ...(client ? { clientId: client.clientId, clientName: client.name } : {}),
+          ...(run.workspaceId ? { workspaceId: run.workspaceId } : {}),
+          ...(agent ? { agentId: agent.agentId, agentName: agent.name } : {}),
+          ...(run.providerId ? { providerId: run.providerId } : {}),
+          ...(provider ? { providerLabel: provider.label } : {}),
+          ...(run.modelId ? { modelId: run.modelId } : {}),
+          ...(run.modelFamily ? { modelFamily: run.modelFamily } : {}),
+          ...(run.providerTransport ? { providerTransport: run.providerTransport } : {}),
+          ...(run.providerSessionId ? { providerSessionId: run.providerSessionId } : {}),
+          ...(run.lastEventAt ? { lastEventAt: run.lastEventAt } : {}),
+        }
+      }),
+    ...runLogRuns
+      .filter(isActiveRunLogRun)
+      .map((run) => {
+        const workspace = run.workspaceId ? workspaceById.get(run.workspaceId) : undefined
+        const client = workspace?.clientId ? clientById.get(workspace.clientId) : undefined
+        const agent = run.agentId ? agentById.get(run.agentId) : undefined
+        const provider = run.providerId ? providerById.get(run.providerId) : undefined
+        return {
+          runId: run.runId,
+          sessionId: run.sessionId,
+          status: run.status,
+          needsApproval: run.pendingApprovalCount > 0,
+          eventCount: run.eventCount,
+          pendingInboundCount: 0,
+          ...(client ? { clientId: client.clientId, clientName: client.name } : {}),
+          ...(run.workspaceId ? { workspaceId: run.workspaceId } : {}),
+          ...(agent ? { agentId: agent.agentId, agentName: agent.name } : {}),
+          ...(run.providerId ? { providerId: run.providerId } : {}),
+          ...(provider ? { providerLabel: provider.label } : {}),
+          ...(run.modelId ? { modelId: run.modelId } : {}),
+          lastEventAt: run.updatedAt,
+        }
+      }),
+  ]
+    .sort(sortByNewestActivity)
+
+  const pendingApprovals = [
+    ...snapshot.approvals
+      .filter((approval) => approval.status === 'pending')
+      .map((approval) => {
+        const run = snapshot.runs.find((candidate) => candidate.runId === approval.runId)
+        const workspace = run?.workspaceId ? workspaceById.get(run.workspaceId) : undefined
+        const client = workspace?.clientId ? clientById.get(workspace.clientId) : undefined
+        const agent = run?.agentId ? agentById.get(run.agentId) : undefined
+        return {
+          approvalId: approval.approvalId,
+          runId: approval.runId,
+          sessionId: approval.sessionId,
+          requestedAt: approval.requestedAt,
+          ...(approval.targetKey ? { targetKey: approval.targetKey } : {}),
+          ...(client ? { clientId: client.clientId, clientName: client.name } : {}),
+          ...(agent ? { agentId: agent.agentId, agentName: agent.name } : {}),
+        }
+      }),
+    ...runLogRuns.flatMap((run) => {
       const workspace = run.workspaceId ? workspaceById.get(run.workspaceId) : undefined
       const client = workspace?.clientId ? clientById.get(workspace.clientId) : undefined
       const agent = run.agentId ? agentById.get(run.agentId) : undefined
-      const provider =
-        (run.providerProfileId ? providerByProfileId.get(run.providerProfileId) : undefined)
-        ?? (run.providerId ? providerById.get(run.providerId) : undefined)
-      return {
+      return (runLogPendingApprovalsByRunId.get(run.runId) ?? []).map((approval, index) => ({
+        approvalId: approval.approvalId ?? `${run.runId}:approval:${index}`,
         runId: run.runId,
         sessionId: run.sessionId,
-        status: run.status,
-        needsApproval: (pendingApprovalsByRunId.get(run.runId)?.length ?? 0) > 0,
-        eventCount: run.eventCount,
-        pendingInboundCount: run.pendingInboundCount,
-        ...(client ? { clientId: client.clientId, clientName: client.name } : {}),
-        ...(run.workspaceId ? { workspaceId: run.workspaceId } : {}),
-        ...(agent ? { agentId: agent.agentId, agentName: agent.name } : {}),
-        ...(run.providerId ? { providerId: run.providerId } : {}),
-        ...(provider ? { providerLabel: provider.label } : {}),
-        ...(run.modelId ? { modelId: run.modelId } : {}),
-        ...(run.modelFamily ? { modelFamily: run.modelFamily } : {}),
-        ...(run.providerTransport ? { providerTransport: run.providerTransport } : {}),
-        ...(run.providerSessionId ? { providerSessionId: run.providerSessionId } : {}),
-        ...(run.lastEventAt ? { lastEventAt: run.lastEventAt } : {}),
-      }
-    })
-    .sort(sortByNewestActivity)
-
-  const pendingApprovals = snapshot.approvals
-    .filter((approval) => approval.status === 'pending')
-    .map((approval) => {
-      const run = snapshot.runs.find((candidate) => candidate.runId === approval.runId)
-      const workspace = run?.workspaceId ? workspaceById.get(run.workspaceId) : undefined
-      const client = workspace?.clientId ? clientById.get(workspace.clientId) : undefined
-      const agent = run?.agentId ? agentById.get(run.agentId) : undefined
-      return {
-        approvalId: approval.approvalId,
-        runId: approval.runId,
-        sessionId: approval.sessionId,
-        requestedAt: approval.requestedAt,
-        ...(approval.targetKey ? { targetKey: approval.targetKey } : {}),
+        requestedAt: run.updatedAt,
+        ...(approval.toolCallId ? { targetKey: approval.toolCallId } : {}),
         ...(client ? { clientId: client.clientId, clientName: client.name } : {}),
         ...(agent ? { agentId: agent.agentId, agentName: agent.name } : {}),
-      }
-    })
+      }))
+    }),
+  ]
     .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))
 
   return {
@@ -337,11 +392,13 @@ function projectClientRow({
   providerState,
   snapshot,
   pendingApprovalsByRunId,
+  runLogRuns,
 }: {
   client: ConsoleGatewaySnapshot['clients'][number]
   providerState: ConsoleDashboardProviderState
   snapshot: ConsoleGatewaySnapshot
   pendingApprovalsByRunId: Map<string, ConsoleGatewaySnapshot['approvals']>
+  runLogRuns: NonNullable<ConsoleGatewaySnapshot['runLog']>['runs']
 }): ConsoleDashboardClientRow {
   const workspaces = snapshot.workspaces.filter((workspace) => workspace.clientId === client.clientId)
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.workspaceId))
@@ -354,11 +411,18 @@ function projectClientRow({
       (run.workspaceId && workspaceIds.has(run.workspaceId)) ||
       (run.agentId && agentIds.has(run.agentId)),
   )
-  const activeRunCount = runs.filter(isActiveRun).length
-  const pendingApprovalCount = runs.reduce(
-    (count, run) => count + (pendingApprovalsByRunId.get(run.runId)?.length ?? 0),
-    0,
+  const clientRunLogRuns = runLogRuns.filter(
+    (run) =>
+      (run.workspaceId && workspaceIds.has(run.workspaceId)) ||
+      (run.agentId && agentIds.has(run.agentId)),
   )
+  const activeRunCount =
+    runs.filter(isActiveRun).length + clientRunLogRuns.filter(isActiveRunLogRun).length
+  const pendingApprovalCount =
+    runs.reduce(
+      (count, run) => count + (pendingApprovalsByRunId.get(run.runId)?.length ?? 0),
+      0,
+    ) + clientRunLogRuns.reduce((count, run) => count + run.pendingApprovalCount, 0)
   const artifacts = snapshot.artifacts.filter(
     (artifact) =>
       (artifact.workspaceId && workspaceIds.has(artifact.workspaceId)) ||
@@ -692,6 +756,12 @@ function summarizeProviderState(
 
 function isActiveRun(run: ConsoleGatewaySnapshot['runs'][number]): boolean {
   return run.status === 'queued' || run.status === 'running' || run.status === 'waiting_approval'
+}
+
+function isActiveRunLogRun(
+  run: NonNullable<ConsoleGatewaySnapshot['runLog']>['runs'][number],
+): boolean {
+  return run.status === 'queued' || run.status === 'running' || run.status === 'awaiting_approval'
 }
 
 function clientStatus(input: {

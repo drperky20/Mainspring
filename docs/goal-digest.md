@@ -7770,3 +7770,33 @@ Verification in this slice:
 Next recommended milestone:
 
 - Teach console snapshot/state to consume the explicit RunLog gateway projection, then decide when default `/runs/start` can flip to RunLog.
+
+## 2026-07-02 Console RunLog Projection Slice
+
+Goal:
+
+- Teach the gateway snapshot and console dashboard to consume the explicit RunLog projection without exposing raw private RunLog event fields or flipping the default mailbox-compatible `/runs/start` route.
+
+Changes:
+
+- Added optional `runLog` data to `LocalGatewaySnapshot` when a `RunLogMainspring` host is configured.
+- Projected RunLog runs from gateway app-state metadata through `RunLogProjection`.
+- Extended `gatewaySnapshotToConsoleState()` with sanitized RunLog run summaries, pending approval summaries, tool-call summaries, and policy decision summaries.
+- Updated the console data-source summary so RunLog active runs and pending approvals are counted beside legacy compatibility runs.
+- Updated the dashboard projection so RunLog active runs and pending approvals appear in operator rows with workspace/client/agent/provider labels where app-state records exist.
+- Updated current-state, migration, console, and backlog docs to mark sanitized RunLog console projection as complete while leaving default `/runs/start` migration pending.
+
+What this proves:
+
+- Operators can see explicit RunLog runs and pending approvals through the existing console DTO boundary.
+- Browser-facing DTOs do not expose raw workspace roots, private receipt snapshots, or raw RunLog event payloads.
+- The default `/runs/start` route remains mailbox-compatible until its DTO and example surface can be migrated safely.
+
+Verification in this slice:
+
+- `pnpm exec tsc --noEmit`: passed.
+- `pnpm exec vitest run apps/console/src/dashboardProjection.test.ts src/gateway/ConsoleSnapshotAdapter.test.ts apps/console/src/consoleDataSource.test.ts src/gateway/server/createLocalGatewayServer.test.ts`: passed, 4 files / 33 tests.
+
+Next recommended milestone:
+
+- Decide whether to flip the default gateway `/runs/start` route to RunLog behind compatibility DTO tests, or first add richer RunLog run-detail inspection for checkpoints, policy decisions, artifacts, and errors through the sanitized console boundary.

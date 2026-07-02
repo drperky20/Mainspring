@@ -43,6 +43,17 @@ export function createStaticGatewaySnapshotDataSource(
 export function summarizeConsoleGatewaySnapshot(
   snapshot: ConsoleGatewaySnapshot,
 ): ConsoleGatewaySnapshotSummary {
+  const activeRunCount = snapshot.runs.filter((run) =>
+    run.status === 'queued' || run.status === 'running' || run.status === 'waiting_approval',
+  ).length
+  const activeRunLogCount =
+    snapshot.runLog?.runs.filter((run) =>
+      run.status === 'queued' || run.status === 'running' || run.status === 'awaiting_approval',
+    ).length ?? 0
+  const runLogPendingApprovals = snapshot.runLog?.runs.reduce(
+    (total, run) => total + run.pendingApprovalCount,
+    0,
+  ) ?? 0
   return {
     health: snapshot.health.ok ? 'ready' : snapshot.health.running ? 'degraded' : 'offline',
     clientCount: snapshot.counts.clients,
@@ -50,10 +61,8 @@ export function summarizeConsoleGatewaySnapshot(
     agentCount: snapshot.counts.agents,
     providerProfileCount: snapshot.counts.providerProfiles,
     activeSessionCount: snapshot.health.activeSessions,
-    activeRunCount: snapshot.runs.filter((run) =>
-      run.status === 'queued' || run.status === 'running' || run.status === 'waiting_approval',
-    ).length,
-    pendingApprovalCount: snapshot.counts.pendingApprovals,
+    activeRunCount: activeRunCount + activeRunLogCount,
+    pendingApprovalCount: snapshot.counts.pendingApprovals + runLogPendingApprovals,
   }
 }
 

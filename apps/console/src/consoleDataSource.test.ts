@@ -112,6 +112,41 @@ const gatewaySnapshotFixture = {
       targetKey: 'tool:shell.exec',
     },
   ],
+  runLog: {
+    configured: true,
+    runs: [
+      {
+        runId: 'runlog_1',
+        sessionId: 'session_1',
+        agentId: 'agent_research',
+        status: 'awaiting_approval',
+        workspaceId: 'workspace_acme',
+        providerId: 'openrouter',
+        modelId: 'anthropic/claude-sonnet-4',
+        createdAt: '2026-06-27T12:58:00.000Z',
+        updatedAt: '2026-06-27T12:59:30.000Z',
+        assistantText: 'Waiting for approval.',
+        latestSeq: 9,
+        eventCount: 9,
+        lastEventType: 'run.awaiting_approval',
+        pendingApprovalCount: 1,
+        approvalDecisionCount: 0,
+        toolCallCount: 1,
+        policyDecisionCount: 1,
+        pendingApprovals: [{ approvalId: 'approval_runlog_1', toolCallId: 'toolcall_runlog_1' }],
+        toolCalls: [{ toolCallId: 'toolcall_runlog_1', name: 'file.write', status: 'requested' }],
+        policyDecisions: [
+          {
+            decisionId: 'dr_runlog_1',
+            state: 'requires_approval',
+            surface: 'file',
+            targetKey: 'file.write',
+            toolCallId: 'toolcall_runlog_1',
+          },
+        ],
+      },
+    ],
+  },
   approvalMetadata: [],
   artifacts: [],
   usageLedger: [],
@@ -142,8 +177,8 @@ describe('console data source boundary', () => {
       agentCount: 1,
       providerProfileCount: 1,
       activeSessionCount: 1,
-      activeRunCount: 1,
-      pendingApprovalCount: 1,
+      activeRunCount: 2,
+      pendingApprovalCount: 2,
     })
     expect(findForbiddenConsoleSnapshotTokens(gatewaySnapshotFixture)).toEqual([])
     expect(JSON.stringify(gatewaySnapshotFixture)).not.toContain('localStorage')
