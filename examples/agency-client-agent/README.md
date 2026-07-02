@@ -28,4 +28,8 @@ Run the local no-paid-key walkthrough:
 pnpm example:agency-client-agent
 ```
 
-It uses `MockProvider`, runs through the real SDK/runtime path, reads one client brief, auto-resolves one approval through the standard approval API, writes one client-facing deliverable, prints a JSON summary, and then cleans up its local runtime state.
+It uses `createRunLogMainspring`, `MockProvider`, SQLite RunLog state, the built-in `file.read` and `file.write` tools, scoped RunLog approval receipts, and `RunLogProjection`.
+
+The run reads one client brief, pauses before the client-facing file write, approves that exact request with a local example receipt, resumes through `ToolRegistry`, writes one deliverable, prints a JSON summary, and then cleans up temporary local runtime state.
+
+Host file tools are not containment. This walkthrough demonstrates approval-gated local workspace mutation, not a sandbox or customer delivery integration.
