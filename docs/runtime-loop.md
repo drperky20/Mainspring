@@ -18,12 +18,23 @@ RunLogKernel.startRun
 -> run.completed / run.failed / run.awaiting_approval
 ```
 
+Due RunLog cron rows enter the same event log before execution:
+
+```text
+SqliteRunLogStore.enqueueDueCronRuns
+-> cron policy decision
+-> append run.created / cron.due / policy.decision.recorded
+-> append run.queued when allowed
+-> append run.failed when denied or staged for review
+```
+
 ## Implemented Pieces
 
 - `src/core/RunLogKernel.ts` starts and drains runs.
 - `src/core/RunLogExecutor.ts` records provider events, routes tool calls, appends checkpoints, and pauses on approval.
 - `src/core/RunLogScheduler.ts` claims queued runs with DB leases.
 - `src/adapters/sqlite/SqliteRunLogStore.ts` persists agents, runs, events, checkpoints, leases, and cron rows.
+- `src/capabilities/cron/RunLogCron.ts` creates scoped headless grants and cron enqueue decisions.
 - `src/hosts/runlog/RunLogProjection.ts` projects run events into a host-friendly read model.
 
 ## Event Boundaries
@@ -37,11 +48,16 @@ RunLog events are append-only. Important event families:
 - `workspace.lease.created`, `workspace.lease.released`
 - `checkpoint.saved`
 - `cron.due`
+- `policy.decision.recorded`
 - `run.completed`, `run.failed`, `run.cancelled`
 
 ## Approvals
 
 Approvals are durable runtime state, not UI booleans. A tool that requires approval causes the run to enter `awaiting_approval`; future work should resume from the checkpoint with an approval receipt rather than replaying side effects.
+
+## Cron And Headless Runs
+
+RunLog cron rows are headless operators. Side-effecting schedules deny by default unless a scoped cron grant binds the agent, prompt hash, schedule hash, allowed tools, expiration, and execution limit. A due cron row records `policy.decision.recorded` before it is queued or failed; denied cron rows do not wait forever for an absent operator.
 
 ## Recovery
 

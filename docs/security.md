@@ -21,6 +21,7 @@ Mainspring treats agents as untrusted workers.
 - console-side response tripwires that reject browser-unsafe secret/path fields, common provider key environment markers, and common Windows drive-letter, UNC, and Unix host absolute paths in successful JSON responses
 - Docker runtime packaging guardrails
 - unapprovable hard blocks for catastrophic shell, credential-disclosure, Git remote/hook mutation, approval-disabling, and network-to-shell patterns
+- RunLog cron/headless grant decisions before due runs are queued or failed
 
 ## Hard Truths
 
@@ -33,6 +34,7 @@ Mainspring treats agents as untrusted workers.
 - The desktop shell is not a secret vault.
 - Local hosted auth is not enterprise SSO.
 - Local budget enforcement is not payment billing.
+- RunLog cron grants are scheduling authority checks, not process containment.
 
 ## Required Practice
 
@@ -40,6 +42,7 @@ Mainspring treats agents as untrusted workers.
 - Keep decrypted secrets out of prompts, logs, events, and browser DTOs.
 - Put dangerous actions behind policy and approvals.
 - Hard-blocked actions must stay blocked even if an approval receipt is supplied.
+- Side-effecting RunLog cron schedules should use scoped, expiring grants instead of waiting for unattended approval.
 - Add leak tests for new browser-facing fields.
 - Keep runtime work inside the mailbox/kernel/tool/policy spine.
 

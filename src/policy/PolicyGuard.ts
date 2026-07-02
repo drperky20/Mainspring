@@ -7,7 +7,7 @@ import {
   type ToolManifest,
 } from '#protocol'
 
-export type PolicyOperation = 'tool.execute' | 'skill.install'
+export type PolicyOperation = 'tool.execute' | 'skill.install' | 'cron.enqueue'
 
 export interface RuntimePolicyDefaults {
   approvalPolicy?: RuntimePolicy['approvalPolicy']

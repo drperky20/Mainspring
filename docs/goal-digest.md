@@ -7331,6 +7331,34 @@ At the start of each continuation:
 
 Do not mark broad product features complete because scaffolds or docs exist. Be explicit about partial work.
 
+## 2026-07-02 RunLog Cron Headless Policy Slice
+
+Implemented scoped headless policy decisions for canonical RunLog cron rows.
+
+- Added cron grant/policy helpers in `src/capabilities/cron/RunLogCron.ts`.
+- Added `cron.enqueue` as a `DecisionRecord` operation.
+- Updated SQLite RunLog cron enqueue so every due cron row records `policy.decision.recorded` before it queues or fails a run.
+- Side-effecting headless schedules now deny by default without queueing work.
+- Scoped cron grants bind agent id, prompt hash, schedule hash, allowed tools, expiration, and max execution count.
+- Grant prompt mutation, grant expiry, and execution-limit exhaustion fail closed.
+- Allowed cron runs remain ordinary RunLog runs and denied cron rows become failed audited RunLog runs rather than waiting forever for absent approval.
+- Added restart/no-duplicate coverage for due cron rows after reopening the SQLite store.
+- Updated current-state, runtime-loop, security truth matrix, and backlog docs.
+
+Preserved runtime seams:
+
+`RunLogKernel -> RunLogScheduler -> RunLogExecutor -> ProviderRouter -> ToolRegistry / RuntimePolicyGuard -> SQLite WAL events + checkpoints -> RunLogProjection / hosts`.
+
+Verification for the focused slice:
+
+- `pnpm exec vitest run src/core/RunLogKernel.test.ts`: passed, 1 file / 18 tests.
+- `pnpm typecheck`: passed.
+
+Remaining risk:
+
+- Legacy gateway cron scheduling still uses the gateway app-state/mailbox migration path and must be wired onto RunLog cron grants before it can be called fully canonical.
+- Cron grants decide whether a due schedule may become a run; they do not turn host shell execution into containment.
+
 ## 2026-07-02 Canonical RunLog Policy Decision Slice
 
 Implemented the canonical tool-path `DecisionRecord` layer for the RunLog Fabric runtime.

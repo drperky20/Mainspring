@@ -4,6 +4,7 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SqliteRunLogStore } from '../adapters/sqlite/SqliteRunLogStore.js'
+import { createRunLogCronGrant } from '../capabilities/cron/RunLogCron.js'
 import { LocalWorkspaceAdapter } from '../capabilities/workspace/LocalWorkspaceAdapter.js'
 import type { QueryInput } from '../providers/types.js'
 import { MockProvider } from '../providers/MockProvider.js'
@@ -758,6 +759,183 @@ describe('RunLogKernel', () => {
 
     const [summary] = await kernel.drainUntilIdle()
     expect(summary?.status).toBe('completed')
+  })
+
+  it('denies side-effecting headless cron rows by default without queueing work', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const kernel = new RunLogKernel({
+      store,
+      tools: [guardedShellTool({ count: 0 })],
+      providerRouter: new SingleProviderRouter(new MockProvider([])),
+    })
+    kernel.putAgent({
+      agentId: 'agent_cron_shell',
+      instructions: 'Run shell on a schedule.',
+      tools: ['shell.exec'],
+      capabilities: ['provider', 'tools', 'cron', 'shell'],
+    })
+    store.putCronJob({
+      cronId: 'cron_shell_default_deny',
+      agentId: 'agent_cron_shell',
+      input: 'scheduled shell work',
+      intervalMs: 60_000,
+      enabled: true,
+      nextRunAt: new Date(Date.now() - 1_000).toISOString(),
+    })
+
+    const [run] = store.enqueueDueCronRuns()
+    const projection = run ? projectRunLogRun({ store, runId: run.runId }) : null
+
+    expect(run?.status).toBe('failed')
+    expect(await kernel.drainOnce()).toBeNull()
+    expect(projection?.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(['cron.due', 'policy.decision.recorded', 'run.failed']),
+    )
+    expect(projection?.policyDecisions).toMatchObject([
+      {
+        state: 'deny',
+        surface: 'cron',
+        operation: 'cron.enqueue',
+        targetKey: 'cron_shell_default_deny',
+      },
+    ])
+  })
+
+  it('queues allowlisted headless cron rows with scoped grant decision records', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const kernel = new RunLogKernel({
+      store,
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([{ type: 'event', event: { type: 'result', text: 'cron allowlisted' } }]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_cron_allow',
+      instructions: 'Run allowlisted schedule.',
+      tools: ['shell.exec'],
+      capabilities: ['provider', 'tools', 'cron', 'shell'],
+    })
+    const grant = createRunLogCronGrant({
+      agentId: 'agent_cron_allow',
+      input: 'scheduled allowlisted work',
+      intervalMs: 60_000,
+      allowedTools: ['shell.exec'],
+      expiresInMs: 60_000,
+      maxExecutionCount: 1,
+    })
+    store.putCronJob({
+      cronId: 'cron_shell_allow',
+      agentId: 'agent_cron_allow',
+      input: 'scheduled allowlisted work',
+      intervalMs: 60_000,
+      enabled: true,
+      nextRunAt: new Date(Date.now() - 1_000).toISOString(),
+      metadata: { cronMode: 'allowlist', cronGrant: grant },
+    })
+
+    const [run] = store.enqueueDueCronRuns()
+    const projection = run ? projectRunLogRun({ store, runId: run.runId }) : null
+    const persisted = store.listDueCronJobs(new Date(Date.now() + 60_001))[0]
+
+    expect(run?.status).toBe('queued')
+    expect(projection?.policyDecisions).toMatchObject([
+      {
+        state: 'allow',
+        surface: 'cron',
+        operation: 'cron.enqueue',
+        targetKey: 'cron_shell_allow',
+        approved: true,
+      },
+    ])
+    expect(persisted?.metadata?.cronGrant?.executionCount).toBe(1)
+    const [summary] = await kernel.drainUntilIdle()
+    expect(summary?.status).toBe('completed')
+  })
+
+  it('invalidates headless cron grants when prompts change or grants expire', () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const now = new Date()
+    store.putAgent({
+      agentId: 'agent_cron_mutation',
+      instructions: 'Run mutable schedule.',
+      tools: ['shell.exec'],
+      capabilities: ['provider', 'tools', 'cron', 'shell'],
+    })
+    const staleGrant = createRunLogCronGrant({
+      agentId: 'agent_cron_mutation',
+      input: 'old prompt',
+      intervalMs: 60_000,
+      allowedTools: ['shell.exec'],
+      expiresInMs: 60_000,
+    })
+    store.putCronJob({
+      cronId: 'cron_prompt_changed',
+      agentId: 'agent_cron_mutation',
+      input: 'new prompt',
+      intervalMs: 60_000,
+      enabled: true,
+      nextRunAt: new Date(now.getTime() - 1_000).toISOString(),
+      metadata: { cronMode: 'allowlist', cronGrant: staleGrant },
+    })
+    const expiredGrant = createRunLogCronGrant({
+      agentId: 'agent_cron_mutation',
+      input: 'expired prompt',
+      intervalMs: 60_000,
+      allowedTools: ['shell.exec'],
+      expiresAt: new Date(now.getTime() - 1_000).toISOString(),
+    })
+    store.putCronJob({
+      cronId: 'cron_expired_grant',
+      agentId: 'agent_cron_mutation',
+      input: 'expired prompt',
+      intervalMs: 60_000,
+      enabled: true,
+      nextRunAt: new Date(now.getTime() - 1_000).toISOString(),
+      metadata: { cronMode: 'allowlist', cronGrant: expiredGrant },
+    })
+
+    const runs = store.enqueueDueCronRuns(now)
+    const decisions = runs.flatMap((run) => projectRunLogRun({ store, runId: run.runId }).policyDecisions)
+
+    expect(runs.map((run) => run.status)).toEqual(['failed', 'failed'])
+    expect(decisions.map((decision) => decision.state)).toEqual(['deny', 'deny'])
+    expect(decisions.flatMap((decision) => decision.reasons)).toEqual(
+      expect.arrayContaining([
+        'headless cron prompt changed after grant',
+        'headless cron grant expired',
+      ]),
+    )
+  })
+
+  it('does not enqueue the same due cron row twice after SQLite restart', () => {
+    const root = tempRoot()
+    const dbPath = path.join(root, 'runlog.sqlite')
+    const firstStore = storeAt(root)
+    firstStore.putAgent({
+      agentId: 'agent_cron_restart',
+      instructions: 'Run once.',
+      capabilities: ['provider', 'cron'],
+    })
+    firstStore.putCronJob({
+      cronId: 'cron_restart_once',
+      agentId: 'agent_cron_restart',
+      input: 'scheduled once',
+      intervalMs: 60_000,
+      enabled: true,
+      nextRunAt: '2026-07-01T00:00:00.000Z',
+    })
+
+    const firstRuns = firstStore.enqueueDueCronRuns(new Date('2026-07-01T00:00:01.000Z'))
+    firstStore.close()
+    const secondStore = new SqliteRunLogStore({ dbPath })
+    stores.push(secondStore)
+    const secondRuns = secondStore.enqueueDueCronRuns(new Date('2026-07-01T00:00:02.000Z'))
+
+    expect(firstRuns).toHaveLength(1)
+    expect(secondRuns).toHaveLength(0)
   })
 
   it('materializes workspaces lazily only for workspace-capable agents', async () => {

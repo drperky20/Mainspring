@@ -17,7 +17,13 @@ import type {
   RunRecord,
   RunStatus,
 } from '../../core/types.js'
-import type { RunLogCronJob, RunLogCronStore } from '../../capabilities/cron/RunLogCron.js'
+import {
+  cronMetadataWithDecision,
+  decideRunLogCron,
+  decisionRecordForRun,
+  type RunLogCronJob,
+  type RunLogCronStore,
+} from '../../capabilities/cron/RunLogCron.js'
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback
@@ -664,48 +670,91 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       for (const job of due) {
         const agent = this.getAgent(job.agentId)
         if (!agent) continue
+        const decision = decideRunLogCron({ job, agent, now })
         const run = this.createRun(
           {
             agentId: job.agentId,
             input: job.input,
             sessionId: job.sessionId,
             workspaceId: job.workspaceId,
-            metadata: { ...job.metadata, cronId: job.cronId },
+            metadata: {
+              ...job.metadata,
+              cronId: job.cronId,
+              headless: true,
+              cronMode: job.metadata?.cronMode ?? (agent.tools?.length ? 'deny' : 'allowlist'),
+              cronDecisionId: decision.decisionId,
+            },
           },
           agent,
         )
+        const runDecision = decisionRecordForRun(decision, run.runId, run.sessionId)
         this.appendEvent({
           runId: run.runId,
           type: 'run.created',
-          payload: { agentId: run.agentId, sessionId: run.sessionId, source: 'cron' },
+          payload: { agentId: run.agentId, sessionId: run.sessionId, source: 'cron', headless: true },
           idempotencyKey: `run.created:${run.runId}`,
         })
         this.appendEvent({
           runId: run.runId,
           type: 'cron.due',
-          payload: { cronId: job.cronId, dueAt: job.nextRunAt },
+          payload: {
+            cronId: job.cronId,
+            dueAt: job.nextRunAt,
+            headless: true,
+            decisionId: runDecision.decisionId,
+          },
         })
         this.appendEvent({
           runId: run.runId,
-          type: 'input.received',
-          payload: { input: job.input, source: 'cron' },
-          idempotencyKey: `input.received:${run.runId}`,
+          type: 'policy.decision.recorded',
+          payload: runDecision,
+          idempotencyKey: `policy.decision.recorded:${runDecision.decisionId}`,
         })
-        this.appendEvent({
-          runId: run.runId,
-          type: 'run.queued',
-          payload: { source: 'cron' },
-          idempotencyKey: `run.queued:${run.runId}`,
-        })
+        if (runDecision.state === 'allow') {
+          this.appendEvent({
+            runId: run.runId,
+            type: 'input.received',
+            payload: { input: job.input, source: 'cron' },
+            idempotencyKey: `input.received:${run.runId}`,
+          })
+          this.appendEvent({
+            runId: run.runId,
+            type: 'run.queued',
+            payload: { source: 'cron', decisionId: runDecision.decisionId },
+            idempotencyKey: `run.queued:${run.runId}`,
+          })
+        } else {
+          this.updateRunStatus(run.runId, 'failed')
+          this.appendEvent({
+            runId: run.runId,
+            type: 'run.failed',
+            payload: {
+              source: 'cron',
+              cronId: job.cronId,
+              decisionId: runDecision.decisionId,
+              state: runDecision.state,
+              reasons: runDecision.reasons,
+            },
+            idempotencyKey: `run.failed:${run.runId}:cron-policy`,
+          })
+        }
         const nextRunAt = new Date(now.getTime() + job.intervalMs).toISOString()
+        const nextMetadata = cronMetadataWithDecision(job.metadata, runDecision, {
+          incrementGrantUse: runDecision.state === 'allow' && Boolean(job.metadata?.cronGrant),
+        })
         db.prepare(
           `
             UPDATE run_cron_jobs
-            SET next_run_at = @nextRunAt, updated_at = @updatedAt
+            SET next_run_at = @nextRunAt, metadata_json = @metadataJson, updated_at = @updatedAt
             WHERE cron_id = @cronId
           `,
-        ).run({ cronId: job.cronId, nextRunAt, updatedAt: nowIso() })
-        runs.push(run)
+        ).run({
+          cronId: job.cronId,
+          nextRunAt,
+          metadataJson: optionalJson(nextMetadata),
+          updatedAt: nowIso(),
+        })
+        runs.push(this.getRun(run.runId) ?? run)
       }
       return runs
     })()

@@ -13,7 +13,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `src/adapters/sqlite` for the default SQLite WAL RunLog store with agents, runs, leases, events, checkpoints, and cron rows.
   - `src/adapters/local-blob` for content-addressed local blob storage.
   - `src/capabilities/workspace` for lazy local workspace leases.
-  - `src/capabilities/cron` for due cron rows that enqueue ordinary runs.
+  - `src/capabilities/cron` for due cron rows, scoped headless grants, prompt/schedule hashes, execution limits, and cron policy decisions.
   - `src/hosts/runlog` for host-facing run projections.
   - `src/compat` for migration exports.
 - Package subpaths now expose `mainspring/core`, `mainspring/adapters`, `mainspring/adapters/sqlite`, `mainspring/adapters/local-blob`, `mainspring/capabilities`, `mainspring/hosts/runlog`, and `mainspring/compat`.
@@ -30,12 +30,17 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - decision states are `allow`, `deny`, `clarify`, `requires_approval`, `stage_for_review`, and `hard_block`.
   - tool completion, approval, and block events carry the related `decisionId`.
   - hard-block shell patterns such as catastrophic wipes, fork bombs, credential dumping, Git remote/hook mutation, approval disabling, and network-to-shell execution cannot be approved by a receipt.
+- RunLog cron rows now fail closed at the schedule-to-run boundary:
+  - side-effecting headless schedules deny by default without queueing work.
+  - scoped cron grants bind agent, prompt hash, schedule hash, allowed tools, expiration, and execution count.
+  - due cron rows append `policy.decision.recorded` before `run.queued` or `run.failed`.
+  - prompt mutation, grant expiry, execution-limit exhaustion, and schedule mismatch fail closed in focused tests.
 
 ## Prototype Or Migration Surfaces
 
 - The old mailbox/runtime path is still present and still important for existing SDK/gateway behavior.
 - Gateway and console remain mid-migration; they should consume RunLog projections rather than grow new parallel runtime state.
-- Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, cron/headless grants, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
+- Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, legacy gateway cron scheduling, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
 - Some existing docs/scripts still describe older mailbox-first architecture and should be consolidated around RunLog Fabric.
@@ -48,6 +53,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Memory retrieval adapter connected to RunLog context assembly.
 - General checkpoint replay/retry controls beyond the implemented approval-resume continuation.
 - Child-run/subagent helper APIs beyond the parent-run data model.
+- Full gateway/API migration to RunLog-native cron grants and headless policy.
 - Not implemented: hosted multi-tenant auth, real billing, remote marketplace trust, VM isolation, or secure desktop credential vault.
 
 ## Runtime Seams To Preserve During Migration
@@ -56,6 +62,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Tool side effects go through `ToolRegistry`.
 - Risk decisions go through `RuntimePolicyGuard` and approval receipts.
 - Tool-path policy decisions must emit `policy.decision.recorded` before the tool executor is reached.
+- RunLog cron/headless decisions must emit `policy.decision.recorded` before enqueueing or failing the due run.
 - Durable events remain the public trace boundary.
 - RunLog approval decisions must keep using scoped signed receipts and one-time-use receipt rows.
 - Host projections must sanitize browser-facing DTOs.
