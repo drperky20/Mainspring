@@ -1,4 +1,5 @@
 import type { ProviderUsage, RuntimePolicy } from '#protocol'
+import type { ContextCodec } from '../context/ContextCodec.js'
 import type { AgentProvider, QueryInput, RuntimeSecretResolver } from '../providers/types.js'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
 
@@ -98,6 +99,7 @@ export type RunLogEventType =
   | 'cron.due'
   | 'child_run.created'
   | 'usage.reported'
+  | 'context.encoded'
   | 'runtime.warning'
   | 'runtime.error'
   | 'run.completed'
@@ -270,6 +272,7 @@ export interface RunExecutorOptions {
   workspace?: WorkspaceAdapter
   defaultWorkspaceRoot?: string
   policy?: RuntimePolicy
+  contextCodec?: ContextCodec
   approvalReceiptKey?: string
   approvalReceiptKeyMode?: 'local-dev' | 'configured'
   secretResolver?: RuntimeSecretResolver

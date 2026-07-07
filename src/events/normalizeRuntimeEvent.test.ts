@@ -30,6 +30,7 @@ const EMITTED_RUN_EVENT_TYPES = [
   'memory.updated',
   'skill.updated',
   'usage.updated',
+  'context.encoded',
   'runtime.warning',
   'runtime.error',
 ] as const satisfies readonly RunEventType[]
@@ -138,8 +139,9 @@ function row(event: MainspringEvent, seq = 1): RuntimeEventRow {
 describe('normalizeRuntimeEventRow', () => {
   it('keeps the public RunEventType contract fully classified', () => {
     expect(allRunEventTypesCovered).toBe(true)
-    expect(EMITTED_RUN_EVENT_TYPES).toHaveLength(24)
+    expect(EMITTED_RUN_EVENT_TYPES).toHaveLength(25)
     expect(EMITTED_RUN_EVENT_TYPES as readonly string[]).not.toContain('provider.init')
+    expect(EMITTED_RUN_EVENT_TYPES as readonly string[]).toContain('context.encoded')
   })
 
   it('normalizes every native runtime event variant without dropping rows', () => {

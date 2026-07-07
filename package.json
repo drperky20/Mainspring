@@ -30,6 +30,7 @@
     "docs/getting-started.md",
     "docs/architecture.md",
     "docs/runtime-loop.md",
+    "docs/context-codec.md",
     "docs/sdk.md",
     "docs/security.md",
     "docs/operations.md",
@@ -71,6 +72,10 @@
     "./core": {
       "types": "./dist/core/index.d.ts",
       "import": "./dist/core/index.js"
+    },
+    "./context": {
+      "types": "./dist/context/index.d.ts",
+      "import": "./dist/context/index.js"
     },
     "./adapters": {
       "types": "./dist/adapters/index.d.ts",

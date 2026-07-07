@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { RuntimeSecretRefSchema, type RuntimePolicy } from '#protocol'
+import type { ContextBlock } from '../context/types.js'
 import type { ProviderEvent, ProviderMessage, QueryInput } from '../providers/types.js'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
 import type { DecisionRecord } from '../policy/DecisionRecord.js'
@@ -249,6 +250,48 @@ export class RunLogExecutor {
     return 1
   }
 
+  private appendContextEncodingEvents(input: {
+    run: RunRecord
+    agent: AgentSpec
+    queryInput: QueryInput
+  }): void {
+    const codec = this.options.contextCodec
+    if (!codec) return
+    const blocks: ContextBlock[] = [
+      {
+        blockId: `${input.run.runId}:user-intent`,
+        kind: 'user_intent',
+        label: 'current user intent',
+        content: input.queryInput.prompt || input.run.input,
+        recent: true,
+        exactSensitive: true,
+      },
+    ]
+    if (input.queryInput.systemPrompt?.trim()) {
+      blocks.push({
+        blockId: `${input.run.runId}:system-prompt`,
+        kind: 'system_prompt',
+        label: 'system prompt',
+        content: input.queryInput.systemPrompt,
+        exactSensitive: true,
+        risk: 'policy',
+      })
+    }
+    const plan = codec.encodeBlocks({
+      modelId: input.queryInput.model ?? input.run.modelId ?? input.agent.modelId,
+      blocks,
+    })
+    for (const block of plan.blocks) {
+      this.store.appendEvent({
+        runId: input.run.runId,
+        type: 'context.encoded',
+        payload: block.eventPayload,
+        visibility: 'artifact-only',
+        idempotencyKey: `context.encoded:${input.run.runId}:${block.blockId}:${block.sourceSha256}`,
+      })
+    }
+  }
+
   private async runProviderQuery(input: {
     run: RunRecord
     agent: AgentSpec
@@ -259,6 +302,11 @@ export class RunLogExecutor {
   }): Promise<{ status: RunRecord['status']; checkpointsAppended: number }> {
     let checkpointsAppended = 0
     const provider = this.options.providerRouter.resolve({ run: input.run, agent: input.agent })
+    this.appendContextEncodingEvents({
+      run: input.run,
+      agent: input.agent,
+      queryInput: input.queryInput,
+    })
     const query = provider.query(input.queryInput)
     const toolRegistry = this.createToolRegistry({
       run: input.run,

@@ -4,6 +4,7 @@ export type {
   BrowserScreenshotCreatedRunEventPayload,
   BrowserUpdatedRunEventPayload,
   CommandStore,
+  ContextEncodedRunEventPayload,
   CreateMainspringOptions,
   CreateMainspringSessionInput,
   EventStore,

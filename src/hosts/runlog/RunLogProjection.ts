@@ -32,6 +32,7 @@ export interface RunLogRunProjection {
   policyDecisions: DecisionRecord[]
   artifacts: unknown[]
   usage: unknown[]
+  contextEncodings: unknown[]
   errors: Array<{
     eventId: string
     seq: number
@@ -65,6 +66,7 @@ export function projectRunLogRun(input: {
   const policyDecisions: DecisionRecord[] = []
   const artifacts: unknown[] = []
   const usage: unknown[] = []
+  const contextEncodings: unknown[] = []
   const errors: RunLogRunProjection['errors'] = []
 
   for (const event of events) {
@@ -117,6 +119,7 @@ export function projectRunLogRun(input: {
     }
     if (event.type === 'artifact.created') artifacts.push(event.payload)
     if (event.type === 'usage.reported') usage.push(event.payload)
+    if (event.type === 'context.encoded') contextEncodings.push(event.payload)
     if (event.type === 'runtime.error' || event.type === 'run.failed') {
       errors.push({
         eventId: event.eventId,
@@ -142,6 +145,7 @@ export function projectRunLogRun(input: {
     policyDecisions,
     artifacts,
     usage,
+    contextEncodings,
     errors,
     latestSeq: events.at(-1)?.seq ?? 0,
   }

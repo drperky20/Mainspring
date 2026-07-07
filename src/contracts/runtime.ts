@@ -1,4 +1,5 @@
 import type { AgentProvider, ProviderEvent } from '../providers/types.js'
+import type { ContextEncodedRunEventPayload } from '../context/types.js'
 import type {
   MainspringRuntimeProfile,
   ProviderRateLimitState,
@@ -6,6 +7,8 @@ import type {
   RuntimePolicy,
 } from '#protocol'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
+
+export type { ContextEncodedRunEventPayload } from '../context/types.js'
 
 export type EventVisibility = 'public' | 'sensitive' | 'artifact-only'
 
@@ -32,6 +35,7 @@ export type RunEventType =
   | 'memory.updated'
   | 'skill.updated'
   | 'usage.updated'
+  | 'context.encoded'
   | 'runtime.warning'
   | 'runtime.error'
 
@@ -173,6 +177,7 @@ export interface RunEventPayloadByType {
   'memory.updated': MemoryUpdatedRunEventPayload
   'skill.updated': SkillUpdatedRunEventPayload
   'usage.updated': UsageUpdatedRunEventPayload
+  'context.encoded': ContextEncodedRunEventPayload
   'runtime.warning': RuntimeWarningEventPayload
   'runtime.error': RuntimeErrorEventPayload
 }
