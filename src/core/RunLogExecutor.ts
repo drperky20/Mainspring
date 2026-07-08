@@ -24,20 +24,31 @@ import type {
   WorkspaceLease,
 } from './types.js'
 
-function defaultPolicy(agent: AgentSpec, policy?: RuntimePolicy): RuntimePolicy {
+function effectiveAllowedTools(
+  agent: AgentSpec,
+  run: RunRecord,
+  policy?: RuntimePolicy,
+): string[] {
+  const base = agent.tools ?? policy?.allowedTools ?? []
+  if (!run.allowedTools) return [...base]
+  const scoped = new Set(run.allowedTools)
+  return base.filter((tool) => scoped.has(tool))
+}
+
+function defaultPolicy(agent: AgentSpec, run: RunRecord, policy?: RuntimePolicy): RuntimePolicy {
   return RuntimePolicyGuard.defaultPolicy({
     approvalPolicy: agent.approvalPolicy ?? policy?.approvalPolicy ?? 'balanced',
     allowBrowser: agent.capabilities?.includes('browser') ?? false,
     allowMemory: agent.capabilities?.includes('memory') ?? false,
-    allowedTools: agent.tools ?? policy?.allowedTools ?? [],
+    allowedTools: effectiveAllowedTools(agent, run, policy),
     budget: policy?.budget,
     redaction: policy?.redaction ?? 'strict',
   })
 }
 
-function toolSchemaSubset(tools: readonly RuntimeTool[], agent: AgentSpec): RuntimeTool[] {
-  if (!agent.tools || agent.tools.length === 0) return []
-  const allowed = new Set(agent.tools)
+function toolSchemaSubset(tools: readonly RuntimeTool[], allowedTools: readonly string[]): RuntimeTool[] {
+  if (allowedTools.length === 0) return []
+  const allowed = new Set(allowedTools)
   return tools.filter((tool) => allowed.has(tool.manifest.key))
 }
 
@@ -142,8 +153,9 @@ export class RunLogExecutor {
       })
 
       workspaceLease = await this.leaseWorkspace(run, agent)
-      const selectedTools = toolSchemaSubset(this.tools, agent)
-      const policy = defaultPolicy(agent, this.options.policy)
+      const allowedTools = effectiveAllowedTools(agent, run, this.options.policy)
+      const selectedTools = toolSchemaSubset(this.tools, allowedTools)
+      const policy = defaultPolicy(agent, run, this.options.policy)
       const approvedReceipt = this.store.getApprovedUnusedReceipt(run.runId)
 
       if (approvedReceipt) {

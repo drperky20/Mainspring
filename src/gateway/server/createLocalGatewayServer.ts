@@ -90,6 +90,7 @@ export interface CreateLocalGatewayServerOptions {
   auth?: {
     mode?: 'local-dev' | 'hosted'
     sessionTtlMs?: number
+    trustedOrigins?: string[]
     bootstrapAdmin?: {
       username: string
       password: string
@@ -109,6 +110,18 @@ type BrowserAccessTicket = {
 const BROWSER_ACCESS_TICKET_TTL_MS = 1000 * 60 * 5
 const LOCAL_BROWSER_ORIGIN_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 
+function normalizedBrowserOrigin(origin: string | undefined): string | null {
+  if (!origin) return null
+  try {
+    const parsed = new URL(origin)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    if (parsed.username || parsed.password) return null
+    return parsed.origin
+  } catch {
+    return null
+  }
+}
+
 function isAllowedLocalBrowserOrigin(origin: string | undefined): boolean {
   if (!origin) return true
   try {
@@ -126,12 +139,18 @@ export class LocalGatewayHttpServer {
   private readonly server: http.Server
   private readonly authMode: 'local-dev' | 'hosted'
   private readonly hostedAuth: HostedGatewayAuthManager | null
+  private readonly trustedHostedOrigins: Set<string>
   private readonly browserAccessTickets = new Map<string, BrowserAccessTicket>()
 
   constructor(private readonly options: CreateLocalGatewayServerOptions) {
     this.host = options.host ?? '127.0.0.1'
     this.port = options.port ?? 8787
     this.authMode = options.auth?.mode ?? 'local-dev'
+    this.trustedHostedOrigins = new Set(
+      (options.auth?.trustedOrigins ?? [])
+        .map((origin) => normalizedBrowserOrigin(origin))
+        .filter((origin): origin is string => Boolean(origin)),
+    )
     this.hostedAuth =
       this.authMode === 'hosted'
       ? options.gateway.appState
@@ -691,11 +710,36 @@ export class LocalGatewayHttpServer {
         return
       }
 
+      if (request.method === 'GET' && path === '/providers/openrouter/models') {
+        this.writeJson(response, 200, await this.listOpenRouterModels(url))
+        return
+      }
+
       if (request.method === 'POST' && path === '/runs/start') {
         const body = await this.readJson(request)
         const parsed = StartRunRequestSchema.parse(body)
         const run = await this.startRun(parsed)
         this.writeJson(response, 202, sanitizeGatewayResponse({ run: consoleRunDispatch(run) }))
+        return
+      }
+
+      if (request.method === 'POST' && path.startsWith('/runs/') && path.endsWith('/cancel')) {
+        const runId = decodeURIComponent(path.slice('/runs/'.length, -'/cancel'.length))
+        const body = await this.readJson(request)
+        const payload = body as { sessionId?: unknown; reason?: unknown }
+        const sessionId =
+          typeof payload.sessionId === 'string' && payload.sessionId.trim()
+            ? payload.sessionId.trim()
+            : this.lookupSessionIdForRun(runId)
+        if (!sessionId) {
+          throw new GatewayHttpError(400, 'sessionId is required to cancel this run.')
+        }
+        const reason =
+          typeof payload.reason === 'string' && payload.reason.trim()
+            ? payload.reason.trim()
+            : undefined
+        this.options.gateway.runs.cancel(sessionId, runId, reason)
+        this.writeJson(response, 202, sanitizeGatewayResponse({ runId, sessionId, cancelled: true }))
         return
       }
 
@@ -713,9 +757,9 @@ export class LocalGatewayHttpServer {
       if (request.method === 'GET' && path.startsWith('/runs/') && path.endsWith('/events')) {
         const runId = decodeURIComponent(path.slice('/runs/'.length, -'/events'.length))
         const sessionId = url.searchParams.get('sessionId') ?? this.lookupSessionIdForRun(runId)
-        if (!sessionId) throw new GatewayHttpError(404, `Unknown run: ${runId}`)
+        if (!sessionId && !this.options.gateway.runLog.available()) throw new GatewayHttpError(404, `Unknown run: ${runId}`)
         const input: LocalGatewayEventListInput = {
-          sessionId,
+          sessionId: sessionId ?? '',
           runId,
           ...(url.searchParams.get('afterSeq')
             ? { afterSeq: Number.parseInt(url.searchParams.get('afterSeq') ?? '', 10) }
@@ -725,7 +769,16 @@ export class LocalGatewayHttpServer {
             : {}),
         }
         const events = this.options.gateway.events.list(input)
-        this.writeJson(response, 200, { sessionId, runId, events: events.map(consoleRunEvent) })
+        if (events.length > 0 || !this.options.gateway.runLog.available()) {
+          this.writeJson(response, 200, { sessionId, runId, events: events.map(consoleRunEvent) })
+          return
+        }
+        const projection = this.options.gateway.runLog.runs.project(runId)
+        this.writeJson(response, 200, {
+          sessionId: projection.run.sessionId,
+          runId,
+          events: projection.events.map(runLogEventPublic),
+        })
         return
       }
 
@@ -941,6 +994,9 @@ export class LocalGatewayHttpServer {
   }
 
   private async startRun(input: StartRunRequest) {
+    if (this.shouldStartProfileRunFromAppState(input.providerProfileId)) {
+      return this.options.gateway.runs.startFromAppState(input)
+    }
     if (this.options.gateway.runLog?.available()) {
       const result = await this.options.gateway.runLog.runs.start(input)
       return result.run
@@ -949,6 +1005,13 @@ export class LocalGatewayHttpServer {
       return this.options.gateway.runs.startFromAppState(input)
     }
     return this.options.gateway.runs.start(input)
+  }
+
+  private shouldStartProfileRunFromAppState(providerProfileId: string | undefined): boolean {
+    if (!providerProfileId) return false
+    const profile = this.options.gateway.appState?.providerProfiles.get(providerProfileId)
+    if (!profile) return true
+    return profile.providerId !== 'default'
   }
 
   private createClient(input: CreateClientRequest) {
@@ -1012,6 +1075,39 @@ export class LocalGatewayHttpServer {
       profileId,
       ...input,
     })
+  }
+
+  private async listOpenRouterModels(url: URL): Promise<{
+    providerId: 'openrouter'
+    source: string
+    models: OpenRouterCatalogModel[]
+  }> {
+    const search = url.searchParams.get('q')?.trim().toLowerCase() || ''
+    const supportedParameter = url.searchParams.get('supportedParameter')?.trim().toLowerCase() || ''
+    const limitInput = Number.parseInt(url.searchParams.get('limit') ?? '80', 10)
+    const limit = Number.isInteger(limitInput) ? Math.min(Math.max(limitInput, 1), 200) : 80
+    const source = process.env.MAINSPRING_OPENROUTER_MODELS_URL?.trim() || 'https://openrouter.ai/api/v1/models'
+    const upstreamUrl = new URL(source)
+    const sort = url.searchParams.get('sort')?.trim()
+    if (sort) upstreamUrl.searchParams.set('sort', sort)
+    if (supportedParameter) upstreamUrl.searchParams.set('supported_parameters', supportedParameter)
+
+    const response = await fetch(upstreamUrl, { headers: { accept: 'application/json' } })
+    if (!response.ok) {
+      throw new GatewayHttpError(response.status, `OpenRouter models request failed with status ${response.status}.`)
+    }
+    const body = (await response.json()) as { data?: unknown }
+    const rows = Array.isArray(body.data) ? body.data : []
+    const models = rows
+      .map(openRouterCatalogModel)
+      .filter((model): model is OpenRouterCatalogModel => Boolean(model))
+      .filter((model) =>
+        search
+          ? `${model.id} ${model.name} ${model.description ?? ''}`.toLowerCase().includes(search)
+          : true,
+      )
+      .slice(0, limit)
+    return { providerId: 'openrouter', source: 'openrouter-models-api', models }
   }
 
   private createCronSchedule(input: CreateCronScheduleRequest) {
@@ -1152,7 +1248,7 @@ export class LocalGatewayHttpServer {
     if (Array.isArray(origin)) {
       return false
     }
-    if (!isAllowedLocalBrowserOrigin(origin)) {
+    if (!this.isAllowedBrowserOrigin(origin, request)) {
       response.setHeader('Vary', 'Origin')
       response.setHeader('Cache-Control', 'no-store')
       return false
@@ -1162,10 +1258,25 @@ export class LocalGatewayHttpServer {
       response.setHeader('Vary', 'Origin')
     }
     response.setHeader('Access-Control-Allow-Headers', 'content-type, authorization')
-    response.setHeader('Access-Control-Expose-Headers', 'x-mainspring-auth-token')
+    if (this.authMode === 'hosted' && origin) {
+      response.setHeader('Access-Control-Expose-Headers', 'x-mainspring-auth-token')
+    }
     response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
     response.setHeader('Cache-Control', 'no-store')
     return true
+  }
+
+  private isAllowedBrowserOrigin(
+    origin: string | undefined,
+    request: IncomingMessage,
+  ): boolean {
+    if (this.authMode === 'local-dev') return isAllowedLocalBrowserOrigin(origin)
+    if (!origin) return true
+    const normalized = normalizedBrowserOrigin(origin)
+    if (!normalized) return false
+    if (this.trustedHostedOrigins.has(normalized)) return true
+    const host = typeof request.headers.host === 'string' ? request.headers.host.trim() : ''
+    return Boolean(host) && normalized === `http://${host}`
   }
 
   private writeJson(
@@ -1316,6 +1427,62 @@ export class LocalGatewayHttpServer {
 
     tick()
     timer = globalThis.setInterval(tick, 1000)
+  }
+}
+
+interface OpenRouterCatalogModel {
+  id: string
+  name: string
+  description?: string
+  contextLength?: number
+  inputModalities: string[]
+  outputModalities: string[]
+  supportedParameters: string[]
+  pricing?: {
+    prompt?: string
+    completion?: string
+    request?: string
+  }
+}
+
+function openRouterCatalogModel(value: unknown): OpenRouterCatalogModel | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const id = typeof record.id === 'string' ? record.id.trim() : ''
+  if (!id) return undefined
+  const architecture = record.architecture && typeof record.architecture === 'object'
+    ? record.architecture as Record<string, unknown>
+    : {}
+  const pricing = record.pricing && typeof record.pricing === 'object'
+    ? record.pricing as Record<string, unknown>
+    : {}
+  const supportedParameters = Array.isArray(record.supported_parameters)
+    ? record.supported_parameters.filter((item): item is string => typeof item === 'string')
+    : []
+  const inputModalities = Array.isArray(architecture.input_modalities)
+    ? architecture.input_modalities.filter((item): item is string => typeof item === 'string')
+    : []
+  const outputModalities = Array.isArray(architecture.output_modalities)
+    ? architecture.output_modalities.filter((item): item is string => typeof item === 'string')
+    : []
+
+  return {
+    id,
+    name: typeof record.name === 'string' && record.name.trim() ? record.name.trim() : id,
+    ...(typeof record.description === 'string' && record.description.trim()
+      ? { description: record.description.trim().slice(0, 320) }
+      : {}),
+    ...(typeof record.context_length === 'number' && Number.isFinite(record.context_length)
+      ? { contextLength: record.context_length }
+      : {}),
+    inputModalities,
+    outputModalities,
+    supportedParameters,
+    pricing: {
+      ...(typeof pricing.prompt === 'string' ? { prompt: pricing.prompt } : {}),
+      ...(typeof pricing.completion === 'string' ? { completion: pricing.completion } : {}),
+      ...(typeof pricing.request === 'string' ? { request: pricing.request } : {}),
+    },
   }
 }
 

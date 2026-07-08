@@ -1210,9 +1210,9 @@ export class RuntimeKernel {
   }
 
   private prefersStructuredReplayPrompt(provider: AgentProvider, providerId?: string): boolean {
-    if (providerId === 'openrouter') return true
-    const candidate = provider as { providerId?: unknown }
-    return candidate.providerId === 'openrouter'
+    if (provider.capabilities?.structuredReplay) return true
+    const candidate = provider as { providerId?: unknown; capabilities?: { structuredReplay?: boolean } }
+    return Boolean(candidate.capabilities?.structuredReplay)
   }
 
   private registry(

@@ -206,6 +206,7 @@ export class Mainspring {
   private readonly builtInProviderRegistry = createDefaultProviderRegistry({
     defaultProviderId: MAINSPRING_APP_PROVIDER_ID,
   })
+  private readonly builtInProviderIds = new Set(this.builtInProviderRegistry.listProviderIds())
   private readonly builtInProviderDefaults = new Map<string, { credentialRef: string; options?: Record<string, unknown> }>()
   private readonly runtimeTools: RuntimeTool[]
   private readonly secretResolver?: RuntimeSecretResolver
@@ -224,7 +225,7 @@ export class Mainspring {
     this.runtimeTools = [...(options.tools ?? createDefaultRuntimeTools())]
     this.providerRegistry.set(defaultProviderId, provider)
     if (defaultProviderId !== 'default') this.providerRegistry.set('default', provider)
-    for (const providerId of ['openrouter', 'openai'] as const) {
+    for (const providerId of this.builtInProviderIds) {
       const defaults = runtimeProviderResolveOptionsFromEnv({
         ...process.env,
         MAINSPRING_PROVIDER: providerId,
@@ -259,14 +260,14 @@ export class Mainspring {
     const providerId = input.providerId ?? this.activeProviderId
     const staticProvider = this.providerRegistry.get(providerId)
     const wantsBuiltInCredentialOverride =
-      Boolean(input.credentialRef) && (providerId === 'openrouter' || providerId === 'openai')
+      Boolean(input.credentialRef) && this.builtInProviderIds.has(providerId)
 
     if (staticProvider && !wantsBuiltInCredentialOverride) {
       return this.withSecretResolver(staticProvider)
     }
 
     let provider: AgentProvider
-    if (providerId === 'openrouter' || providerId === 'openai') {
+    if (this.builtInProviderIds.has(providerId)) {
       const defaults = this.builtInProviderDefaults.get(providerId)
       provider = this.builtInProviderRegistry.resolve({
         providerId,

@@ -26,6 +26,8 @@ Process tools can target:
 | `docker` | Local Docker container route when available. | Container route, not a complete VM. |
 | `auto` | Runtime default. | Must not silently downgrade explicit isolated-capable requests. |
 
+Execution backends are resolved through `ExecutionBackendRegistry`. The bundled adapters are `host`, `wsl`, and `docker`; WSL reports unavailable outside Windows, and host execution stays explicitly unsafe-labeled. Custom backend IDs are safe strings and must be registered before resolution can execute them. Adapter metadata owns availability, capability summaries, and process spawn specs.
+
 `HyperCellScheduler` currently records local backend leases, capacity checks, expiry, and safe status summaries.
 
 ## What It Does Not Do

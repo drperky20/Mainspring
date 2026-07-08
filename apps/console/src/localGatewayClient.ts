@@ -51,6 +51,21 @@ export type GatewayProvenanceReview = {
   }
 }
 
+export interface GatewayProviderModel {
+  id: string
+  name: string
+  description?: string
+  contextLength?: number
+  inputModalities: string[]
+  outputModalities: string[]
+  supportedParameters: string[]
+  pricing?: {
+    prompt?: string
+    completion?: string
+    request?: string
+  }
+}
+
 export interface LocalGatewayClient {
   health(): Promise<{
     mode: string
@@ -87,6 +102,12 @@ export interface LocalGatewayClient {
     | { kind: 'artifact'; artifactId: string }
     | { kind: 'event-stream'; sessionId?: string; runId?: string }
   ): Promise<{ kind: 'artifact' | 'event-stream'; url: string; expiresAt: string }>
+  openRouterModels(input?: {
+    q?: string
+    limit?: number
+    supportedParameter?: string
+    sort?: string
+  }): Promise<{ providerId: 'openrouter'; source: string; models: GatewayProviderModel[] }>
   toolCalls(input?: {
     runId?: string
     sessionId?: string
@@ -105,17 +126,8 @@ export interface LocalGatewayClient {
   createDeploymentTarget(input: {
     workspaceId?: string
     label: string
-    kind: 'local' | 'vps' | 'container'
-    config?: {
-      sshHost: string
-      sshUser: string
-      sshPort?: number
-      remoteRoot: string
-      serviceName: string
-      envFilePath?: string
-      domain?: string
-      caddyConfigPath?: string
-    }
+    kind: string
+    config?: Record<string, unknown>
   }): Promise<{
     deploymentTarget: NonNullable<ConsoleGatewaySnapshot['deploymentTargets']>[number]
   }>
@@ -123,18 +135,9 @@ export interface LocalGatewayClient {
     targetId: string
     workspaceId?: string
     label?: string
-    kind?: 'local' | 'vps' | 'container'
+    kind?: string
     status?: 'active' | 'archived'
-    config?: {
-      sshHost: string
-      sshUser: string
-      sshPort?: number
-      remoteRoot: string
-      serviceName: string
-      envFilePath?: string
-      domain?: string
-      caddyConfigPath?: string
-    }
+    config?: Record<string, unknown>
   }): Promise<{
     deploymentTarget: NonNullable<ConsoleGatewaySnapshot['deploymentTargets']>[number]
   }>
@@ -146,7 +149,7 @@ export interface LocalGatewayClient {
       operation: 'deploy' | 'rollback' | 'destroy'
       targetId: string
       targetLabel: string
-      targetKind: 'local' | 'vps' | 'container'
+      targetKind: string
       summary: string
       prerequisites: string[]
       warnings: string[]
@@ -165,7 +168,7 @@ export interface LocalGatewayClient {
       operation: 'deploy' | 'rollback' | 'destroy'
       targetId: string
       targetLabel: string
-      targetKind: 'local' | 'vps' | 'container'
+      targetKind: string
       summary: string
       prerequisites: string[]
       warnings: string[]
@@ -190,7 +193,7 @@ export interface LocalGatewayClient {
       provenance: 'repo-examples'
       providerId?: string
       modelId?: string
-      runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+      runtimeProfile?: string
       allowedTools: string[]
       approvalMode?: string
     }>
@@ -355,7 +358,7 @@ export interface LocalGatewayClient {
     cronExpr: string
     timezone?: 'local' | 'utc'
     allowedTools?: string[]
-    runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+      runtimeProfile?: string
     enabled?: boolean
   }): Promise<{ cronSchedule: NonNullable<ConsoleGatewaySnapshot['cronSchedules']>[number] }>
   updateCronSchedule(input: {
@@ -370,7 +373,7 @@ export interface LocalGatewayClient {
     cronExpr?: string
     timezone?: 'local' | 'utc'
     allowedTools?: string[]
-    runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+    runtimeProfile?: string
     enabled?: boolean
   }): Promise<{ cronSchedule: NonNullable<ConsoleGatewaySnapshot['cronSchedules']>[number] }>
   deleteCronSchedule(input: { scheduleId: string }): Promise<{ scheduleId: string; deleted: true }>
@@ -445,7 +448,7 @@ export interface LocalGatewayClient {
   startRun(input: {
     sessionId: string
     input: string
-    mode: 'chat'
+    mode: 'chat' | 'task' | 'automation-test' | 'agent-test'
     allowedTools: string[]
     allowBudgetWarning?: boolean
     computerId?: string
@@ -454,8 +457,13 @@ export interface LocalGatewayClient {
     providerProfileId?: string
     providerId?: string
     modelId?: string
-    runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+    runtimeProfile?: string
   }): Promise<{ run: { runId: string; sessionId: string } }>
+  cancelRun(input: { sessionId: string; runId: string; reason?: string }): Promise<{
+    runId: string
+    sessionId: string
+    cancelled: true
+  }>
   runEvents(input: { sessionId: string; runId: string }): Promise<{ events: ConsoleGatewayRunEvent[] }>
   resolveApproval(input: {
     approvalId: string
@@ -514,6 +522,17 @@ export function createLocalGatewayClient(
         headers: { 'content-type': 'application/json', ...authHeaders() },
         body: JSON.stringify(input),
       }),
+    openRouterModels: (input = {}) =>
+      requestJson(
+        fetchImpl,
+        `${normalizedBaseUrl}/providers/openrouter/models${queryString({
+          q: input.q,
+          limit: input.limit === undefined ? undefined : String(input.limit),
+          supportedParameter: input.supportedParameter,
+          sort: input.sort,
+        })}`,
+        { headers: authHeaders() },
+      ),
     toolCalls: (input = {}) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/tool-calls${queryString(input)}`, { headers: authHeaders() }),
     deploymentTargets: (input = {}) =>
@@ -692,6 +711,12 @@ export function createLocalGatewayClient(
       }),
     startRun: (input) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/runs/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(input),
+      }),
+    cancelRun: ({ runId, ...input }) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/runs/${encodeURIComponent(runId)}/cancel`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...authHeaders() },
         body: JSON.stringify(input),

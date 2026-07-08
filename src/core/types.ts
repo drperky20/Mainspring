@@ -67,6 +67,7 @@ export interface RunRecord {
   providerId?: string
   modelId?: string
   credentialRef?: string
+  allowedTools?: string[]
   workerId?: string
   leaseUntil?: string
   metadata?: Record<string, unknown>

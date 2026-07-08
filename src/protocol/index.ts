@@ -180,13 +180,23 @@ export function normalizeRuntimeWebSocketUrl(value: string): string {
 export const runtimeErrorMessage = (error: unknown, fallback: string): string =>
   redactRuntimeSensitiveText(error instanceof Error ? error.message : fallback)
 
-export const MainspringRuntimeProfileSchema = z.enum([
+export const BUILTIN_MAINSPRING_RUNTIME_PROFILE_IDS = [
   'core',
   'core-browser',
   'core-browser-memory',
-])
+] as const
 
-export type MainspringRuntimeProfile = z.infer<typeof MainspringRuntimeProfileSchema>
+export const MainspringRuntimeProfileSchema = z.enum(BUILTIN_MAINSPRING_RUNTIME_PROFILE_IDS)
+
+export const MainspringRuntimeProfileIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_.:-]+$/)
+
+export type BuiltinMainspringRuntimeProfile = z.infer<typeof MainspringRuntimeProfileSchema>
+export type MainspringRuntimeProfile = string
 
 export const DEFAULT_MAINSPRING_RUNTIME_PROFILE =
   'core-browser-memory' satisfies MainspringRuntimeProfile
@@ -317,6 +327,10 @@ export type MainspringRuntimeProfileInfo = {
   excludes: string[]
 }
 
+export interface MainspringRuntimeProfileRegistration extends MainspringRuntimeProfileInfo {
+  profileId: string
+}
+
 const CORE_PROFILE_INCLUDES = [
   'gateway',
   'agents',
@@ -330,7 +344,7 @@ const CORE_PROFILE_INCLUDES = [
 const RICH_APP_EXCLUDES = ['voice', 'media', 'mobile-apps', 'desktop-apps']
 
 export const MAINSPRING_RUNTIME_PROFILES: Record<
-  MainspringRuntimeProfile,
+  BuiltinMainspringRuntimeProfile,
   MainspringRuntimeProfileInfo
 > = {
   core: {
@@ -355,6 +369,10 @@ export function isMainspringRuntimeProfile(value: unknown): value is MainspringR
   return MainspringRuntimeProfileSchema.safeParse(value).success
 }
 
+export function isSafeMainspringRuntimeProfileId(value: unknown): value is MainspringRuntimeProfile {
+  return MainspringRuntimeProfileIdSchema.safeParse(value).success
+}
+
 export function normalizeMainspringRuntimeProfile(
   value: unknown,
   fallback: MainspringRuntimeProfile = DEFAULT_MAINSPRING_RUNTIME_PROFILE,
@@ -365,13 +383,15 @@ export function normalizeMainspringRuntimeProfile(
 export function mainspringRuntimeProfileIncludesBrowser(
   profile: MainspringRuntimeProfile,
 ): boolean {
-  return profile === 'core-browser' || profile === 'core-browser-memory'
+  const info = MAINSPRING_RUNTIME_PROFILES[profile as BuiltinMainspringRuntimeProfile]
+  return Boolean(info?.includes.includes('browser'))
 }
 
 export function mainspringRuntimeProfileIncludesMemory(
   profile: MainspringRuntimeProfile,
 ): boolean {
-  return profile === 'core-browser-memory'
+  const info = MAINSPRING_RUNTIME_PROFILES[profile as BuiltinMainspringRuntimeProfile]
+  return Boolean(info?.includes.includes('memory'))
 }
 
 export function mainspringRuntimeProfileFromOptions(
@@ -391,6 +411,7 @@ export function mainspringRuntimeProfileFromOptions(
 }
 
 export const RunIntentModeSchema = z.enum(['chat', 'task', 'automation-test', 'agent-test'])
+export type RunIntentMode = z.infer<typeof RunIntentModeSchema>
 export const ApprovalPolicySchema = z.enum(['ask-first', 'balanced', 'autonomous'])
 
 export const RunIntentAttachmentSchema = z.object({
@@ -516,7 +537,7 @@ export const GatewayRunDispatchSchema = z.object({
   agentId: z.string().min(1),
   sessionKey: z.string().min(1),
   idempotencyKey: z.string().trim().min(1).max(512).optional(),
-  runtimeProfile: MainspringRuntimeProfileSchema.default(DEFAULT_MAINSPRING_RUNTIME_PROFILE),
+  runtimeProfile: MainspringRuntimeProfileIdSchema.default(DEFAULT_MAINSPRING_RUNTIME_PROFILE),
   intent: RunIntentSchema,
   policy: RuntimePolicySchema,
   trace: z.object({
@@ -706,7 +727,7 @@ export const MainspringComputerSchema = z.object({
   displayName: z.string().min(1),
   status: MainspringComputerStatusSchema,
   desiredState: MainspringComputerDesiredStateSchema,
-  runtimeProfile: MainspringRuntimeProfileSchema,
+  runtimeProfile: MainspringRuntimeProfileIdSchema,
   imageRef: z.string().min(1),
   stateVolumeRef: z.string().nullable().optional(),
   workspaceVolumeRef: z.string().nullable().optional(),
@@ -1933,7 +1954,7 @@ export const MainspringRuntimeSnapshotSchema = z.object({
   models: z.record(z.string(), z.unknown()).optional(),
   plugins: z.array(z.record(z.string(), z.unknown())).optional(),
   skills: z.array(z.record(z.string(), z.unknown())).optional(),
-  profile: MainspringRuntimeProfileSchema.optional(),
+  profile: MainspringRuntimeProfileIdSchema.optional(),
 })
 
 export type MainspringRuntimeSnapshot = z.infer<typeof MainspringRuntimeSnapshotSchema>
@@ -1959,7 +1980,7 @@ export type MainspringRuntimeDiagnosticStatus = z.infer<
 
 export const MainspringRuntimeDiagnosticsSchema = z.object({
   status: MainspringRuntimeDiagnosticStatusSchema,
-  profile: MainspringRuntimeProfileSchema.optional(),
+  profile: MainspringRuntimeProfileIdSchema.optional(),
   checkedAt: z.string(),
   health: MainspringHealthSchema.optional(),
   ready: MainspringHealthSchema.optional(),
@@ -2032,5 +2053,5 @@ export function assertSafeMainspringConfigPatch(input: unknown): MainspringConfi
 }
 
 export function assertSafeMainspringRuntimeProfile(profile: string): MainspringRuntimeProfile {
-  return MainspringRuntimeProfileSchema.parse(profile)
+  return MainspringRuntimeProfileIdSchema.parse(profile)
 }

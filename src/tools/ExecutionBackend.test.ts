@@ -5,10 +5,12 @@ import { describe, expect, it } from 'vitest'
 import {
   backendPreferenceFromComputerId,
   backendSummaryLine,
+  ExecutionBackendRegistry,
   executionBackendCapabilities,
   parseExecutionBackendPreference,
   resolveExecutionBackend,
   toWslPath,
+  type ExecutionBackendAdapter,
   type ExecutionBackendInventory,
 } from './ExecutionBackend.js'
 import {
@@ -59,7 +61,8 @@ describe('ExecutionBackend', () => {
     expect(parseExecutionBackendPreference('HOST')).toBe('host')
     expect(parseExecutionBackendPreference(' wsl ')).toBe('wsl')
     expect(parseExecutionBackendPreference('docker')).toBe('docker')
-    expect(() => parseExecutionBackendPreference('podman')).toThrow('auto, host, wsl, docker')
+    expect(parseExecutionBackendPreference('podman')).toBe('podman')
+    expect(() => parseExecutionBackendPreference('bad backend')).toThrow('Execution backend id')
   })
 
   it('derives backend preferences from known computer ids', () => {
@@ -90,6 +93,43 @@ describe('ExecutionBackend', () => {
     expect(() =>
       resolveExecutionBackend({ preferredBackend: 'wsl', probe: () => fakeInventory() }),
     ).toThrow('Execution backend "wsl" is unavailable: WSL is not installed.')
+  })
+
+  it('resolves custom registered backends through adapter metadata and spawn specs', () => {
+    const customAdapter: ExecutionBackendAdapter = {
+      key: 'podman',
+      label: () => 'Podman container',
+      inspect: () => ({
+        key: 'podman',
+        label: 'Podman container',
+        available: true,
+        unsafe: false,
+        capabilities: executionBackendCapabilities('docker'),
+      }),
+      capabilities: () => executionBackendCapabilities('docker'),
+      spawnSpec: (input) => [
+        'podman',
+        ['run', '--rm', '-w', input.cwd, 'node:22-alpine', 'sh', '-lc', input.command],
+        { cwd: input.cwd, shell: false, windowsHide: true, env: input.env },
+      ],
+    }
+    const registry = new ExecutionBackendRegistry().register(customAdapter)
+
+    const resolved = resolveExecutionBackend({
+      preferredBackend: 'podman',
+      registry,
+    })
+    expect(resolved).toMatchObject({
+      key: 'podman',
+      label: 'Podman container',
+      unsafe: false,
+    })
+    expect(resolved.spawnSpec?.({
+      command: 'printf CUSTOM_BACKEND',
+      cwd: '/workspace',
+      workspaceRoot: '/workspace',
+      env: { NO_COLOR: '1' },
+    })[0]).toBe('podman')
   })
 
   it('surfaces backend metadata in process snapshots', async () => {
@@ -167,6 +207,35 @@ describe('ExecutionBackend', () => {
     })
     expect(result.executionCell.cellKey).toMatch(/^cell_exec_host_[a-f0-9]{12}$/)
     expect(result.executionLease.cellKey).toBe(result.executionCell.cellKey)
+  })
+
+  it('rejects terminal cwd paths that resolve through a symlink outside the workspace root', () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'mainspring-process-registry-symlink-'),
+    )
+    const outsideRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'mainspring-process-registry-outside-'),
+    )
+    const linked = path.join(workspaceRoot, 'linked-outside')
+    fs.symlinkSync(outsideRoot, linked, process.platform === 'win32' ? 'junction' : 'dir')
+    const registry = new ProcessRegistry({
+      resolveBackend: () => ({
+        key: 'host',
+        label: 'Host shell',
+        unsafe: true,
+        capabilities: executionBackendCapabilities('host'),
+      }),
+    })
+
+    expect(() =>
+      registry.start({
+        runId: 'run_symlink_escape',
+        workspaceRoot,
+        cwd: 'linked-outside',
+        command: 'node -e "process.exit(0)"',
+        backend: 'host',
+      }),
+    ).toThrow('inside the workspace root')
   })
 
   it('builds Docker process specs with an explicit workspace mount and no network', () => {
@@ -247,5 +316,41 @@ describe('ExecutionBackend', () => {
       requiresApproval: true,
       unsafeFallback: false,
     })
+  })
+
+  it('labels host execution as container-scoped inside the gateway container', () => {
+    const original = process.env.MAINSPRING_CONTAINERIZED
+    process.env.MAINSPRING_CONTAINERIZED = '1'
+    try {
+      const registry = new ExecutionBackendRegistry()
+        .register({
+          key: 'host',
+          label: () => 'unused',
+          inspect: () => ({
+            key: 'host',
+            label: 'Gateway container shell',
+            available: true,
+            unsafe: false,
+            capabilities: executionBackendCapabilities('host'),
+            reason: 'Process execution is confined to the running Mainspring gateway container.',
+          }),
+          capabilities: () => executionBackendCapabilities('host'),
+          spawnSpec: (input) => [input.command, [], { cwd: input.cwd, shell: true, env: input.env }],
+        })
+      const inventory = registry.inspect('linux')
+      expect(inventory.backends[0]).toMatchObject({
+        label: 'Gateway container shell',
+        unsafe: false,
+        capabilities: {
+          isolationKind: 'docker-container',
+          isolationStrength: 'container-boundary',
+          securityBoundary: 'container-process',
+          unsafeFallback: false,
+        },
+      })
+    } finally {
+      if (original === undefined) delete process.env.MAINSPRING_CONTAINERIZED
+      else process.env.MAINSPRING_CONTAINERIZED = original
+    }
   })
 })

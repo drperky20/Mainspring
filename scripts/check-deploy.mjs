@@ -159,27 +159,68 @@ async function main() {
       throw new Error('Deployment check did not exercise scp command generation.')
     }
 
-    const unsupportedTarget = gateway.deployments.createTarget({
+    const localTarget = gateway.deployments.createTarget({
       workspaceId: workspace.workspaceId,
-      label: 'Northline local placeholder',
+      label: 'Northline local deployment',
       kind: 'local',
-      metadata: { note: 'local deployment is not implemented' },
+      metadata: { root: path.join(root, 'local-deployment'), allowDestroy: true },
     })
+    const localPlan = gateway.deployments.plan({
+      targetId: localTarget.targetId,
+      operation: 'deploy',
+    })
+    if (localPlan.targetKind !== 'local' || localPlan.steps.length < 2) {
+      throw new Error('Deployment check did not produce a local deployment plan.')
+    }
+    const localResult = gateway.deployments.execute({
+      targetId: localTarget.targetId,
+      operation: 'deploy',
+      confirm: 'deploy',
+    })
+    if (!localResult.execution.ok || localResult.deploymentRun.status !== 'succeeded') {
+      throw new Error('Local deployment driver did not succeed with the injected runner.')
+    }
+    if (!fs.existsSync(path.join(root, 'local-deployment', 'current-release.json'))) {
+      throw new Error('Local deployment driver did not write the current release marker.')
+    }
+
+    const containerTarget = gateway.deployments.createTarget({
+      workspaceId: workspace.workspaceId,
+      label: 'Northline container deployment',
+      kind: 'container',
+      metadata: {
+        image: 'mainspring/northline',
+        containerName: 'mainspring-northline-check',
+        runArgs: ['--network', 'none'],
+      },
+    })
+    const containerResult = gateway.deployments.execute({
+      targetId: containerTarget.targetId,
+      operation: 'deploy',
+      confirm: 'deploy',
+    })
+    if (!containerResult.execution.ok || containerResult.deploymentRun.status !== 'succeeded') {
+      throw new Error('Container deployment driver did not succeed with the injected runner.')
+    }
+    if (!commandLog.some((entry) => entry.command === 'docker' && entry.args.includes('build'))) {
+      throw new Error('Deployment check did not exercise docker build command generation.')
+    }
+    if (!commandLog.some((entry) => entry.command === 'docker' && entry.args.includes('run'))) {
+      throw new Error('Deployment check did not exercise docker run command generation.')
+    }
+
     let unsupportedFailedClosed = false
     try {
-      gateway.deployments.plan({
-        targetId: unsupportedTarget.targetId,
-        operation: 'deploy',
+      gateway.deployments.createTarget({
+        workspaceId: workspace.workspaceId,
+        label: 'Northline unregistered deployment',
+        kind: 'fly',
       })
     } catch (error) {
-      unsupportedFailedClosed = String(error).includes('not implemented for target kind: local')
+      unsupportedFailedClosed = String(error).includes('Unknown deployment target kind: fly')
     }
     if (!unsupportedFailedClosed) {
-      throw new Error('Deployment check did not prove unsupported target kinds fail closed.')
-    }
-    const unsupportedRuns = appState.deploymentRuns.list({ targetId: unsupportedTarget.targetId })
-    if (unsupportedRuns.length !== 0) {
-      throw new Error('Unsupported deployment target created deployment run records.')
+      throw new Error('Deployment check did not prove unregistered target kinds fail closed.')
     }
 
     console.log('MAINSPRING_DEPLOY_CHECK_OK')

@@ -2,6 +2,8 @@
 
 Use the SDK when embedding Mainspring in a local app, test harness, or product wrapper.
 
+Run start modes are shared protocol values: `chat`, `task`, `automation-test`, and `agent-test`. Runtime profile IDs are safe strings. The bundled profiles are `core`, `core-browser`, and `core-browser-memory`; gateway-configured custom profiles must be registered before use, while unknown unregistered profile IDs fail at the gateway boundary instead of silently falling back.
+
 RunLog Fabric is the canonical runtime path for new code. The older `createMainspring`
 factory remains available for mailbox-compatible SDK/gateway workflows while migration
 continues.

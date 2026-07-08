@@ -195,6 +195,57 @@ describe('LocalMainspringGateway', () => {
     }
   })
 
+  it('rejects gateway-created workspace roots outside the gateway workspace base', () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-client-root-boundary-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })
+    const outsideSymlinkRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'mainspring-gateway-client-symlink-outside-'),
+    )
+    tempRoots.push(outsideSymlinkRoot)
+    fs.symlinkSync(
+      outsideSymlinkRoot,
+      path.join(root, 'linked-outside'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+
+    try {
+      expect(() =>
+        gateway.clients.create({
+          name: 'Outside Client',
+          workspaceRoot: path.resolve(root, '..', 'outside-client-workspace'),
+        }),
+      ).toThrow('must stay inside the gateway workspace base')
+
+      expect(() =>
+        gateway.workspaces.create({
+          clientId: appState.clients.create({ name: 'Acme' }).clientId,
+          name: 'Traversal Workspace',
+          workspaceRoot: '..\\outside-workspace',
+        }),
+      ).toThrow('must stay inside the gateway workspace base')
+
+      expect(() =>
+        gateway.clients.create({
+          name: 'Symlink Client',
+          workspaceRoot: path.join(root, 'linked-outside', 'workspace'),
+        }),
+      ).toThrow('must stay inside the gateway workspace base')
+    } finally {
+      appState.close()
+    }
+  })
+
   it('updates gateway-backed agent drafts and records additive audit rows', () => {
     const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
       'mainspring-gateway-agent-update-',
@@ -3538,6 +3589,39 @@ describe('LocalMainspringGateway', () => {
           targetId: 'coding-agent',
         }),
       ])
+    } finally {
+      appState.close()
+    }
+  })
+
+  it('rejects marketplace install roots outside the gateway workspace base', () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-marketplace-root-boundary-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const outsideRoot = path.resolve(root, '..', 'outside-marketplace-install')
+    const gateway = createLocalMainspringGateway({
+      runtime: mainspring,
+      appState,
+      marketplace: { repoRoot: process.cwd() },
+    })
+
+    try {
+      expect(() =>
+        gateway.marketplace.installTemplate({
+          templateId: 'coding-agent',
+          workspaceRoot: outsideRoot,
+        }),
+      ).toThrow('must stay inside the gateway workspace base')
+      expect(fs.existsSync(path.join(outsideRoot, 'agent.config.json'))).toBe(false)
     } finally {
       appState.close()
     }

@@ -993,7 +993,7 @@ describe('gatewaySnapshotToConsoleState', () => {
     }
   })
 
-  it('marks non-VPS deployment targets as metadata-only in console DTOs', () => {
+  it('reports built-in local deployment targets as executable console DTOs', () => {
     const consoleState = gatewaySnapshotToConsoleState({
       ...sourceSnapshot,
       appState: {
@@ -1020,9 +1020,8 @@ describe('gatewaySnapshotToConsoleState', () => {
         label: 'Local metadata target',
         kind: 'local',
         status: 'active',
-        executionSupported: false,
-        executionMode: 'metadata-only',
-        executionUnavailableReason: 'local deployment targets do not have a real executor yet.',
+        executionSupported: true,
+        executionMode: 'local-filesystem',
         createdAt: '2026-06-29T14:00:00.000Z',
         updatedAt: '2026-06-29T14:00:00.000Z',
       },

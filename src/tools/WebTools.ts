@@ -1,9 +1,19 @@
 import { sanitizeRuntimeResponse } from '#protocol'
-import { assertPublicNetworkTarget, parsePublicHttpUrl } from '../containment/UrlPolicy.js'
+import { lookup as dnsLookup } from 'node:dns'
+import type { LookupOneOptions } from 'node:dns'
+import http from 'node:http'
+import https from 'node:https'
+import type { LookupFunction } from 'node:net'
+import {
+  assertPublicNetworkTarget,
+  isPrivateIp,
+  parsePublicHttpUrl,
+} from '../containment/UrlPolicy.js'
 import { builtinManifest, inputRecord, positiveInt, type RuntimeTool } from './ToolRegistry.js'
 
 export interface WebFetchToolOptions {
   fetchImpl?: typeof fetch
+  lookup?: LookupFunction
   timeoutMs?: number
   maxBytes?: number
 }
@@ -182,6 +192,101 @@ async function fetchWithTimeout(
   }
 }
 
+function publicNetworkLookup(customLookup?: LookupFunction): LookupFunction {
+  return (hostname, options, callback) => {
+    dnsLookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
+      if (error) {
+        callback(error, '', 4)
+        return
+      }
+      const blocked = addresses.find((address) => isPrivateIp(address.address))
+      if (blocked) {
+        callback(new Error(`Resolved private network target ${hostname}.`), '', blocked.family)
+        return
+      }
+      const requestedFamily =
+        typeof options === 'object' && typeof (options as LookupOneOptions).family === 'number'
+          ? (options as LookupOneOptions).family
+          : 0
+      const selected =
+        addresses.find((address) => requestedFamily === 0 || address.family === requestedFamily)
+        ?? addresses[0]
+      if (!selected) {
+        callback(new Error(`Unable to resolve network target ${hostname}.`), '', 4)
+        return
+      }
+      if (!customLookup) {
+        callback(null, selected.address, selected.family)
+        return
+      }
+      customLookup(hostname, options, (customError, customAddress, customFamily) => {
+        if (customError) {
+          callback(customError, customAddress, customFamily)
+          return
+        }
+        const customAddresses = Array.isArray(customAddress)
+          ? customAddress.map((entry) => entry.address)
+          : [String(customAddress)]
+        if (customAddresses.some((address) => isPrivateIp(address))) {
+          callback(new Error(`Resolved private network target ${hostname}.`), '', 4)
+          return
+        }
+        callback(null, customAddress, customFamily)
+      })
+    })
+  }
+}
+
+function headersFromNode(headers: http.IncomingHttpHeaders): Headers {
+  const result = new Headers()
+  for (const [key, value] of Object.entries(headers)) {
+    if (value === undefined) continue
+    if (Array.isArray(value)) {
+      for (const entry of value) result.append(key, entry)
+      continue
+    }
+    result.set(key, String(value))
+  }
+  return result
+}
+
+function fetchPublicHttpUrl(
+  url: URL,
+  timeoutMs: number,
+  init: RequestInit = {},
+  lookup?: LookupFunction,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const client = url.protocol === 'https:' ? https : http
+    const request = client.request(
+      url,
+      {
+        method: init.method ?? 'GET',
+        headers: init.headers as http.OutgoingHttpHeaders | undefined,
+        lookup: publicNetworkLookup(lookup),
+      },
+      (response) => {
+        const chunks: Buffer[] = []
+        response.on('data', (chunk) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+        })
+        response.on('end', () => {
+          resolve(new Response(Buffer.concat(chunks), {
+            status: response.statusCode ?? 0,
+            statusText: response.statusMessage,
+            headers: headersFromNode(response.headers),
+          }))
+        })
+      },
+    )
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error(`Web request timed out after ${timeoutMs}ms.`))
+    })
+    request.on('error', reject)
+    request.end()
+  })
+}
+
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308
 }
@@ -191,15 +296,18 @@ async function fetchPublicUrl(
   url: URL,
   timeoutMs: number,
   init: RequestInit = {},
+  lookup?: LookupFunction,
 ): Promise<{ response: Response; finalUrl: URL; redirectCount: number }> {
   let currentUrl = url
 
   for (let redirectCount = 0; redirectCount <= DEFAULT_MAX_REDIRECTS; redirectCount += 1) {
     await assertPublicNetworkTarget(currentUrl)
-    const response = await fetchWithTimeout(fetchImpl, currentUrl.toString(), timeoutMs, {
-      ...init,
-      redirect: 'manual',
-    })
+    const response = fetchImpl === fetch
+      ? await fetchPublicHttpUrl(currentUrl, timeoutMs, init, lookup)
+      : await fetchWithTimeout(fetchImpl, currentUrl.toString(), timeoutMs, {
+          ...init,
+          redirect: 'manual',
+        })
 
     if (!isRedirectStatus(response.status)) {
       return {
@@ -256,6 +364,7 @@ export function createWebSearchTool(options: WebFetchToolOptions = {}): RuntimeT
           accept: 'text/html,*/*;q=0.2',
         },
         },
+        options.lookup,
       )
       const body = await readCappedResponseText(response, maxBytes)
       return sanitizeRuntimeResponse({
@@ -294,7 +403,7 @@ export function createWebFetchTool(options: WebFetchToolOptions = {}): RuntimeTo
         headers: {
           accept: 'text/html,text/plain,application/xhtml+xml;q=0.9,*/*;q=0.2',
         },
-      })
+      }, options.lookup)
       const contentType = responseContentType(response)
       const body = await readCappedResponseText(response, maxBytes)
       const readable = contentType.includes('html')

@@ -6,6 +6,7 @@ import {
 } from '#protocol'
 import { OpenAIProvider } from '../providers/OpenAIProvider.js'
 import { OpenRouterProvider } from '../providers/OpenRouterProvider.js'
+import { CodexProvider } from '../providers/CodexProvider.js'
 import { createRuntimeProviderFromEnv } from './RuntimeProviderConfig.js'
 
 describe('RuntimeProviderConfig', () => {
@@ -66,11 +67,73 @@ describe('RuntimeProviderConfig', () => {
     })
   })
 
+  it('accepts Codex CLI config backed by Codex home auth', () => {
+    const selection = createRuntimeProviderFromEnv({
+      MAINSPRING_PROVIDER: 'codex',
+      CODEX_HOME: '/codex-home',
+      MAINSPRING_CODEX_COMMAND: 'codex',
+    })
+
+    expect(selection.providerId).toBe('codex')
+    expect(selection.provider).toBeInstanceOf(CodexProvider)
+    expect(selection.modelId).toBe('codex-auto')
+    expect(selection.credentialRef).toBe('env:CODEX_HOME')
+    expect((selection.provider as CodexProvider).options).toMatchObject({
+      command: 'codex',
+    })
+  })
+
   it('still rejects unsupported providers', () => {
     expect(() =>
       createRuntimeProviderFromEnv({
         MAINSPRING_PROVIDER: 'anthropic',
       }),
-    ).toThrow('Unsupported Mainspring provider: anthropic')
+    ).toThrow('Unknown runtime provider: anthropic')
+  })
+
+  it('parses custom provider env config when a provider is explicitly registered', () => {
+    const seenInputs: unknown[] = []
+    const selection = createRuntimeProviderFromEnv(
+      {
+        MAINSPRING_PROVIDER: 'acme-ai',
+        MAINSPRING_MODEL: 'acme/model',
+        MAINSPRING_PROVIDER_BASE_URL: 'https://acme.example/v1',
+      },
+      {
+        providers: [
+          {
+            providerId: 'acme-ai',
+            credentialRef: 'env:ACME_AI_API_KEY',
+            client: {
+              query(input) {
+                seenInputs.push(input)
+                return {
+                  push() {},
+                  end() {},
+                  abort() {},
+                  events: (async function* () {
+                    yield { type: 'result' as const, text: 'ok' }
+                  })(),
+                }
+              },
+            },
+          },
+        ],
+      },
+    )
+
+    selection.provider.query({ prompt: 'hello', cwd: '/workspace' })
+
+    expect(selection.providerId).toBe('acme-ai')
+    expect(selection.modelId).toBe('acme/model')
+    expect(selection.credentialRef).toBe('env:ACME_AI_API_KEY')
+    expect(seenInputs).toEqual([
+      expect.objectContaining({
+        model: 'acme/model',
+        providerId: 'acme-ai',
+        credentialRef: { kind: 'env', key: 'ACME_AI_API_KEY' },
+        baseUrl: 'https://acme.example/v1',
+      }),
+    ])
   })
 })

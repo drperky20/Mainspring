@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import {
   ApprovalPolicySchema,
-  MainspringRuntimeProfileSchema,
+  MainspringRuntimeProfileIdSchema,
   DEFAULT_MAINSPRING_RUNTIME_PROFILE,
   RuntimePolicySchema,
 } from '#protocol'
@@ -36,7 +36,7 @@ export const TurnDispatchSchema = z.object({
   systemPrompt: z.string().min(1).optional(),
   approvalPolicy: ApprovalPolicySchema,
   policy: RuntimePolicySchema,
-  runtimeProfile: MainspringRuntimeProfileSchema.default(DEFAULT_MAINSPRING_RUNTIME_PROFILE),
+  runtimeProfile: MainspringRuntimeProfileIdSchema.default(DEFAULT_MAINSPRING_RUNTIME_PROFILE),
   providerChain: z.array(z.string().min(1)).default([]),
   // Highest event seq already persisted by the control plane at dispatch time.
   // Mainspring numbers runtime events from seqBase+1 and is the sole event

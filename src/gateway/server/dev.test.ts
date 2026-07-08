@@ -15,14 +15,14 @@ describe('local gateway dev host', () => {
     expect(isAllowedLocalGatewayDevHost('127.0.0.1')).toBe(true)
     expect(isAllowedLocalGatewayDevHost('localhost')).toBe(true)
     expect(isAllowedLocalGatewayDevHost('::1')).toBe(true)
-    expect(isAllowedLocalGatewayDevHost('0.0.0.0')).toBe(false)
+    expect(isAllowedLocalGatewayDevHost('0.0.0.0')).toBe(true)
     expect(isAllowedLocalGatewayDevHost('192.168.1.20')).toBe(false)
   })
 
   it('fails closed to the default host for invalid overrides', () => {
     expect(resolveLocalGatewayDevHost(undefined)).toBe(defaultLocalGatewayDevHost)
     expect(resolveLocalGatewayDevHost('')).toBe(defaultLocalGatewayDevHost)
-    expect(resolveLocalGatewayDevHost('0.0.0.0')).toBe(defaultLocalGatewayDevHost)
+    expect(resolveLocalGatewayDevHost('0.0.0.0')).toBe('0.0.0.0')
     expect(resolveLocalGatewayDevHost('localhost')).toBe('localhost')
   })
 })

@@ -1,4 +1,8 @@
 import { z } from 'zod'
+import {
+  MainspringRuntimeProfileIdSchema,
+  RunIntentModeSchema,
+} from '#protocol'
 
 const OptionalTrimmedString = z.string().optional().transform((value) => {
   const trimmed = value?.trim()
@@ -8,7 +12,7 @@ const OptionalTrimmedString = z.string().optional().transform((value) => {
 export const StartRunRequestSchema = z.object({
   sessionId: z.string().min(1),
   input: z.string().min(1),
-  mode: z.literal('chat').default('chat'),
+  mode: RunIntentModeSchema.default('chat'),
   allowedTools: z.array(z.string().min(1)).default([]),
   allowBudgetWarning: z.boolean().optional(),
   computerId: z.string().min(1).optional(),
@@ -17,7 +21,7 @@ export const StartRunRequestSchema = z.object({
   providerProfileId: z.string().min(1).optional(),
   providerId: z.string().min(1).optional(),
   modelId: z.string().min(1).optional(),
-  runtimeProfile: z.enum(['core', 'core-browser', 'core-browser-memory']).optional(),
+  runtimeProfile: MainspringRuntimeProfileIdSchema.optional(),
 })
 
 export const ResolveApprovalRequestSchema = z.object({
@@ -147,7 +151,7 @@ export const CreateCronScheduleRequestSchema = z.object({
   cronExpr: z.string().trim().min(1),
   timezone: z.enum(['local', 'utc']).optional(),
   allowedTools: z.array(z.string().trim().min(1)).default([]),
-  runtimeProfile: z.enum(['core', 'core-browser', 'core-browser-memory']).optional(),
+  runtimeProfile: MainspringRuntimeProfileIdSchema.optional(),
   enabled: z.boolean().optional(),
 })
 
@@ -163,31 +167,26 @@ export const CreateBudgetRequestSchema = z.object({
   { message: 'Budget warn threshold must be less than or equal to the max estimated cost.' },
 )
 
-const DeploymentTargetConfigSchema = z.object({
-  sshHost: z.string().trim().min(1),
-  sshUser: z.string().trim().min(1),
-  sshPort: z.number().int().min(1).max(65535).optional(),
-  remoteRoot: z.string().trim().min(1),
-  serviceName: z.string().trim().min(1),
-  envFilePath: OptionalTrimmedString,
-  domain: OptionalTrimmedString,
-  caddyConfigPath: OptionalTrimmedString,
-})
+const DeploymentTargetKindSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_.:-]+$/)
+
+const DeploymentTargetConfigSchema = z.record(z.string(), z.unknown())
 
 export const CreateDeploymentTargetRequestSchema = z.object({
   workspaceId: OptionalTrimmedString,
   label: z.string().trim().min(1),
-  kind: z.enum(['local', 'vps', 'container']),
+  kind: DeploymentTargetKindSchema,
   config: DeploymentTargetConfigSchema.optional(),
-}).refine(
-  (value) => value.kind !== 'vps' || value.config !== undefined,
-  { message: 'VPS deployment targets require config.' },
-)
+})
 
 export const UpdateDeploymentTargetRequestSchema = z.object({
   workspaceId: OptionalTrimmedString,
   label: OptionalTrimmedString,
-  kind: z.enum(['local', 'vps', 'container']).optional(),
+  kind: DeploymentTargetKindSchema.optional(),
   status: z.enum(['active', 'archived']).optional(),
   config: DeploymentTargetConfigSchema.optional(),
 }).refine(
@@ -228,7 +227,7 @@ export const UpdateCronScheduleRequestSchema = z
     cronExpr: OptionalTrimmedString,
     timezone: z.enum(['local', 'utc']).optional(),
     allowedTools: z.array(z.string().trim().min(1)).optional(),
-    runtimeProfile: z.enum(['core', 'core-browser', 'core-browser-memory']).optional(),
+    runtimeProfile: MainspringRuntimeProfileIdSchema.optional(),
     enabled: z.boolean().optional(),
   })
   .refine(

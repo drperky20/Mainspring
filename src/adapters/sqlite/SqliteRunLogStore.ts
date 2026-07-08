@@ -56,6 +56,7 @@ function mapRun(row: Record<string, unknown>): RunRecord {
   if (row.provider_id) run.providerId = String(row.provider_id)
   if (row.model_id) run.modelId = String(row.model_id)
   if (row.credential_ref) run.credentialRef = String(row.credential_ref)
+  if (row.allowed_tools_json) run.allowedTools = parseJson<string[]>(String(row.allowed_tools_json), [])
   if (row.worker_id) run.workerId = String(row.worker_id)
   if (row.lease_until) run.leaseUntil = String(row.lease_until)
   return run
@@ -277,6 +278,7 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
         ON run_cron_jobs(enabled, next_run_at);
     `)
     this.ensureRunColumn('credential_ref', 'TEXT')
+    this.ensureRunColumn('allowed_tools_json', 'TEXT')
   }
 
   private ensureRunColumn(name: string, definition: string): void {
@@ -334,18 +336,19 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       providerId: intent.providerId ?? agent.providerId,
       modelId: intent.modelId ?? agent.modelId,
       credentialRef: intent.credentialRef,
+      allowedTools: intent.allowedTools ? [...intent.allowedTools] : undefined,
       metadata: intent.metadata,
     }
     this.handle()
       .prepare(`
         INSERT INTO runs (
           run_id, agent_id, session_id, parent_run_id, status, input,
-          workspace_id, workspace_root, provider_id, model_id, credential_ref, metadata_json,
+          workspace_id, workspace_root, provider_id, model_id, credential_ref, allowed_tools_json, metadata_json,
           created_at, updated_at
         )
         VALUES (
           @runId, @agentId, @sessionId, @parentRunId, @status, @input,
-          @workspaceId, @workspaceRoot, @providerId, @modelId, @credentialRef, @metadataJson,
+          @workspaceId, @workspaceRoot, @providerId, @modelId, @credentialRef, @allowedToolsJson, @metadataJson,
           @createdAt, @updatedAt
         )
       `)
@@ -361,6 +364,7 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
         providerId: run.providerId ?? null,
         modelId: run.modelId ?? null,
         credentialRef: run.credentialRef ?? null,
+        allowedToolsJson: optionalJson(run.allowedTools),
         metadataJson: optionalJson(run.metadata),
         createdAt,
         updatedAt: createdAt,
@@ -690,6 +694,9 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
             input: job.input,
             sessionId: job.sessionId,
             workspaceId: job.workspaceId,
+            allowedTools: Array.isArray(decision.metadata?.allowedTools)
+              ? [...decision.metadata.allowedTools]
+              : [],
             metadata: {
               ...job.metadata,
               cronId: job.cronId,

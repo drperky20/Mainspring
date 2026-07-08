@@ -39,6 +39,13 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `gatewaySnapshotToConsoleState()` projects RunLog runs, pending approvals, tool calls, checkpoint summaries, policy decision summaries, and error summaries without exposing raw private event fields.
   - The React console data-source summary and dashboard projection count RunLog active runs and pending approvals beside legacy compatibility runs.
   - The selected-client console detail panel now shows RunLog run summaries with checkpoint, policy decision, error, tool-call, and artifact counts from sanitized DTO fields.
+- Live SaaS-style console:
+  - `apps/console/src/ConnectedConsoleApp.tsx` is the default app surface and connects to the local gateway over the public browser-safe gateway client.
+  - The first-run UI is a setup wizard for account basics and provider profile setup.
+  - The first-level UI is organized around Clients and Settings only.
+  - Each client gets a default workspace and first agent; chat, agent editing, and automation testing are scoped inside the selected client.
+  - The console exposes OpenRouter and OpenAI provider profiles as live backend-backed service connections; Codex OAuth, direct Anthropic, and other providers are visible as connector or catalog paths until backend adapters exist.
+  - Dedicated per-client dashboard links, per-client accounts, and tenant authorization are not implemented.
 - Package subpaths now expose `mainspring/core`, `mainspring/adapters`, `mainspring/adapters/sqlite`, `mainspring/adapters/local-blob`, `mainspring/capabilities`, `mainspring/hosts/runlog`, and `mainspring/compat`.
 - `docs/migration-runlog.md` records the legacy mailbox/`RuntimeKernel` retirement map and `pnpm runlog:migration:check` keeps that map tied to existing source files, package exports, and release checks.
 - Focused tests prove provider-only runs, tool calls, approval pauses, approval/denial decisions, SQLite-backed approval resume, SQLite restart recovery, cron-created runs, lazy workspace materialization, and 1000 idle agents stored as data.
@@ -93,6 +100,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 
 - Full replacement of `RuntimeKernel` and per-session mailbox execution with RunLog execution.
 - Broader provider-account auth beyond env/local managed refs, such as OAuth provider auth or hosted KMS.
+- AI SDK streaming transport endpoint for the console chat surface; the UI package dependency exists, but gateway chat dispatch still goes through `/runs/start`.
 - Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Memory retrieval adapter connected to RunLog context assembly.
@@ -118,7 +126,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 
 - Host shell execution is not a sandbox.
 - Docker and WSL execution are not equivalent to VM isolation.
-- Browser/localStorage provider auth is prototype-only.
+- Browser/localStorage provider auth is prototype-only in legacy read-model helpers and must not be reintroduced as the live console auth path.
 - Provider keys must not be stored in renderer localStorage.
 - Process execution must not be marketed as secure containment.
 - Do not claim HyperCells, VM isolation, operator roles, budget caps, billing, marketplace trust, or secure desktop secrets exist unless implementation proves them.

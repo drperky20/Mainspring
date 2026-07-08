@@ -5,6 +5,7 @@ import {
 import type {
   AgentProvider,
   AgentQuery,
+  ProviderAdapterCapabilities,
   QueryInput,
   RuntimeCredentialRef,
   RuntimeProviderClient,
@@ -16,6 +17,7 @@ export interface ProviderShellConfig {
   credentialRef: string
   options?: Record<string, unknown>
   client?: RuntimeProviderClient
+  capabilities?: ProviderAdapterCapabilities
 }
 
 export class ProviderShell implements AgentProvider {
@@ -23,12 +25,14 @@ export class ProviderShell implements AgentProvider {
   readonly modelId?: string
   readonly credentialRef: RuntimeCredentialRef
   readonly options: Record<string, unknown>
+  readonly capabilities?: ProviderAdapterCapabilities
 
   constructor(config: ProviderShellConfig) {
     this.providerId = config.providerId
     this.modelId = config.modelId
     this.credentialRef = RuntimeSecretRefSchema.parse(config.credentialRef)
     this.options = assertSafeProviderOptions(config.options ?? {})
+    this.capabilities = config.capabilities
     this.client = config.client ?? missingProviderClient(config.providerId)
   }
 

@@ -2,6 +2,39 @@ import { describe, expect, it, vi } from 'vitest'
 import { createLocalGatewayClient } from './localGatewayClient'
 
 describe('createLocalGatewayClient', () => {
+  it('fetches OpenRouter models through the gateway catalog route', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe(
+        'http://127.0.0.1:8787/providers/openrouter/models?q=sonnet&limit=10&supportedParameter=tools',
+      )
+      expect(init?.headers).toEqual({})
+      return new Response(
+        JSON.stringify({
+          providerId: 'openrouter',
+          source: 'openrouter-models-api',
+          models: [
+            {
+              id: 'anthropic/claude-sonnet-4',
+              name: 'Claude Sonnet 4',
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+              supportedParameters: ['tools'],
+            },
+          ],
+        }),
+        { status: 200 },
+      )
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+
+    await expect(
+      client.openRouterModels({ q: 'sonnet', limit: 10, supportedParameter: 'tools' }),
+    ).resolves.toMatchObject({
+      providerId: 'openrouter',
+      models: [{ id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4' }],
+    })
+  })
+
   it('fetches snapshot, run events, run start, and approval resolution through the expected routes', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

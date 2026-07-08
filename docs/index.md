@@ -14,6 +14,7 @@
 
 ## Features
 
+- [Agent Harness](features/agent-harness.md)
 - [Local Gateway](features/local-gateway.md)
 - [Console And Desktop](features/console-and-desktop.md)
 - [Tools And Execution](features/tools-and-execution.md)

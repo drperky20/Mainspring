@@ -2,39 +2,46 @@
 
 # Mainspring
 
-Mainspring is a local-first TypeScript RunLog Fabric runtime for controlled personal-agent work. It turns model output into durable, policy-bound runs with append-only events, checkpoints, approvals, traces, usage records, and tool execution.
+Mainspring is an open-source, local-first TypeScript agent harness for controlled, replayable, policy-bound agent work. It gives an application the runtime pieces that should not live inside a prompt: durable runs, append-only events, tool policy, approvals, checkpoints, usage records, provider routing, workspace access, artifacts, and operator projections.
+
+The model reasons. Mainspring owns the parts with consequences.
+
+## How The Agent Harness Works
 
 ```text
 SDK / HTTP / channel adapter
 -> RunLog intake
 -> SQLite WAL RunLog
--> RunLogScheduler
+-> RunLogScheduler lease
 -> RunLogExecutor
--> AgentProvider.query
+-> ProviderRouter / AgentProvider.query
 -> ToolRegistry
 -> RuntimePolicyGuard / ApprovalReceipt
--> tools / workspace / artifacts
+-> tools / workspace / browser / memory / artifacts
 -> RunLog events + checkpoints
 -> SDK / gateway / console projection
 ```
 
-The model reasons. Mainspring owns the parts with consequences.
+An app starts a run through the SDK, gateway, or a channel adapter. Mainspring records the intent, claims the run through a scheduler lease, asks the configured provider for the next step, executes allowed tools through a registry, pauses for approval when policy requires it, and writes every important boundary back to the RunLog. Hosts then project that event log into SDK state, gateway responses, console views, audits, and recovery checkpoints.
 
-The older per-session SQLite legacy mailbox and `RuntimeKernel` path still exists as compatibility and migration surface for current SDK/gateway behavior. New runtime work should target RunLog Fabric first.
+The harness is provider-neutral and side-effect aware. Provider credentials are represented as opaque refs or managed secrets; raw keys should not enter prompts, browser DTOs, event logs, or package artifacts. Built-in tools are useful local tools, not a sandbox. Host shell execution, WSL, Docker, and browser automation remain explicit operator-controlled execution routes with documented limits.
+
+The older legacy mailbox and `RuntimeKernel` path still exists as compatibility and migration surface for current SDK/gateway behavior. New runtime work should target RunLog Fabric first.
 
 ## What Ships Today
 
-- Embeddable SDK for local sessions, runs, approvals, events, artifacts, and usage.
-- Canonical RunLog Fabric core with SQLite WAL events, scheduler leases, checkpoints, provider routing, tool-call handling, policy checks, and host projections.
+- Embeddable SDK for local sessions, runs, approvals, events, artifacts, usage, and host projections.
+- Canonical RunLog Fabric core with SQLite WAL events, scheduler leases, checkpoints, provider routing, tool-call handling, policy checks, and recovery state.
+- Provider registry for Echo, OpenAI-compatible, OpenRouter-compatible, and Codex CLI-backed provider routes.
 - Legacy per-session SQLite mailbox and `RuntimeKernel` compatibility path while SDK/gateway migration continues.
 - Built-in file, shell, terminal, browser-adapter, web, memory, skill, and diagnostics tools.
-- Local gateway development host with RunLog-backed default run creation, app-state SQLite for clients, workspaces, agents, provider profiles, budgets, usage, cron, marketplace templates, deployments, and audit rows.
-- Vite console with prototype local state plus explicit `local-gateway-dev` transport for live local gateway workflows.
+- Local gateway development host with RunLog-backed run creation, app-state SQLite for clients, workspaces, agents, provider profiles, budgets, usage, cron, marketplace templates, deployments, and audit rows.
+- Vite console for the live local gateway: setup wizard, client/workspace creation, agent editing, connected provider profiles, client-scoped chat testing, and visual automation test runs.
 - Experimental Electron shell for the console, with verified Windows packaging.
 - Runnable example agents and a trusted local template catalog.
 - Docker runtime image and local release verification scripts.
 
-Mainspring is still local-first infrastructure. It is not a hosted SaaS control plane, not a secure VM pool, and not a payment marketplace.
+Mainspring is local-first open-source infrastructure with a SaaS-shaped local console. It is not a hosted multi-tenant control plane, not a secure VM pool, not a payment marketplace, and not a replacement for a real process/container/VM security boundary.
 
 ## Quick Start
 
@@ -66,12 +73,30 @@ pnpm console:dev
 
 `pnpm gateway:dev` stores local RunLog state under `.mainspring/runlog` and falls back to `EchoProvider` when no OpenRouter/OpenAI env credential is configured.
 
-The gateway and console are separate local processes; the console connects to the gateway when opened with the `mainspringConsoleSource=local-gateway-dev` query.
+The gateway and console are separate local processes. The console defaults to `http://127.0.0.1:8787` and can be pointed at another loopback gateway from Settings.
 
 Open the console with:
 
 ```text
 http://127.0.0.1:5173/?mainspringConsoleSource=local-gateway-dev
+```
+
+## Provider Credentials
+
+Use environment variables or managed secret storage. Do not commit real provider keys and do not store keys in browser localStorage.
+
+```bash
+OPENROUTER_API_KEY=...
+MAINSPRING_PROVIDER=openrouter
+MAINSPRING_MODEL=openrouter/free
+MAINSPRING_CREDENTIAL_REF=env:OPENROUTER_API_KEY
+```
+
+```bash
+OPENAI_API_KEY=...
+MAINSPRING_PROVIDER=openai
+MAINSPRING_MODEL=gpt-4.1-mini
+MAINSPRING_CREDENTIAL_REF=env:OPENAI_API_KEY
 ```
 
 ## Minimal SDK Example
@@ -115,7 +140,7 @@ mainspring.close()
 | `src/compat` | Temporary compatibility exports for migration. |
 | `src/runner` | Legacy runtime kernel, supervisor, provider config, runtime entrypoint. |
 | `src/mailbox` | Legacy per-session SQLite mailbox, event journal, attachments. |
-| `src/providers` | Provider abstraction and OpenAI/OpenRouter-compatible clients. |
+| `src/providers` | Provider registry, provider abstractions, and OpenAI/OpenRouter-compatible clients. |
 | `src/tools` | Tool registry and built-in tools. |
 | `src/policy` | Policy guard and approval receipts. |
 | `src/sdk` | Local embedding API for sessions, runs, approvals, and monitoring. |
@@ -123,18 +148,17 @@ mainspring.close()
 | `apps/console` | Operator console. |
 | `apps/desktop` | Experimental Electron shell. |
 | `examples` | Runnable local agents and template catalog seeds. |
-| `docker` | Non-root runtime container and local compose file. |
+| `docker` | Non-root runtime, gateway, console, and local compose files. |
 | `docs` | Architecture, feature, operations, and security documentation. |
 
 ## Documentation
 
 Start with [docs/index.md](docs/index.md).
 
-Common paths:
-
 - [Getting Started](docs/getting-started.md)
 - [Architecture](docs/architecture.md)
 - [Runtime Loop](docs/runtime-loop.md)
+- [Agent Harness](docs/features/agent-harness.md)
 - [SDK](docs/sdk.md)
 - [Local Gateway](docs/features/local-gateway.md)
 - [Console And Desktop](docs/features/console-and-desktop.md)
@@ -163,12 +187,14 @@ pnpm release:check
 Focused checks:
 
 ```bash
+pnpm secrets:check
+pnpm security:mainspring
+pnpm security:sensitive-patterns
+pnpm security:truth
 pnpm gateway:systems:check
 pnpm examples:check
-pnpm examples:smoke
 pnpm package:check
 pnpm desktop:systems:check
-pnpm security:sensitive-patterns
 ```
 
 ## Security Truth

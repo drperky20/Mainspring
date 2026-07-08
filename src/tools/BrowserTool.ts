@@ -1,4 +1,4 @@
-import { parsePublicHttpUrl } from '../containment/UrlPolicy.js'
+import { assertPublicNetworkTarget, parsePublicHttpUrl } from '../containment/UrlPolicy.js'
 import { builtinManifest, inputRecord, type RuntimeTool } from './ToolRegistry.js'
 
 export interface BrowserRuntimeAdapter {
@@ -17,6 +17,7 @@ export interface BrowserRuntimeAdapter {
 
 export interface BrowserToolOptions {
   adapter?: BrowserRuntimeAdapter
+  networkTargetValidator?: (url: URL, label: string) => Promise<void> | void
 }
 
 function requireBrowserAdapter(adapter: BrowserRuntimeAdapter | undefined): BrowserRuntimeAdapter {
@@ -27,11 +28,13 @@ function requireBrowserAdapter(adapter: BrowserRuntimeAdapter | undefined): Brow
 async function assertBrowserCurrentUrlPublic(
   adapter: BrowserRuntimeAdapter,
   label: string,
+  networkTargetValidator: (url: URL, label: string) => Promise<void> | void,
 ): Promise<void> {
   if (typeof adapter.currentUrl !== 'function') return
   const currentUrl = await adapter.currentUrl()
   if (!currentUrl) return
-  parsePublicHttpUrl(currentUrl, label)
+  const url = parsePublicHttpUrl(currentUrl, label)
+  await networkTargetValidator(url, label)
 }
 
 async function executeAndRevalidateBrowserUrl<T>(
@@ -39,10 +42,11 @@ async function executeAndRevalidateBrowserUrl<T>(
   action: () => T | Promise<T>,
   afterLabel: string,
   beforeLabel?: string,
+  networkTargetValidator: (url: URL, label: string) => Promise<void> | void = assertPublicNetworkTarget,
 ): Promise<T> {
-  if (beforeLabel) await assertBrowserCurrentUrlPublic(adapter, beforeLabel)
+  if (beforeLabel) await assertBrowserCurrentUrlPublic(adapter, beforeLabel, networkTargetValidator)
   const result = await action()
-  await assertBrowserCurrentUrlPublic(adapter, afterLabel)
+  await assertBrowserCurrentUrlPublic(adapter, afterLabel, networkTargetValidator)
   return result
 }
 
@@ -87,6 +91,7 @@ export function createBrowserOpenTool(options: BrowserToolOptions = {}): Runtime
       const url = typeof record.url === 'string' ? record.url.trim() : ''
       if (!url) throw new Error('Browser open input.url must be a non-empty string.')
       const adapter = requireBrowserAdapter(options.adapter)
+      const networkTargetValidator = options.networkTargetValidator ?? assertPublicNetworkTarget
       return executeAndRevalidateBrowserUrl(
         adapter,
         () =>
@@ -94,6 +99,8 @@ export function createBrowserOpenTool(options: BrowserToolOptions = {}): Runtime
             url: parsePublicHttpUrl(url, 'Browser open input.url').toString(),
           }),
         'Browser current URL after open',
+        undefined,
+        networkTargetValidator,
       )
     },
   }
@@ -112,6 +119,7 @@ export function createBrowserScreenshotTool(options: BrowserToolOptions = {}): R
     execute: ({ input }) => {
       const record = inputRecord(input)
       const adapter = requireBrowserAdapter(options.adapter)
+      const networkTargetValidator = options.networkTargetValidator ?? assertPublicNetworkTarget
       return executeAndRevalidateBrowserUrl(
         adapter,
         () =>
@@ -124,6 +132,7 @@ export function createBrowserScreenshotTool(options: BrowserToolOptions = {}): R
           }),
         'Browser current URL after screenshot',
         'Browser current URL before screenshot',
+        networkTargetValidator,
       )
     },
   }
@@ -145,6 +154,7 @@ export function createBrowserSnapshotTool(options: BrowserToolOptions = {}): Run
       const format = record.format === 'text' ? 'text' : 'aria'
       const adapter = requireBrowserAdapter(options.adapter)
       const snapshot = requireBrowserMethod(adapter, 'snapshot')
+      const networkTargetValidator = options.networkTargetValidator ?? assertPublicNetworkTarget
       return executeAndRevalidateBrowserUrl(
         adapter,
         () =>
@@ -154,6 +164,7 @@ export function createBrowserSnapshotTool(options: BrowserToolOptions = {}): Run
           }),
         'Browser current URL after snapshot',
         'Browser current URL before snapshot',
+        networkTargetValidator,
       )
     },
   }
@@ -173,6 +184,7 @@ export function createBrowserClickTool(options: BrowserToolOptions = {}): Runtim
       const record = inputRecord(input)
       const adapter = requireBrowserAdapter(options.adapter)
       const click = requireBrowserMethod(adapter, 'click')
+      const networkTargetValidator = options.networkTargetValidator ?? assertPublicNetworkTarget
       return executeAndRevalidateBrowserUrl(
         adapter,
         () =>
@@ -182,6 +194,7 @@ export function createBrowserClickTool(options: BrowserToolOptions = {}): Runtim
           }),
         'Browser current URL after click',
         'Browser current URL before click',
+        networkTargetValidator,
       )
     },
   }
@@ -204,6 +217,7 @@ export function createBrowserTypeTool(options: BrowserToolOptions = {}): Runtime
       if (!text) throw new Error('Browser type input.text must be a non-empty string.')
       const adapter = requireBrowserAdapter(options.adapter)
       const type = requireBrowserMethod(adapter, 'type')
+      const networkTargetValidator = options.networkTargetValidator ?? assertPublicNetworkTarget
       return executeAndRevalidateBrowserUrl(
         adapter,
         () =>
@@ -215,6 +229,7 @@ export function createBrowserTypeTool(options: BrowserToolOptions = {}): Runtime
           }),
         'Browser current URL after type',
         'Browser current URL before type',
+        networkTargetValidator,
       )
     },
   }

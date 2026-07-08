@@ -1,4 +1,42 @@
 services:
+  mainspring-gateway:
+    build:
+      context: ..
+      dockerfile: docker/gateway.Dockerfile
+    environment:
+      MAINSPRING_GATEWAY_HOST: 0.0.0.0
+      MAINSPRING_GATEWAY_PORT: "8787"
+      MAINSPRING_SESSIONS_ROOT: /data/sessions
+      MAINSPRING_WORKSPACE_ROOT: /data/workspaces
+      MAINSPRING_GATEWAY_APP_DB: /data/gateway-app.sqlite
+      MAINSPRING_RUNLOG_ROOT: /data/runlog
+      MAINSPRING_RUNLOG_DB: /data/runlog/runlog.sqlite
+      MAINSPRING_RUNLOG_WORKSPACE_ROOT: /data/runlog/workspaces
+      MAINSPRING_GATEWAY_MANAGED_SECRET_KEY: /data/gateway-app.sqlite.managed-key
+      MAINSPRING_GATEWAY_MANAGED_SECRET_STORE: file
+      MAINSPRING_PROVIDER: ${MAINSPRING_PROVIDER:-openrouter}
+      MAINSPRING_MODEL: ${MAINSPRING_MODEL:-openrouter/free}
+      MAINSPRING_CREDENTIAL_REF: ${MAINSPRING_CREDENTIAL_REF:-}
+      CODEX_HOME: /codex-home
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - mainspring-gateway-data:/data
+      - mainspring-codex-home:/codex-home
+
+  mainspring-console:
+    build:
+      context: ..
+      dockerfile: docker/console.Dockerfile
+    environment:
+      VITE_MAINSPRING_GATEWAY_URL: http://127.0.0.1:8787
+    depends_on:
+      - mainspring-gateway
+    ports:
+      - "127.0.0.1:5173:4173"
+
   mainspring-runtime:
     build:
       context: ..
@@ -17,7 +55,9 @@ services:
       - mainspring-artifacts:/artifacts
 
 volumes:
+  mainspring-gateway-data:
   mainspring-runtime:
   mainspring-sessions:
   mainspring-workspaces:
   mainspring-artifacts:
+  mainspring-codex-home:

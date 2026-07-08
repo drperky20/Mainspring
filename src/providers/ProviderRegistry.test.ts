@@ -67,7 +67,7 @@ describe('ProviderRegistry', () => {
     expect(query.events).toBeDefined()
   })
 
-  it('keeps non-OpenRouter providers out of the default app-level registry', () => {
+  it('requires non-bundled providers to be explicitly registered', () => {
     const registry = createDefaultProviderRegistry()
 
     expect(() =>
@@ -77,6 +77,43 @@ describe('ProviderRegistry', () => {
         credentialRef: 'provider-profile:not-openrouter-local',
       }),
     ).toThrow('Unknown runtime provider: not-openrouter')
+  })
+
+  it('resolves custom registered providers through the same registry path', () => {
+    const seenInputs: QueryInput[] = []
+    const registry = createDefaultProviderRegistry({
+      providers: [
+        {
+          providerId: 'acme-ai',
+          modelId: 'acme/default',
+          credentialRef: 'env:ACME_AI_API_KEY',
+          client: {
+            query(input) {
+              seenInputs.push(input)
+              return queryFromEvents([{ type: 'result', text: 'custom ok' }])
+            },
+          },
+        },
+      ],
+    })
+
+    registry.resolve({ providerId: 'acme-ai' }).query({
+      prompt: 'hello',
+      sessionId: 'custom',
+      cwd: '/workspace',
+    })
+
+    expect(seenInputs).toEqual([
+      {
+        prompt: 'hello',
+        sessionId: 'custom',
+        cwd: '/workspace',
+        model: 'acme/default',
+        providerId: 'acme-ai',
+        credentialRef: { kind: 'env', key: 'ACME_AI_API_KEY' },
+      },
+    ])
+    expect(registry.listProviderIds()).toContain('acme-ai')
   })
 
   it('resolves OpenRouter with env secret refs through the default registry', () => {
@@ -109,6 +146,50 @@ describe('ProviderRegistry', () => {
         credentialRef: { kind: 'env', key: 'OPENROUTER_API_KEY' },
       },
     ])
+  })
+
+  it('resolves Codex as a first-class provider using the Codex CLI credential path', async () => {
+    const seenInputs: QueryInput[] = []
+    const registry = createDefaultProviderRegistry({
+      defaultProviderId: 'codex',
+      clients: {
+        codex: {
+          query(input) {
+            seenInputs.push(input)
+            return queryFromEvents([
+              {
+                type: 'init',
+                provider: input.providerId,
+                providerSessionId: 'codex:session',
+                modelId: input.model,
+                providerTransport: 'codex-cli-jsonl',
+              },
+              { type: 'result', text: 'codex ok' },
+            ])
+          },
+        },
+      },
+    })
+
+    const provider = registry.resolve({
+      providerId: 'codex',
+      modelId: 'codex-auto',
+    })
+    const query = provider.query({ prompt: 'hello', sessionId: 'codex-test', cwd: '/workspace' })
+    const events: ProviderEvent[] = []
+    for await (const event of query.events) events.push(event)
+
+    expect(seenInputs).toEqual([
+      {
+        prompt: 'hello',
+        sessionId: 'codex-test',
+        cwd: '/workspace',
+        model: 'codex-auto',
+        providerId: 'codex',
+        credentialRef: { kind: 'env', key: 'CODEX_HOME' },
+      },
+    ])
+    expect(events.at(-1)).toEqual({ type: 'result', text: 'codex ok' })
   })
 
   it('allows explicit model selection for standalone Mainspring providers', () => {

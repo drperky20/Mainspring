@@ -20,6 +20,7 @@ import type {
   LocalGatewayRunLogRunProjection,
   LocalGatewaySessionProjection,
 } from './LocalGateway.js'
+import { deploymentTargetSupport } from './DeploymentWizard.js'
 import type { LocalMarketplaceTemplateRecord } from './TemplateMarketplace.js'
 import type {
   LocalGatewayAgentRecord,
@@ -43,6 +44,8 @@ import type {
 export interface ConsoleGatewayClient {
   clientId: string
   name: string
+  contact?: string
+  billingLabel?: string
   status: LocalGatewayClientRecord['status']
 }
 
@@ -228,7 +231,7 @@ export interface ConsoleGatewayDeploymentTarget {
   kind: LocalGatewayDeploymentTargetRecord['kind']
   status: LocalGatewayDeploymentTargetRecord['status']
   executionSupported: boolean
-  executionMode: 'vps-ssh' | 'metadata-only'
+  executionMode: string
   executionUnavailableReason?: string
   createdAt: string
   updatedAt: string
@@ -406,7 +409,7 @@ export interface ConsoleGatewayCronSchedule {
   cronExpr: string
   timezone: 'local' | 'utc'
   allowedTools: string[]
-  runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+  runtimeProfile?: string
   enabled: boolean
   lastRunAt?: string
   nextRunAt?: string
@@ -611,7 +614,7 @@ export interface ConsoleGatewayMarketplaceTemplate {
   provenance: 'repo-examples'
   providerId?: string
   modelId?: string
-  runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+  runtimeProfile?: string
   allowedTools: string[]
   approvalMode?: string
 }
@@ -912,9 +915,17 @@ function memoryPreview(text: string): string {
 }
 
 export function consoleClient(record: LocalGatewayClientRecord): ConsoleGatewayClient {
+  const metadata =
+    record.metadata && typeof record.metadata === 'object' ? record.metadata : undefined
   return {
     clientId: record.clientId,
     name: browserSafePreviewText(record.name),
+    ...(typeof metadata?.contact === 'string'
+      ? { contact: browserSafePreviewText(metadata.contact) }
+      : {}),
+    ...(typeof metadata?.billingLabel === 'string'
+      ? { billingLabel: browserSafePreviewText(metadata.billingLabel) }
+      : {}),
     status: record.status,
   }
 }
@@ -1130,21 +1141,43 @@ export function consoleMarketplaceTemplate(
 export function consoleDeploymentTarget(
   record: LocalGatewayDeploymentTargetRecord,
 ): ConsoleGatewayDeploymentTarget {
-  const executionSupported = record.kind === 'vps'
+  const support = consoleDeploymentTargetSupport(record)
   return {
     targetId: record.targetId,
     ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
     label: browserSafePreviewText(record.label),
     kind: record.kind,
     status: record.status,
-    executionSupported,
-    executionMode: executionSupported ? 'vps-ssh' : 'metadata-only',
-    ...(executionSupported
-      ? {}
-      : { executionUnavailableReason: `${record.kind} deployment targets do not have a real executor yet.` }),
+    executionSupported: support.executionSupported,
+    executionMode: browserSafePreviewText(support.executionMode),
+    ...(support.executionUnavailableReason
+      ? { executionUnavailableReason: browserSafePreviewText(support.executionUnavailableReason) }
+      : {}),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   }
+}
+
+function consoleDeploymentTargetSupport(
+  record: LocalGatewayDeploymentTargetRecord,
+): {
+  executionSupported: boolean
+  executionMode: string
+  executionUnavailableReason?: string
+} {
+  const metadata = metadataRecord(record.metadata)
+  const driver = metadataRecord(metadata?.deploymentDriver)
+  if (driver) {
+    const executionMode = metadataText(driver.executionMode)
+    return {
+      executionSupported: driver.executionSupported === true,
+      executionMode: executionMode ?? 'metadata-only',
+      ...(metadataText(driver.executionUnavailableReason)
+        ? { executionUnavailableReason: metadataText(driver.executionUnavailableReason) }
+        : {}),
+    }
+  }
+  return deploymentTargetSupport(record)
 }
 
 export function consoleDeploymentRun(

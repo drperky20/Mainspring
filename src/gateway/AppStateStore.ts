@@ -191,7 +191,7 @@ export interface LocalGatewayDeploymentTargetRecord {
   targetId: string
   workspaceId?: string
   label: string
-  kind: 'local' | 'vps' | 'container'
+  kind: string
   status: 'active' | 'archived'
   createdAt: string
   updatedAt: string
@@ -251,7 +251,7 @@ export interface LocalGatewayCronScheduleRecord {
   cronExpr: string
   timezone: CronTimezone
   allowedTools: string[]
-  runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+  runtimeProfile?: string
   enabled: boolean
   lastRunAt?: string
   nextRunAt?: string
@@ -537,7 +537,7 @@ export interface CreateLocalGatewayCronScheduleInput {
   cronExpr: string
   timezone?: CronTimezone
   allowedTools?: string[]
-  runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+  runtimeProfile?: string
   enabled?: boolean
   nextRunAt?: string
   lastRunAt?: string
@@ -557,7 +557,7 @@ export interface UpdateLocalGatewayCronScheduleInput {
   cronExpr?: string
   timezone?: CronTimezone
   allowedTools?: string[]
-  runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+  runtimeProfile?: string
   enabled?: boolean
   nextRunAt?: string
   lastRunAt?: string
@@ -1187,7 +1187,7 @@ function cronScheduleFromRow(row: unknown): LocalGatewayCronScheduleRecord {
     cron_expr: string
     timezone: CronTimezone
     allowed_tools_json: string | null
-    runtime_profile: 'core' | 'core-browser' | 'core-browser-memory' | null
+    runtime_profile: string | null
     enabled: number
     last_run_at: string | null
     next_run_at: string | null

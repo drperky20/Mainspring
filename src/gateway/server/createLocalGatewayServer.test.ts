@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -50,6 +51,22 @@ function makeTempRoot(prefix: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
   tempRoots.push(root)
   return root
+}
+
+async function startJsonFixtureServer(payload: unknown): Promise<{ url: string; stop: () => Promise<void> }> {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(payload))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Fixture server did not bind to a TCP port.')
+  return {
+    url: `http://127.0.0.1:${address.port}/models`,
+    stop: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }),
+  }
 }
 
 function approvalTool(executions: { count: number }): RuntimeTool {
@@ -157,6 +174,89 @@ function testCellBackendOptions() {
 }
 
 describe('LocalGatewayHttpServer', () => {
+  it('exposes a compact searchable OpenRouter model catalog for the console', async () => {
+    const root = makeTempRoot('mainspring-gateway-openrouter-models-')
+    const fixture = await startJsonFixtureServer({
+      data: [
+        {
+          id: 'openai/gpt-4.1-mini',
+          name: 'GPT 4.1 Mini',
+          description: 'Fast model for customer support.',
+          context_length: 1047576,
+          architecture: {
+            input_modalities: ['text', 'image'],
+            output_modalities: ['text'],
+          },
+          supported_parameters: ['tools', 'temperature'],
+          pricing: { prompt: '0.0000004', completion: '0.0000016' },
+          secret_internal_field: 'must not be forwarded',
+        },
+        {
+          id: 'anthropic/claude-sonnet-4',
+          name: 'Claude Sonnet 4',
+          description: 'General reasoning model.',
+          context_length: 200000,
+          architecture: {
+            input_modalities: ['text'],
+            output_modalities: ['text'],
+          },
+          supported_parameters: ['tools'],
+          pricing: { prompt: '0.000003', completion: '0.000015' },
+        },
+      ],
+    })
+    const previousModelsUrl = process.env.MAINSPRING_OPENROUTER_MODELS_URL
+    process.env.MAINSPRING_OPENROUTER_MODELS_URL = fixture.url
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider(),
+    })
+    const gateway = createLocalMainspringGateway({
+      runtime: mainspring,
+      appState,
+      cells: testCellBackendOptions(),
+    })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    try {
+      const started = await server.start()
+      const response = await fetch(`${started.url}/providers/openrouter/models?q=sonnet&limit=5`)
+      const body = await response.json()
+
+      expect(response.status).toBe(200)
+      expect(body).toEqual({
+        providerId: 'openrouter',
+        source: 'openrouter-models-api',
+        models: [
+          {
+            id: 'anthropic/claude-sonnet-4',
+            name: 'Claude Sonnet 4',
+            description: 'General reasoning model.',
+            contextLength: 200000,
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            supportedParameters: ['tools'],
+            pricing: { prompt: '0.000003', completion: '0.000015' },
+          },
+        ],
+      })
+      expect(JSON.stringify(body)).not.toContain('secret_internal_field')
+    } finally {
+      await server.stop()
+      appState.close()
+      await fixture.stop()
+      if (previousModelsUrl === undefined) {
+        delete process.env.MAINSPRING_OPENROUTER_MODELS_URL
+      } else {
+        process.env.MAINSPRING_OPENROUTER_MODELS_URL = previousModelsUrl
+      }
+    }
+  })
+
   it('keeps managed provider secrets write-only while HTTP-created profiles drive runtime provider resolution', async () => {
     const root = makeTempRoot('mainspring-gateway-server-secret-http-')
     const sessionsRoot = path.join(root, 'sessions')
@@ -404,7 +504,7 @@ describe('LocalGatewayHttpServer', () => {
       gateway,
       host: '127.0.0.1',
       port: 0,
-      auth: { mode: 'hosted' },
+      auth: { mode: 'hosted', trustedOrigins: ['http://127.0.0.1:5173'] },
     })
 
     await mainspring.start()
@@ -454,6 +554,11 @@ describe('LocalGatewayHttpServer', () => {
           'access-control-request-headers': 'content-type',
         },
       })
+      const hostileLocalhostBootstrap = await fetch(`${started.url}/auth/bootstrap`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' },
+        body: JSON.stringify({ username: 'Mallory', password: 'NorthlinePass123' }),
+      })
       const bootstrapResponse = await fetch(`${started.url}/auth/bootstrap`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:5173' },
@@ -462,7 +567,7 @@ describe('LocalGatewayHttpServer', () => {
       const bootstrapBody = await bootstrapResponse.json()
       const loginResponse = await fetch(`${started.url}/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' },
+        headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:5173' },
         body: JSON.stringify({ username: 'Admin', password: 'NorthlinePass123' }),
       })
       const loginBody = await loginResponse.json()
@@ -582,6 +687,8 @@ describe('LocalGatewayHttpServer', () => {
       expect(hostileOriginBootstrap.headers.get('access-control-allow-origin')).toBeNull()
       expect(hostileOriginPreflight.status).toBe(403)
       expect(hostileOriginPreflight.headers.get('access-control-allow-origin')).toBeNull()
+      expect(hostileLocalhostBootstrap.status).toBe(403)
+      expect(hostileLocalhostBootstrap.headers.get('access-control-allow-origin')).toBeNull()
       expect(bootstrapResponse.status).toBe(201)
       expect(bootstrapResponse.headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:5173')
       expect(bootstrapBody).toMatchObject({
@@ -591,7 +698,7 @@ describe('LocalGatewayHttpServer', () => {
         },
       })
       expect(loginResponse.status).toBe(200)
-      expect(loginResponse.headers.get('access-control-allow-origin')).toBe('http://localhost:5173')
+      expect(loginResponse.headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:5173')
       expect(loginBody).toMatchObject({
         user: {
           username: 'admin',

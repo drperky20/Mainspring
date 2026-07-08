@@ -35,6 +35,14 @@ export {
   gatewaySnapshotToExecutionBackendStatus,
 } from './ConsoleSnapshotAdapter.js'
 export {
+  DeploymentDriverRegistry,
+  assertSafeDeploymentTargetKind,
+  createDefaultDeploymentDriverRegistry,
+  createDeploymentDriverRegistry,
+  deploymentTargetSupport,
+  getDefaultDeploymentDriverRegistry,
+} from './DeploymentWizard.js'
+export {
   HyperCellScheduler,
   runExecutionCellId,
   runExecutionLeaseId,
@@ -88,6 +96,16 @@ export type {
   ConsoleGatewayWorkspace,
 } from './ConsoleSnapshotAdapter.js'
 export type {
+  DeploymentDriver,
+  DeploymentDriverExecuteInput,
+  DeploymentDriverPlanInput,
+  LocalGatewayDeploymentCommandRunner,
+  LocalGatewayDeploymentExecutionResult,
+  LocalGatewayDeploymentOperation,
+  LocalGatewayDeploymentPlan,
+  LocalGatewayDeploymentTargetSupport,
+} from './DeploymentWizard.js'
+export type {
   CreateLocalGatewayAgentDraftInput,
   CreateLocalGatewayClientWorkspaceInput,
   CreateLocalGatewayClientWorkspaceResult,
@@ -98,9 +116,6 @@ export type {
   CreateLocalGatewayWorkspaceSessionResult,
   DeleteLocalGatewayWorkspaceResult,
   CreateLocalMainspringGatewayOptions,
-  LocalGatewayDeploymentExecutionResult,
-  LocalGatewayDeploymentOperation,
-  LocalGatewayDeploymentPlan,
   LocalGatewayAppStateRunInput,
   LocalGatewayApprovalResponseInput,
   LocalGatewayBudgetDraftInput,

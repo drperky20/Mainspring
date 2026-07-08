@@ -1,4 +1,14 @@
-import type { GatewayRunDispatch, MainspringRuntimeProfile, RuntimePolicy } from '#protocol'
+import {
+  DEFAULT_MAINSPRING_RUNTIME_PROFILE,
+  MAINSPRING_RUNTIME_PROFILES,
+  MainspringRuntimeProfileIdSchema,
+  type GatewayRunDispatch,
+  type MainspringRuntimeProfile,
+  type MainspringRuntimeProfileRegistration,
+  type RuntimePolicy,
+} from '#protocol'
+import fs from 'node:fs'
+import path from 'node:path'
 import type {
   MainspringApprovalRecord,
   MainspringSessionRecord,
@@ -45,8 +55,12 @@ import {
   type CronTimezone,
 } from './CronExpression.js'
 import {
+  createDeploymentDriverRegistry,
+  deploymentTargetSupport,
   executeLocalGatewayDeployment,
   planLocalGatewayDeployment,
+  type DeploymentDriver,
+  type DeploymentDriverRegistry,
   type LocalGatewayDeploymentCommandRunner,
   type LocalGatewayDeploymentExecutionResult,
   type LocalGatewayDeploymentOperation,
@@ -113,6 +127,7 @@ export interface CreateLocalMainspringGatewayOptions {
   runtime: Mainspring
   runLog?: RunLogMainspring
   appState?: LocalGatewayAppStateStore
+  workspaceBaseRoot?: string
   cron?: {
     enabled?: boolean
     pollIntervalMs?: number
@@ -121,6 +136,7 @@ export interface CreateLocalMainspringGatewayOptions {
   deployments?: {
     repoRoot?: string
     commandRunner?: LocalGatewayDeploymentCommandRunner
+    drivers?: DeploymentDriver[]
   }
   cells?: {
     inspectBackends?: () => ExecutionBackendInventory
@@ -130,6 +146,9 @@ export interface CreateLocalMainspringGatewayOptions {
   }
   marketplace?: {
     repoRoot?: string
+  }
+  runtimeProfiles?: {
+    profiles?: MainspringRuntimeProfileRegistration[]
   }
   pricingCatalog?: readonly ModelPricing[]
 }
@@ -534,6 +553,35 @@ export type LocalGatewayCellStatus = HyperCellSchedulerStatus | {
   cellStatuses: []
 }
 
+class LocalGatewayRuntimeProfileRegistry {
+  private readonly profiles = new Map<string, MainspringRuntimeProfileRegistration>()
+
+  constructor(extraProfiles: readonly MainspringRuntimeProfileRegistration[] = []) {
+    for (const [profileId, info] of Object.entries(MAINSPRING_RUNTIME_PROFILES)) {
+      this.register({ profileId, ...info })
+    }
+    for (const profile of extraProfiles) this.register(profile)
+  }
+
+  register(profile: MainspringRuntimeProfileRegistration): void {
+    const profileId = MainspringRuntimeProfileIdSchema.parse(profile.profileId)
+    this.profiles.set(profileId, { ...profile, profileId })
+  }
+
+  assertRegistered(profileId: string | undefined): string | undefined {
+    if (!profileId) return undefined
+    const safeProfileId = MainspringRuntimeProfileIdSchema.parse(profileId)
+    if (!this.profiles.has(safeProfileId)) {
+      throw new Error(`Unknown runtime profile: ${safeProfileId}`)
+    }
+    return safeProfileId
+  }
+
+  defaultProfile(): string {
+    return this.assertRegistered(DEFAULT_MAINSPRING_RUNTIME_PROFILE)!
+  }
+}
+
 export interface CreateLocalGatewayDeploymentTargetDraftInput {
   workspaceId?: string
   label: string
@@ -864,6 +912,23 @@ function textValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
+function assertPathContained(root: string, target: string, message: string): void {
+  const relative = path.relative(root, target)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(message)
+  }
+}
+
+function nearestExistingPath(target: string): string | null {
+  let current = path.resolve(target)
+  for (;;) {
+    if (fs.existsSync(current)) return current
+    const parent = path.dirname(current)
+    if (parent === current) return null
+    current = parent
+  }
+}
+
 function stringListValue(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
@@ -936,8 +1001,11 @@ export class LocalMainspringGateway {
   private readonly now: () => Date
   private readonly deploymentRepoRoot: string
   private readonly deploymentCommandRunner?: LocalGatewayDeploymentCommandRunner
+  private readonly deploymentDrivers: DeploymentDriverRegistry
   private readonly inspectExecutionBackends: () => ExecutionBackendInventory
   private readonly marketplaceRepoRoot: string
+  private readonly workspaceBaseRoot: string
+  private readonly runtimeProfiles: LocalGatewayRuntimeProfileRegistry
   private readonly pricingCatalog: readonly ModelPricing[]
   private readonly pricingCatalogStatus: LocalGatewayPricingCatalogStatus
   private readonly budgetEvaluationStateById = new Map<string, LocalGatewayBudgetEvaluation['status']>()
@@ -958,8 +1026,16 @@ export class LocalMainspringGateway {
     this.now = options.cron?.now ?? (() => new Date())
     this.deploymentRepoRoot = options.deployments?.repoRoot ?? process.cwd()
     this.deploymentCommandRunner = options.deployments?.commandRunner
+    this.deploymentDrivers = createDeploymentDriverRegistry(options.deployments?.drivers)
     this.inspectExecutionBackends = options.cells?.inspectBackends ?? (() => inspectExecutionBackends())
     this.marketplaceRepoRoot = options.marketplace?.repoRoot ?? process.cwd()
+    this.runtimeProfiles = new LocalGatewayRuntimeProfileRegistry(options.runtimeProfiles?.profiles)
+    this.workspaceBaseRoot = path.resolve(
+      options.workspaceBaseRoot
+        ?? (this.runtime.options.workspaceRoot
+          ? path.dirname(this.runtime.options.workspaceRoot)
+          : process.cwd()),
+    )
     const envPricingCatalogPath = modelPricingCatalogPathFromEnv()
     this.pricingCatalog = options.pricingCatalog ?? modelPricingCatalogFromEnv()
     this.pricingCatalogStatus = describeModelPricingCatalog({
@@ -1104,6 +1180,10 @@ export class LocalMainspringGateway {
         appState: this.requireAppState(),
         targetId: input.targetId,
         operation: input.operation,
+        dependencies: {
+          repoRoot: this.deploymentRepoRoot,
+          drivers: this.deploymentDrivers,
+        },
       }),
     execute: (input: {
       targetId: string
@@ -1193,6 +1273,7 @@ export class LocalMainspringGateway {
         const resolvedInput = input.providerProfileId ? this.resolveAppStateRunInput(input) : input
         const session = this.runtime.storage.stateStore.getSession(resolvedInput.sessionId)
         if (!session) throw new Error(`Unknown session: ${resolvedInput.sessionId}`)
+        const runtimeProfile = this.runtimeProfiles.assertRegistered(resolvedInput.runtimeProfile)
         const budgetEvaluations = this.assertRunBudgetAllowed(resolvedInput, session)
         const agentId = resolvedInput.agentId ?? runtime.defaultAgentId
         this.ensureRunLogAgent(resolvedInput, agentId)
@@ -1214,7 +1295,9 @@ export class LocalMainspringGateway {
             gatewaySurface: 'runlog',
             ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
             ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
-            ...(resolvedInput.runtimeProfile ? { runtimeProfile: resolvedInput.runtimeProfile } : {}),
+            ...(resolvedInput.runtimeProfile
+              ? { runtimeProfile: this.runtimeProfiles.assertRegistered(resolvedInput.runtimeProfile) }
+              : {}),
           },
         })
         await handle.drainUntilIdle()
@@ -1308,7 +1391,9 @@ export class LocalMainspringGateway {
       ...(input.providerId ? { providerId: input.providerId } : {}),
       ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
       ...(input.modelId ? { modelId: input.modelId } : {}),
-      ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+      ...(input.runtimeProfile
+        ? { runtimeProfile: this.runtimeProfiles.assertRegistered(input.runtimeProfile) }
+        : {}),
       metadata: {
         runtime: 'runlog',
         ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
@@ -1490,6 +1575,7 @@ export class LocalMainspringGateway {
     const { sessionId, allowBudgetWarning: _allowBudgetWarning, ...runInput } = input
     const session = this.runtime.storage.stateStore.getSession(sessionId)
     if (!session) throw new Error(`Unknown session: ${sessionId}`)
+    const runtimeProfile = this.runtimeProfiles.assertRegistered(input.runtimeProfile)
     const budgetEvaluations = this.assertRunBudgetAllowed(input, session)
     const budgetPolicy = runtimeBudgetPolicyFromEvaluations(budgetEvaluations)
     const cellLeasePlan = this.hyperCells?.planRunLease({
@@ -1499,6 +1585,7 @@ export class LocalMainspringGateway {
     })
     const run = this.runtime.storage.commandStore.enqueueRun(session, {
       ...runInput,
+            ...(runtimeProfile ? { runtimeProfile } : {}),
       ...(budgetPolicy ? { budget: budgetPolicy } : {}),
     })
     const cellLease =
@@ -1564,7 +1651,9 @@ export class LocalMainspringGateway {
       ...(metadata.providerProfileId ? { providerProfileId: metadata.providerProfileId } : {}),
       ...(input.providerId ? { providerId: input.providerId } : {}),
       ...(input.modelId ? { modelId: input.modelId } : {}),
-      ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+      ...(input.runtimeProfile
+        ? { runtimeProfile: this.runtimeProfiles.assertRegistered(input.runtimeProfile) }
+        : {}),
       ...(cellLease
         ? {
             metadata: {
@@ -2176,11 +2265,14 @@ export class LocalMainspringGateway {
       ...(Object.keys(clientMetadata).length > 0 ? { metadata: clientMetadata } : {}),
     })
     const workspaceRoot = textValue(input.workspaceRoot)
+    const resolvedWorkspaceRoot = workspaceRoot
+      ? this.resolveGatewayWorkspaceRoot(workspaceRoot, 'Gateway workspace root')
+      : undefined
     const workspace = workspaceRoot
       ? appState.workspaces.create({
           clientId: client.clientId,
           name: textValue(input.workspaceName) ?? `${input.name} Workspace`,
-          root: workspaceRoot,
+          root: resolvedWorkspaceRoot!,
         })
       : undefined
     const session =
@@ -2247,7 +2339,7 @@ export class LocalMainspringGateway {
     const workspace = appState.workspaces.create({
       clientId: client.clientId,
       name: input.name,
-      root: input.workspaceRoot,
+      root: this.resolveGatewayWorkspaceRoot(input.workspaceRoot, 'Gateway workspace root'),
     })
     const session = projectSession(
       this.runtime.sessions.create({
@@ -2410,7 +2502,9 @@ export class LocalMainspringGateway {
         ? appState.workspaces.update({
             workspaceId: existingWorkspace.workspaceId,
             ...(input.workspaceName ? { name: input.workspaceName } : {}),
-            ...(input.workspaceRoot ? { root: input.workspaceRoot } : {}),
+            ...(input.workspaceRoot
+              ? { root: this.resolveGatewayWorkspaceRoot(input.workspaceRoot, 'Gateway workspace root') }
+              : {}),
             ...(input.workspaceStatus || input.status
               ? { status: input.workspaceStatus ?? input.status }
               : {}),
@@ -2630,7 +2724,18 @@ export class LocalMainspringGateway {
     if (input.workspaceId && !appState.workspaces.get(input.workspaceId)) {
       throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
     }
-    const target = appState.deploymentTargets.create(input)
+    const targetInput = this.deploymentTargetInputWithDriverSupport(input)
+    this.deploymentDrivers.validateTarget({
+      targetId: 'deployment_target_pending',
+      label: targetInput.label,
+      kind: targetInput.kind,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...(targetInput.workspaceId ? { workspaceId: targetInput.workspaceId } : {}),
+      ...(targetInput.metadata ? { metadata: targetInput.metadata } : {}),
+    })
+    const target = appState.deploymentTargets.create(targetInput)
     appState.auditEvents.create({
       category: 'deployment',
       action: 'target.created',
@@ -2651,7 +2756,18 @@ export class LocalMainspringGateway {
     if (input.workspaceId && !appState.workspaces.get(input.workspaceId)) {
       throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
     }
-    const target = appState.deploymentTargets.update(input)
+    const nextCandidate: LocalGatewayDeploymentTargetRecord = {
+      ...existing,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.label ? { label: input.label } : {}),
+      ...(input.kind ? { kind: input.kind } : {}),
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.metadata ? { metadata: input.metadata } : {}),
+    }
+    this.deploymentDrivers.validateTarget(nextCandidate)
+    const target = appState.deploymentTargets.update(
+      this.deploymentTargetInputWithDriverSupport(input, nextCandidate),
+    )
     appState.auditEvents.create({
       category: 'deployment',
       action: 'target.updated',
@@ -2679,6 +2795,7 @@ export class LocalMainspringGateway {
       confirm: input.confirm,
       dependencies: {
         repoRoot: this.deploymentRepoRoot,
+        drivers: this.deploymentDrivers,
         ...(this.deploymentCommandRunner ? { commandRunner: this.deploymentCommandRunner } : {}),
       },
     })
@@ -2694,6 +2811,44 @@ export class LocalMainspringGateway {
       },
     })
     return result
+  }
+
+  private deploymentTargetInputWithDriverSupport<T extends {
+    kind?: string
+    metadata?: Record<string, unknown>
+  }>(
+    input: T,
+    target?: LocalGatewayDeploymentTargetRecord,
+  ): T {
+    const supportTarget = target
+      ?? (
+        input.kind
+          ? {
+              targetId: 'deployment_target_pending',
+              label: 'pending',
+              kind: input.kind,
+              status: 'active' as const,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              ...(input.metadata ? { metadata: input.metadata } : {}),
+            }
+          : undefined
+      )
+    if (!supportTarget) return input
+    const support = deploymentTargetSupport(supportTarget, this.deploymentDrivers)
+    return {
+      ...input,
+      metadata: {
+        ...(input.metadata ?? target?.metadata ?? {}),
+        deploymentDriver: {
+          executionSupported: support.executionSupported,
+          executionMode: support.executionMode,
+          ...(support.executionUnavailableReason
+            ? { executionUnavailableReason: support.executionUnavailableReason }
+            : {}),
+        },
+      },
+    }
   }
 
   private listProvenanceReviews(
@@ -2777,14 +2932,19 @@ export class LocalMainspringGateway {
   private installMarketplaceTemplate(
     input: InstallLocalMarketplaceTemplateInput,
   ): InstallLocalMarketplaceTemplateResult {
+    const workspaceRoot = this.resolveGatewayWorkspaceRoot(
+      input.workspaceRoot,
+      'Marketplace workspace root',
+    )
     const installed = installLocalMarketplaceTemplate({
       repoRoot: this.marketplaceRepoRoot,
       templateId: input.templateId,
-      workspaceRoot: input.workspaceRoot,
+      workspaceRoot,
+      workspaceBaseRoot: this.workspaceBaseRoot,
     })
     const created = this.createClientWorkspace({
       name: input.clientName?.trim() || installed.template.defaults.clientName,
-      workspaceRoot: input.workspaceRoot,
+      workspaceRoot,
       workspaceName: input.workspaceName?.trim() || installed.template.defaults.workspaceName,
       metadata: {
         templateId: installed.template.templateId,
@@ -2810,7 +2970,7 @@ export class LocalMainspringGateway {
         templateProvenance: installed.template.provenance,
         allowedTools: installed.template.allowedTools,
         ...(installed.template.runtimeProfile
-          ? { runtimeProfile: installed.template.runtimeProfile }
+          ? { runtimeProfile: this.runtimeProfiles.assertRegistered(installed.template.runtimeProfile) }
           : {}),
         ...(installed.template.providerId ? { providerId: installed.template.providerId } : {}),
       },
@@ -2837,6 +2997,25 @@ export class LocalMainspringGateway {
       agent,
       installedFiles: installed.installedFiles,
     }
+  }
+
+  private resolveGatewayWorkspaceRoot(value: string, label: string): string {
+    const trimmed = value.trim()
+    if (!trimmed) throw new Error(`${label} must be a non-empty string.`)
+    const base = fs.existsSync(this.workspaceBaseRoot)
+      ? fs.realpathSync.native(this.workspaceBaseRoot)
+      : this.workspaceBaseRoot
+    const resolved = path.resolve(path.isAbsolute(trimmed) ? trimmed : path.join(base, trimmed))
+    assertPathContained(base, resolved, `${label} must stay inside the gateway workspace base.`)
+    const existing = nearestExistingPath(resolved)
+    if (existing) {
+      assertPathContained(
+        base,
+        fs.realpathSync.native(existing),
+        `${label} must stay inside the gateway workspace base.`,
+      )
+    }
+    return resolved
   }
 
   private assertRunBudgetAllowed(
@@ -3156,7 +3335,9 @@ export class LocalMainspringGateway {
         ? { providerProfileId: updatedSchedule.providerProfileId }
         : {}),
       ...(updatedSchedule.computerId ? { computerId: updatedSchedule.computerId } : {}),
-      ...(updatedSchedule.runtimeProfile ? { runtimeProfile: updatedSchedule.runtimeProfile } : {}),
+      ...(updatedSchedule.runtimeProfile
+        ? { runtimeProfile: this.runtimeProfiles.assertRegistered(updatedSchedule.runtimeProfile) }
+        : {}),
     })
     appState.runs.upsert({
       runId: run.runId,
@@ -3274,7 +3455,9 @@ export class LocalMainspringGateway {
       ...(schedule.agentId ? { agentId: schedule.agentId } : {}),
       ...(schedule.providerProfileId ? { providerProfileId: schedule.providerProfileId } : {}),
       ...(schedule.computerId ? { computerId: schedule.computerId } : {}),
-      ...(schedule.runtimeProfile ? { runtimeProfile: schedule.runtimeProfile } : {}),
+      ...(schedule.runtimeProfile
+        ? { runtimeProfile: this.runtimeProfiles.assertRegistered(schedule.runtimeProfile) }
+        : {}),
     })
     const agentId = resolvedInput.agentId ?? runtime.defaultAgentId
     this.ensureRunLogAgent(resolvedInput, agentId)
@@ -3401,7 +3584,9 @@ export class LocalMainspringGateway {
           cronDecisionId: decision.decisionId,
           ...(schedule.providerProfileId ? { providerProfileId: schedule.providerProfileId } : {}),
           ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
-          ...(resolvedInput.runtimeProfile ? { runtimeProfile: resolvedInput.runtimeProfile } : {}),
+          ...(resolvedInput.runtimeProfile
+            ? { runtimeProfile: this.runtimeProfiles.assertRegistered(resolvedInput.runtimeProfile) }
+            : {}),
         },
       },
       context.agent,
@@ -3515,6 +3700,7 @@ export class LocalMainspringGateway {
       prompt: string
       cronExpr: string
       timezone?: CronTimezone
+      runtimeProfile?: MainspringRuntimeProfile
     },
   ): void {
     if (!this.runtime.storage.stateStore.getSession(input.sessionId)) {
@@ -3526,6 +3712,7 @@ export class LocalMainspringGateway {
     this.resolveGatewayWorkspace(appState, input.workspaceId)
     this.resolveGatewayAgent(appState, input.agentId)
     this.resolveGatewayProviderProfile(appState, input.providerProfileId)
+    this.runtimeProfiles.assertRegistered(input.runtimeProfile)
   }
 
   private computeNextRunAt(input: {

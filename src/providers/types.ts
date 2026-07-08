@@ -54,6 +54,12 @@ export interface QueryInput {
 
 export interface AgentProvider {
   query(input: QueryInput): AgentQuery
+  providerId?: string
+  capabilities?: ProviderAdapterCapabilities
+}
+
+export interface ProviderAdapterCapabilities {
+  structuredReplay?: boolean
 }
 
 export interface AgentQuery {

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { EchoProvider } from '../../providers/EchoProvider.js'
 import {
   createRuntimeProviderFromEnv,
@@ -19,7 +20,7 @@ export const defaultLocalGatewayCellLeaseTtlMs = 6 * 60 * 60 * 1_000
 
 export function isAllowedLocalGatewayDevHost(host: string): boolean {
   const normalized = host.trim().toLowerCase()
-  return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1'
+  return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1' || normalized === '0.0.0.0'
 }
 
 export function resolveLocalGatewayDevHost(value: string | undefined): string {
@@ -80,7 +81,8 @@ Environment:
   MAINSPRING_GATEWAY_CELL_MAX_ACTIVE_LEASES_PER_CELL=
 
 Host binding:
-  - Only localhost / 127.0.0.1 / ::1 are accepted
+  - Only localhost / 127.0.0.1 / ::1 / 0.0.0.0 are accepted
+  - Use 0.0.0.0 only inside Docker or another externally constrained runtime
   - Invalid or remote host overrides fail closed to 127.0.0.1
 
 Provider:
@@ -191,6 +193,8 @@ async function main(): Promise<void> {
         ? 'env:OPENROUTER_API_KEY'
         : envProviderSelection?.providerId === 'openai'
           ? 'env:OPENAI_API_KEY'
+          : envProviderSelection?.providerId === 'codex'
+            ? 'env:CODEX_HOME'
           : 'managed:echo-provider',
   })
   const gateway = createLocalMainspringGateway({
@@ -239,7 +243,13 @@ function hasConfiguredProviderCredential(env: Record<string, string | undefined>
     return Boolean(env[credentialRef.slice('env:'.length)]?.trim())
   }
   if (credentialRef) return false
-  const providerId = env.MAINSPRING_PROVIDER?.trim().toLowerCase() === 'openai' ? 'openai' : 'openrouter'
+  const requestedProvider = env.MAINSPRING_PROVIDER?.trim().toLowerCase()
+  const providerId = requestedProvider === 'openai' || requestedProvider === 'codex' ? requestedProvider : 'openrouter'
+  if (providerId === 'codex') {
+    if (env.CODEX_ACCESS_TOKEN?.trim()) return true
+    const codexHome = env.CODEX_HOME?.trim()
+    return Boolean(codexHome && fs.existsSync(path.join(codexHome, 'auth.json')))
+  }
   const envKey = providerId === 'openai' ? 'OPENAI_API_KEY' : 'OPENROUTER_API_KEY'
   return Boolean(env[envKey]?.trim())
 }
@@ -252,9 +262,13 @@ function bootstrapGatewayAppState(input: {
   defaultModelId: string
   secretRef: string
 }): void {
+  let client = input.appState.clients.list()[0]
+  let workspace = client
+    ? input.appState.workspaces.list({ clientId: client.clientId })[0]
+    : undefined
   if (input.appState.clients.list().length === 0) {
-    const client = input.appState.clients.create({ name: 'Northline Dental' })
-    const workspace = input.appState.workspaces.create({
+    client = input.appState.clients.create({ name: 'Northline Dental' })
+    workspace = input.appState.workspaces.create({
       clientId: client.clientId,
       name: 'Northline Workspace',
       root: path.join(input.workspaceRoot, 'northline'),
@@ -278,11 +292,21 @@ function bootstrapGatewayAppState(input: {
     input.runtime.sessions.create({
       sessionId: 'gateway-dev-session',
       workspace: { root: path.join(input.workspaceRoot, 'northline') },
+      metadata: {
+        ...(client ? { clientId: client.clientId } : {}),
+        ...(workspace ? { workspaceId: workspace.workspaceId } : {}),
+      },
     })
   }
 }
 
-void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error))
-  process.exit(1)
-})
+if (isDirectCliEntry()) {
+  void main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  })
+}
+
+function isDirectCliEntry(): boolean {
+  return process.argv[1] ? pathToFileURL(process.argv[1]).href === import.meta.url : false
+}

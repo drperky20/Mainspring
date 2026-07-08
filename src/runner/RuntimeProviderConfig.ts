@@ -4,9 +4,13 @@ import {
   MAINSPRING_APP_PROVIDER_ID,
 } from '#protocol'
 import type { AgentProvider } from '../providers/types.js'
-import { createDefaultProviderRegistry } from '../providers/ProviderRegistry.js'
+import {
+  assertSafeProviderId,
+  createDefaultProviderRegistry,
+  type DefaultProviderRegistryOptions,
+} from '../providers/ProviderRegistry.js'
 
-export type RuntimeProviderId = 'openrouter' | 'openai'
+export type RuntimeProviderId = string
 
 export interface RuntimeProviderSelection {
   provider: AgentProvider
@@ -29,12 +33,8 @@ function clean(value: string | undefined): string | undefined {
 }
 
 function normalizeProviderId(value: string | undefined): RuntimeProviderId | undefined {
-  const normalized = clean(value)?.toLowerCase()
-  if (!normalized) return undefined
-  if (normalized === MAINSPRING_APP_PROVIDER_ID || normalized === 'openai') {
-    return normalized as RuntimeProviderId
-  }
-  throw new Error(`Unsupported Mainspring provider: ${value}`)
+  const normalized = clean(value)
+  return normalized ? assertSafeProviderId(normalized) : undefined
 }
 
 function parsePositiveInteger(value: string | undefined): number | undefined {
@@ -46,10 +46,11 @@ function parsePositiveInteger(value: string | undefined): number | undefined {
 
 export function createRuntimeProviderFromEnv(
   env: Record<string, string | undefined> = process.env,
+  registryOptions: DefaultProviderRegistryOptions = {},
 ): RuntimeProviderSelection {
   const resolved = runtimeProviderResolveOptionsFromEnv(env)
   const { providerId, modelId, credentialRef, options } = resolved
-  const registry = createDefaultProviderRegistry({ defaultProviderId: providerId })
+  const registry = createDefaultProviderRegistry({ ...registryOptions, defaultProviderId: providerId })
   return {
     provider: registry.resolve({
       providerId,
@@ -69,17 +70,38 @@ export function runtimeProviderResolveOptionsFromEnv(
   const providerId = normalizeProviderId(env.MAINSPRING_PROVIDER) ?? MAINSPRING_APP_PROVIDER_ID
   const modelId =
     clean(env.MAINSPRING_MODEL) ??
-    (providerId === 'openai' ? 'gpt-5.5' : MAINSPRING_APP_MODEL_ID)
+    (providerId === 'openai'
+      ? 'gpt-5.5'
+      : providerId === 'codex'
+        ? 'codex-auto'
+      : providerId === MAINSPRING_APP_PROVIDER_ID
+        ? MAINSPRING_APP_MODEL_ID
+        : undefined)
   const credentialRef =
     clean(env.MAINSPRING_CREDENTIAL_REF) ??
-    (providerId === 'openai' ? 'env:OPENAI_API_KEY' : MAINSPRING_APP_CREDENTIAL_REF)
+    (providerId === 'openai'
+      ? 'env:OPENAI_API_KEY'
+      : providerId === 'codex'
+        ? 'env:CODEX_HOME'
+      : providerId === MAINSPRING_APP_PROVIDER_ID
+        ? MAINSPRING_APP_CREDENTIAL_REF
+        : `env:${providerId.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}_API_KEY`)
   const requestTimeoutMs = parsePositiveInteger(env.MAINSPRING_PROVIDER_REQUEST_TIMEOUT_MS)
-  const baseUrl = clean(env.MAINSPRING_OPENAI_BASE_URL) ?? clean(env.OPENAI_BASE_URL)
+  const baseUrl =
+    clean(env.MAINSPRING_PROVIDER_BASE_URL)
+    ?? clean(env.MAINSPRING_OPENAI_BASE_URL)
+    ?? clean(env.OPENAI_BASE_URL)
   const responsesMode = clean(env.MAINSPRING_OPENAI_RESPONSES_MODE)
   const options: Record<string, unknown> = {}
   if (requestTimeoutMs) options.requestTimeoutMs = requestTimeoutMs
-  if (providerId === 'openai' && baseUrl) options.baseUrl = baseUrl
+  if (baseUrl) options.baseUrl = baseUrl
   if (providerId === 'openai' && responsesMode) options.responsesMode = responsesMode
+  if (providerId === 'codex') {
+    const codexTransport = clean(env.MAINSPRING_CODEX_TRANSPORT)
+    const codexCommand = clean(env.MAINSPRING_CODEX_COMMAND)
+    if (codexTransport) options.transport = codexTransport
+    if (codexCommand) options.command = codexCommand
+  }
   return {
     providerId,
     modelId,

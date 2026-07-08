@@ -9,6 +9,7 @@ import {
   summarizeExecutionBackendCapabilities,
   toWslPath,
   type ExecutionBackendCapabilitySummary,
+  type ExecutionBackendSpawnSpec,
   type ProcessExecutionBackend,
   type ProcessExecutionBackendPreference,
   type ResolvedExecutionBackend,
@@ -176,6 +177,10 @@ function ensureContainedCwd(workspaceRoot: string, cwd?: string): string {
     throw new Error(`Terminal working directory does not exist: ${cwd ?? '.'}`)
   }
   const real = fs.realpathSync.native(resolved)
+  const realRelative = path.relative(root, real)
+  if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+    throw new Error('Terminal working directory must stay inside the workspace root.')
+  }
   return real
 }
 
@@ -361,7 +366,17 @@ export function processSpawnSpecForBackend(input: {
   command: string
   cwd: string
   workspaceRoot: string
-}): [string, string[], import('node:child_process').SpawnOptions] {
+}): ExecutionBackendSpawnSpec {
+  const env = buildShellEnv()
+  if (input.backend.spawnSpec) {
+    return input.backend.spawnSpec({
+      command: input.command,
+      cwd: input.cwd,
+      workspaceRoot: input.workspaceRoot,
+      env,
+      dockerImage: process.env.MAINSPRING_DOCKER_CELL_IMAGE || DEFAULT_DOCKER_CELL_IMAGE,
+    })
+  }
   if (input.backend.key === 'wsl') {
     const script = `cd ${shellSingleQuote(toWslPath(input.cwd))} && ${input.command}`
     return [
@@ -371,7 +386,7 @@ export function processSpawnSpecForBackend(input: {
         cwd: input.cwd,
         shell: false,
         windowsHide: true,
-        env: buildShellEnv(),
+        env,
       },
     ]
   }
@@ -406,7 +421,7 @@ export function processSpawnSpecForBackend(input: {
         cwd: input.cwd,
         shell: false,
         windowsHide: true,
-        env: buildShellEnv(),
+        env,
       },
     ]
   }
@@ -417,7 +432,7 @@ export function processSpawnSpecForBackend(input: {
       cwd: input.cwd,
       shell: true,
       windowsHide: true,
-      env: buildShellEnv(),
+      env,
     },
   ]
 }

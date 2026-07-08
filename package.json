@@ -204,6 +204,7 @@
     "verify": "pnpm doctor && pnpm typecheck && pnpm test && pnpm build && pnpm run security:mainspring && pnpm run security:sensitive-patterns && pnpm security:truth && pnpm skills:check && pnpm runlog:migration:check && pnpm docs:check && pnpm console:typecheck && pnpm console:browser-safety:check && pnpm console:build"
   },
   "dependencies": {
+    "@openai/codex": "0.142.5",
     "better-sqlite3": "12.10.0",
     "ws": "^8.21.0",
     "zod": "^4.3.6"

@@ -49,6 +49,8 @@ for (const file of [
   'src/control/channel.ts',
   'src/sdk/Mainspring.ts',
   'docker/runtime.Dockerfile',
+  'docker/gateway.Dockerfile',
+  'docker/console.Dockerfile',
   'docker/compose.local.yml',
 ]) {
   requireFile(file)
@@ -136,8 +138,14 @@ function collectYamlBlockMapKeys(text, blockName) {
 }
 
 const compose = read('docker/compose.local.yml')
-if (/^\s*ports\s*:/m.test(compose)) {
-  failures.push('docker compose must not publish runtime ports')
+const allowedComposePorts = new Set([
+  '"127.0.0.1:5173:4173"',
+  '"127.0.0.1:8787:8787"',
+])
+for (const item of collectYamlBlockListItems(compose, 'ports')) {
+  if (!allowedComposePorts.has(item)) {
+    failures.push(`docker compose contains unexpected published port: ${item}`)
+  }
 }
 for (const [needle, message] of [
   ['/var/run/docker.sock', 'docker compose must not mount Docker socket'],
@@ -154,6 +162,19 @@ const expectedComposeEnv = new Set([
   'MAINSPRING_SESSIONS_ROOT',
   'MAINSPRING_WORKSPACE_ROOT',
   'MAINSPRING_POLL_INTERVAL_MS',
+  'MAINSPRING_GATEWAY_HOST',
+  'MAINSPRING_GATEWAY_PORT',
+  'MAINSPRING_GATEWAY_APP_DB',
+  'MAINSPRING_RUNLOG_ROOT',
+  'MAINSPRING_RUNLOG_DB',
+  'MAINSPRING_RUNLOG_WORKSPACE_ROOT',
+  'MAINSPRING_GATEWAY_MANAGED_SECRET_KEY',
+  'MAINSPRING_GATEWAY_MANAGED_SECRET_STORE',
+  'MAINSPRING_PROVIDER',
+  'MAINSPRING_MODEL',
+  'MAINSPRING_CREDENTIAL_REF',
+  'VITE_MAINSPRING_GATEWAY_URL',
+  'CODEX_HOME',
   'OPENROUTER_API_KEY',
   'OPENAI_API_KEY',
 ])
@@ -169,19 +190,22 @@ for (const envKey of expectedComposeEnv) {
 }
 
 const expectedComposeVolumes = new Set([
+  'mainspring-gateway-data:/data',
   'mainspring-runtime:/runtime',
   'mainspring-sessions:/sessions',
   'mainspring-workspaces:/workspaces',
   'mainspring-artifacts:/artifacts',
+  'mainspring-codex-home:/codex-home',
 ])
+const allowedHostBindMounts = new Set()
 const composeVolumeItems = collectYamlBlockListItems(compose, 'volumes').filter((item) =>
   item.includes(':'),
 )
 for (const item of composeVolumeItems) {
-  if (!expectedComposeVolumes.has(item)) {
+  if (!expectedComposeVolumes.has(item) && !allowedHostBindMounts.has(item)) {
     failures.push(`docker compose contains unexpected mount: ${item}`)
   }
-  if (/^(?:[A-Za-z]:\\|\/|\.{1,2}\/|~)/.test(item)) {
+  if (!allowedHostBindMounts.has(item) && /^(?:[A-Za-z]:\\|\/|\.{1,2}\/|~)/.test(item)) {
     failures.push(`docker compose must not bind mount host paths: ${item}`)
   }
 }

@@ -17,7 +17,7 @@ Deployment plans can run `npm pack` and prepare `ssh` / `scp` command previews f
 - It does not run arbitrary marketplace scripts.
 - It does not install remote marketplace code.
 - It does not provide paid marketplace distribution.
-- Cron grant review/create is available through the local gateway API/client and React console controls; provenance review controls for staged memory/skill writes are still pending.
+- Cron schedule creation/run-now and provenance review controls are available through the local gateway API/client and React console.
 - It does not make unsupported deployment target kinds executable; unsupported target kinds fail closed.
 - It does not bypass the runtime policy, mailbox, approval, and tool execution path.
 

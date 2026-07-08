@@ -103,6 +103,22 @@ class CredentialRecordingProvider implements AgentProvider {
   }
 }
 
+class ToolRecordingProvider implements AgentProvider {
+  readonly toolNames: string[][] = []
+
+  query(input: QueryInput): AgentQuery {
+    this.toolNames.push((input.tools ?? []).map((tool) => tool.manifest.key))
+    return {
+      push() {},
+      end() {},
+      abort() {},
+      events: (async function* () {
+        yield { type: 'result' as const, text: 'tools recorded' }
+      })(),
+    }
+  }
+}
+
 function approvalIdFor(store: SqliteRunLogStore, runId: string): string {
   const approvalId = projectRunLogRun({ store, runId }).pendingApprovals[0]?.approvalId
   if (!approvalId) throw new Error('Expected pending approval id')
@@ -903,6 +919,8 @@ describe('RunLogKernel', () => {
     const persisted = store.listDueCronJobs(new Date(Date.now() + 60_001))[0]
 
     expect(run?.status).toBe('queued')
+    expect(run?.allowedTools).toEqual(['shell.exec'])
+    expect(run ? store.getRun(run.runId)?.allowedTools : undefined).toEqual(['shell.exec'])
     expect(projection?.policyDecisions).toMatchObject([
       {
         state: 'allow',
@@ -915,6 +933,46 @@ describe('RunLogKernel', () => {
     expect(persisted?.metadata?.cronGrant?.executionCount).toBe(1)
     const [summary] = await kernel.drainUntilIdle()
     expect(summary?.status).toBe('completed')
+  })
+
+  it('limits provider-visible tools to the run-scoped cron grant', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const provider = new ToolRecordingProvider()
+    const kernel = new RunLogKernel({
+      store,
+      providerRouter: new SingleProviderRouter(provider),
+      tools: [guardedShellTool({ count: 0 }), echoTool()],
+    })
+    kernel.putAgent({
+      agentId: 'agent_cron_scoped_tools',
+      instructions: 'Run scoped schedule.',
+      tools: ['shell.exec', 'tool.echo'],
+      capabilities: ['provider', 'tools', 'cron', 'shell'],
+    })
+    const grant = createRunLogCronGrant({
+      agentId: 'agent_cron_scoped_tools',
+      input: 'scheduled scoped work',
+      intervalMs: 60_000,
+      allowedTools: ['tool.echo'],
+      expiresInMs: 60_000,
+    })
+    store.putCronJob({
+      cronId: 'cron_scoped_tools',
+      agentId: 'agent_cron_scoped_tools',
+      input: 'scheduled scoped work',
+      intervalMs: 60_000,
+      enabled: true,
+      nextRunAt: new Date(Date.now() - 1_000).toISOString(),
+      metadata: { cronMode: 'allowlist', cronGrant: grant },
+    })
+
+    const [run] = store.enqueueDueCronRuns()
+    expect(run?.allowedTools).toEqual(['tool.echo'])
+    const [summary] = await kernel.drainUntilIdle()
+
+    expect(summary?.status).toBe('completed')
+    expect(provider.toolNames).toEqual([['tool.echo']])
   })
 
   it('invalidates headless cron grants when prompts change or grants expire', () => {

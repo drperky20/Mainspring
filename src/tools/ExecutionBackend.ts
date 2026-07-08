@@ -1,10 +1,13 @@
 import os from 'node:os'
+import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import type { SpawnOptions } from 'node:child_process'
 
 export const PROCESS_EXECUTION_BACKENDS = ['host', 'wsl', 'docker'] as const
 
-export type ProcessExecutionBackend = (typeof PROCESS_EXECUTION_BACKENDS)[number]
+export type BuiltinProcessExecutionBackend = (typeof PROCESS_EXECUTION_BACKENDS)[number]
+export type ProcessExecutionBackend = string
 export type ProcessExecutionBackendPreference = ProcessExecutionBackend | 'auto'
 
 export interface ExecutionBackendStatus {
@@ -55,11 +58,106 @@ export interface ResolvedExecutionBackend {
   label: string
   unsafe: boolean
   capabilities: ExecutionBackendCapabilities
+  spawnSpec?: (input: ExecutionBackendSpawnSpecInput) => ExecutionBackendSpawnSpec
 }
 
 export interface ResolveExecutionBackendOptions {
   preferredBackend?: ProcessExecutionBackendPreference
   probe?: () => ExecutionBackendInventory
+  registry?: ExecutionBackendRegistry
+}
+
+export interface ExecutionBackendSpawnSpecInput {
+  command: string
+  cwd: string
+  workspaceRoot: string
+  env: NodeJS.ProcessEnv
+  dockerImage?: string
+}
+
+export type ExecutionBackendSpawnSpec = [string, string[], SpawnOptions]
+
+export interface ExecutionBackendAdapter {
+  key: ProcessExecutionBackend
+  label(platform: NodeJS.Platform): string
+  inspect(platform: NodeJS.Platform): ExecutionBackendStatus
+  capabilities(platform: NodeJS.Platform): ExecutionBackendCapabilities
+  spawnSpec(input: ExecutionBackendSpawnSpecInput): ExecutionBackendSpawnSpec
+}
+
+const BACKEND_ID_PATTERN = /^[A-Za-z0-9_.:-]+$/
+
+export function assertSafeExecutionBackendId(value: string): string {
+  const trimmed = value.trim().toLowerCase()
+  if (!trimmed || trimmed.length > 128 || !BACKEND_ID_PATTERN.test(trimmed)) {
+    throw new Error('Execution backend id must use only letters, numbers, dot, underscore, colon, or dash.')
+  }
+  return trimmed
+}
+
+export class ExecutionBackendRegistry {
+  private readonly adapters = new Map<string, ExecutionBackendAdapter>()
+
+  register(adapter: ExecutionBackendAdapter): this {
+    const key = assertSafeExecutionBackendId(adapter.key)
+    this.adapters.set(key, { ...adapter, key })
+    return this
+  }
+
+  get(key: string): ExecutionBackendAdapter | undefined {
+    return this.adapters.get(assertSafeExecutionBackendId(key))
+  }
+
+  keys(): string[] {
+    return [...this.adapters.keys()]
+  }
+
+  inspect(platform: NodeJS.Platform = process.platform): ExecutionBackendInventory {
+    const backends = this.keys().map((key) => this.adapters.get(key)!.inspect(platform))
+    return {
+      defaultBackend: this.adapters.has('host') ? 'host' : backends[0]?.key ?? 'host',
+      backends,
+    }
+  }
+
+  resolve(
+    preferredBackend: ProcessExecutionBackendPreference = 'auto',
+    platform: NodeJS.Platform = process.platform,
+  ): ResolvedExecutionBackend {
+    const key = preferredBackend === 'auto'
+      ? (this.adapters.has('host') ? 'host' : this.keys()[0])
+      : assertSafeExecutionBackendId(preferredBackend)
+    if (!key) throw new Error('No execution backend is registered.')
+    const adapter = this.adapters.get(key)
+    if (!adapter) throw new Error(`Unknown execution backend: ${key}`)
+    const status = adapter.inspect(platform)
+    if (!status.available) {
+      throw new Error(
+        `Execution backend "${key}" is unavailable: ${status.reason ?? 'unknown reason'}`,
+      )
+    }
+    return {
+      key: status.key,
+      label: status.label,
+      unsafe: status.unsafe,
+      capabilities: status.capabilities,
+      spawnSpec: adapter.spawnSpec,
+    }
+  }
+}
+
+let defaultExecutionBackendRegistry: ExecutionBackendRegistry | null = null
+
+export function createDefaultExecutionBackendRegistry(): ExecutionBackendRegistry {
+  return new ExecutionBackendRegistry()
+    .register(hostExecutionBackendAdapter)
+    .register(wslExecutionBackendAdapter)
+    .register(dockerExecutionBackendAdapter)
+}
+
+export function getDefaultExecutionBackendRegistry(): ExecutionBackendRegistry {
+  defaultExecutionBackendRegistry ??= createDefaultExecutionBackendRegistry()
+  return defaultExecutionBackendRegistry
 }
 
 export function parseExecutionBackendPreference(
@@ -68,15 +166,8 @@ export function parseExecutionBackendPreference(
   if (typeof value !== 'string') return undefined
   const normalized = value.trim().toLowerCase()
   if (!normalized) return undefined
-  if (
-    normalized === 'auto'
-    || normalized === 'host'
-    || normalized === 'wsl'
-    || normalized === 'docker'
-  ) {
-    return normalized
-  }
-  throw new Error('Execution backend must be one of: auto, host, wsl, docker.')
+  if (normalized === 'auto') return normalized
+  return assertSafeExecutionBackendId(normalized)
 }
 
 export function backendPreferenceFromComputerId(
@@ -105,95 +196,40 @@ export function backendPreferenceFromComputerId(
 export function inspectExecutionBackends(
   platform: NodeJS.Platform = process.platform,
 ): ExecutionBackendInventory {
-  const host: ExecutionBackendStatus = {
-    key: 'host',
-    label: platform === 'win32' ? 'Host shell (Windows)' : `Host shell (${platform})`,
-    available: true,
-    unsafe: true,
-    capabilities: executionBackendCapabilities('host', platform),
-    reason: 'Host process execution is available but not isolated.',
-  }
-  const wsl = inspectWslBackend(platform)
-  const docker = inspectDockerBackend()
-  return {
-    defaultBackend: 'host',
-    backends: [host, wsl, docker],
-  }
+  return getDefaultExecutionBackendRegistry().inspect(platform)
 }
 
 export function resolveExecutionBackend(
   options: ResolveExecutionBackendOptions = {},
 ): ResolvedExecutionBackend {
   const preferredBackend = options.preferredBackend ?? 'auto'
-  if (!options.probe && preferredBackend === 'auto') {
-    return {
-      key: 'host',
-      label: process.platform === 'win32' ? 'Host shell (Windows)' : `Host shell (${process.platform})`,
-      unsafe: true,
-      capabilities: executionBackendCapabilities('host', process.platform),
-    }
-  }
-  if (!options.probe && preferredBackend !== 'auto') {
-    const status =
-      preferredBackend === 'host'
-        ? {
-            key: 'host' as const,
-            label:
-              process.platform === 'win32'
-                ? 'Host shell (Windows)'
-                : `Host shell (${process.platform})`,
-            available: true,
-            unsafe: true,
-            capabilities: executionBackendCapabilities('host', process.platform),
-            reason: 'Host process execution is available but not isolated.',
-          }
-        : preferredBackend === 'wsl'
-          ? inspectWslBackend(process.platform)
-          : inspectDockerBackend()
-    if (!status.available) {
-      throw new Error(
-        `Execution backend "${preferredBackend}" is unavailable: ${status.reason ?? 'unknown reason'}`,
-      )
-    }
-    return {
-      key: status.key,
-      label: status.label,
-      unsafe: status.unsafe,
-      capabilities: status.capabilities,
-    }
-  }
+  const registry = options.registry ?? getDefaultExecutionBackendRegistry()
+  if (!options.probe) return registry.resolve(preferredBackend, process.platform)
 
   const probe = options.probe
-  if (!probe) throw new Error('Execution backend probe is required for this resolution path.')
   const inventory = probe()
-  if (preferredBackend === 'auto') {
-    const defaultStatus = inventory.backends.find(
-      (backend) => backend.key === inventory.defaultBackend,
-    )
-    if (!defaultStatus?.available) {
-      throw new Error(`Default execution backend unavailable: ${inventory.defaultBackend}.`)
-    }
-    return {
-      key: defaultStatus.key,
-      label: defaultStatus.label,
-      unsafe: defaultStatus.unsafe,
-      capabilities: defaultStatus.capabilities,
-    }
-  }
-  const status = inventory.backends.find((backend) => backend.key === preferredBackend)
+  const preferredKey =
+    preferredBackend === 'auto' ? inventory.defaultBackend : assertSafeExecutionBackendId(preferredBackend)
+  const status = inventory.backends.find((backend) => backend.key === preferredKey)
   if (!status) {
-    throw new Error(`Unknown execution backend: ${preferredBackend}`)
+    throw new Error(
+      preferredBackend === 'auto'
+        ? `Default execution backend unavailable: ${inventory.defaultBackend}.`
+        : `Unknown execution backend: ${preferredKey}`,
+    )
   }
   if (!status.available) {
     throw new Error(
-      `Execution backend "${preferredBackend}" is unavailable: ${status.reason ?? 'unknown reason'}`,
+      `Execution backend "${preferredKey}" is unavailable: ${status.reason ?? 'unknown reason'}`,
     )
   }
+  const adapter = registry.get(status.key)
   return {
     key: status.key,
     label: status.label,
     unsafe: status.unsafe,
     capabilities: status.capabilities,
+    ...(adapter ? { spawnSpec: adapter.spawnSpec } : {}),
   }
 }
 
@@ -219,6 +255,10 @@ export function backendSummaryLine(status: ExecutionBackendStatus): string {
 
 export function currentPlatformLabel(): string {
   return `${os.platform()} ${os.release()}`
+}
+
+function isContainerizedRuntime(): boolean {
+  return process.env.MAINSPRING_CONTAINERIZED === '1' || fs.existsSync('/.dockerenv')
 }
 
 export function summarizeExecutionBackendCapabilities(
@@ -285,7 +325,7 @@ function inspectWslBackend(platform: NodeJS.Platform): ExecutionBackendStatus {
   }
 }
 
-function inspectDockerBackend(): ExecutionBackendStatus {
+function inspectDockerBackend(platform: NodeJS.Platform = process.platform): ExecutionBackendStatus {
   const probe = spawnSync('docker', ['info', '--format', '{{.OSType}}'], {
     windowsHide: true,
     encoding: 'utf8',
@@ -298,7 +338,7 @@ function inspectDockerBackend(): ExecutionBackendStatus {
       label: 'Docker Linux container',
       available: false,
       unsafe: false,
-      capabilities: executionBackendCapabilities('docker', process.platform),
+      capabilities: executionBackendCapabilities('docker', platform),
       reason: compactReason(probe.error.message),
     }
   }
@@ -308,7 +348,7 @@ function inspectDockerBackend(): ExecutionBackendStatus {
       label: 'Docker Linux container',
       available: false,
       unsafe: false,
-      capabilities: executionBackendCapabilities('docker', process.platform),
+      capabilities: executionBackendCapabilities('docker', platform),
       reason:
         compactReason(probe.stderr)
         || compactReason(probe.stdout)
@@ -322,7 +362,7 @@ function inspectDockerBackend(): ExecutionBackendStatus {
       label: 'Docker Linux container',
       available: false,
       unsafe: false,
-      capabilities: executionBackendCapabilities('docker', process.platform),
+      capabilities: executionBackendCapabilities('docker', platform),
       reason: `Docker is reachable but is not using Linux containers: ${osType ?? 'unknown'}.`,
     }
   }
@@ -331,11 +371,11 @@ function inspectDockerBackend(): ExecutionBackendStatus {
     label: 'Docker Linux container',
     available: true,
     unsafe: false,
-    capabilities: executionBackendCapabilities('docker', process.platform),
+    capabilities: executionBackendCapabilities('docker', platform),
   }
 }
 
-export function executionBackendCapabilities(
+function builtinExecutionBackendCapabilities(
   backend: ProcessExecutionBackend,
   platform: NodeJS.Platform = process.platform,
 ): ExecutionBackendCapabilities {
@@ -387,6 +427,32 @@ export function executionBackendCapabilities(
       ],
     }
   }
+  if (backend !== 'host') {
+    throw new Error(`Unknown execution backend: ${assertSafeExecutionBackendId(backend)}`)
+  }
+  if (isContainerizedRuntime()) {
+    return {
+      isolationKind: 'docker-container',
+      isolationStrength: 'container-boundary',
+      securityBoundary: 'container-process',
+      networkPolicy: 'host-inherited',
+      workspaceMapping: 'host-path',
+      supportsShell: true,
+      supportsTerminal: true,
+      supportsFileMutation: true,
+      requiresApproval: true,
+      unsafeFallback: false,
+      verificationCommand: {
+        command: 'sh',
+        args: ['-lc', 'test -f /.dockerenv || test "$MAINSPRING_CONTAINERIZED" = "1"'],
+      },
+      limits: [
+        'Execution runs inside the Mainspring gateway container.',
+        'Network access follows the gateway container network policy.',
+        'Workspace paths are container paths, not bare-metal host paths.',
+      ],
+    }
+  }
   return {
     isolationKind: 'host-process',
     isolationStrength: 'none',
@@ -408,6 +474,111 @@ export function executionBackendCapabilities(
       'Approval gating reduces accidental execution but is not containment.',
     ],
   }
+}
+
+export function executionBackendCapabilities(
+  backend: ProcessExecutionBackend,
+  platform: NodeJS.Platform = process.platform,
+): ExecutionBackendCapabilities {
+  const key = assertSafeExecutionBackendId(backend)
+  if (key === 'host' || key === 'wsl' || key === 'docker') {
+    return builtinExecutionBackendCapabilities(key, platform)
+  }
+  const adapter = getDefaultExecutionBackendRegistry().get(key)
+  if (!adapter) throw new Error(`Unknown execution backend: ${key}`)
+  return adapter.capabilities(platform)
+}
+
+const hostExecutionBackendAdapter: ExecutionBackendAdapter = {
+  key: 'host',
+  label: (platform) =>
+    isContainerizedRuntime()
+      ? 'Gateway container shell'
+      : platform === 'win32' ? 'Host shell (Windows)' : `Host shell (${platform})`,
+  inspect: (platform) => ({
+    key: 'host',
+    label: isContainerizedRuntime()
+      ? 'Gateway container shell'
+      : platform === 'win32' ? 'Host shell (Windows)' : `Host shell (${platform})`,
+    available: true,
+    unsafe: !isContainerizedRuntime(),
+    capabilities: builtinExecutionBackendCapabilities('host', platform),
+    reason: isContainerizedRuntime()
+      ? 'Process execution is confined to the running Mainspring gateway container.'
+      : 'Host process execution is available but not isolated.',
+  }),
+  capabilities: (platform) => builtinExecutionBackendCapabilities('host', platform),
+  spawnSpec: (input) => [
+    input.command,
+    [],
+    {
+      cwd: input.cwd,
+      shell: true,
+      windowsHide: true,
+      env: input.env,
+    },
+  ],
+}
+
+const wslExecutionBackendAdapter: ExecutionBackendAdapter = {
+  key: 'wsl',
+  label: () => 'WSL bash',
+  inspect: inspectWslBackend,
+  capabilities: (platform) => builtinExecutionBackendCapabilities('wsl', platform),
+  spawnSpec: (input) => {
+    const script = `cd ${shellSingleQuote(toWslPath(input.cwd))} && ${input.command}`
+    return [
+      'wsl.exe',
+      ['bash', '-lc', script],
+      {
+        cwd: input.cwd,
+        shell: false,
+        windowsHide: true,
+        env: input.env,
+      },
+    ]
+  },
+}
+
+const dockerExecutionBackendAdapter: ExecutionBackendAdapter = {
+  key: 'docker',
+  label: () => 'Docker Linux container',
+  inspect: inspectDockerBackend,
+  capabilities: (platform) => builtinExecutionBackendCapabilities('docker', platform),
+  spawnSpec: (input) => {
+    const workspaceRoot = fs.realpathSync.native(input.workspaceRoot)
+    const relative = path.relative(workspaceRoot, input.cwd).replace(/\\/g, '/')
+    const containerCwd = relative && !relative.startsWith('..') ? `/workspace/${relative}` : '/workspace'
+    return [
+      'docker',
+      [
+        'run',
+        '--rm',
+        '--network',
+        'none',
+        '--security-opt',
+        'no-new-privileges',
+        '--cap-drop',
+        'ALL',
+        '--pids-limit',
+        '256',
+        '-v',
+        `${workspaceRoot}:/workspace`,
+        '-w',
+        containerCwd,
+        input.dockerImage ?? 'node:22-alpine',
+        'sh',
+        '-lc',
+        input.command,
+      ],
+      {
+        cwd: input.cwd,
+        shell: false,
+        windowsHide: true,
+        env: input.env,
+      },
+    ]
+  },
 }
 
 function compactReason(value: string): string | undefined {

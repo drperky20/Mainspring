@@ -221,6 +221,7 @@ describe('ToolRegistry', () => {
     })
     registry.registerMany(
       createBrowserTools({
+        networkTargetValidator: () => undefined,
         adapter: {
           open: (input) => {
             calls.push({ tool: 'open', input })
@@ -367,6 +368,7 @@ describe('ToolRegistry', () => {
     })
     registry.registerMany(
       createBrowserTools({
+        networkTargetValidator: () => undefined,
         adapter: {
           open: (input) => {
             currentUrl = input.url.includes('redirect') ? 'http://127.0.0.1:8787/admin' : input.url
@@ -429,6 +431,43 @@ describe('ToolRegistry', () => {
       'Browser current URL before screenshot cannot target private or local network hosts',
     )
     expect(screenshotCalls).toBe(0)
+  })
+
+  it('runs browser current URL network validation after adapter navigation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-browser-network-guard-'))
+    tempRoots.push(root)
+    const registry = new ToolRegistry({
+      runId: 'run_browser_network_guard',
+      workspaceRoot: root,
+      policy: RuntimePolicyGuard.defaultPolicy({
+        approvalPolicy: 'balanced',
+        allowedTools: ['browser.open'],
+      }),
+    })
+    registry.registerMany(
+      createBrowserTools({
+        adapter: {
+          open: () => ({ opened: true }),
+          currentUrl: () => 'https://rebind.example/',
+          screenshot: () => ({ artifactId: 'unused' }),
+        },
+        networkTargetValidator: () => {
+          throw new Error('Resolved private network target rebind.example.')
+        },
+      }),
+    )
+
+    await expect(
+      registry.execute({
+        key: 'browser.open',
+        input: { url: 'https://rebind.example/' },
+        approvalReceipt: approvalFor(
+          'browser.open',
+          { url: 'https://rebind.example/' },
+          { runId: 'run_browser_network_guard' },
+        ),
+      }),
+    ).rejects.toThrow('Resolved private network target rebind.example.')
   })
 
   it('executes approved shell commands with bounded native output', async () => {
@@ -1365,6 +1404,30 @@ describe('ToolRegistry', () => {
         text: 'Example Hello web',
       },
     })
+  })
+
+  it('blocks web fetches when the connection lookup resolves to a private address', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-web-lookup-guard-'))
+    tempRoots.push(root)
+    const registry = new ToolRegistry({
+      runId: 'run_web_lookup_guard',
+      workspaceRoot: root,
+      policy: RuntimePolicyGuard.defaultPolicy({
+        approvalPolicy: 'balanced',
+        allowedTools: ['web.fetch'],
+      }),
+    })
+    registry.registerMany(
+      createWebTools({
+        lookup: (_hostname, _options, callback) => {
+          callback(null, '127.0.0.1', 4)
+        },
+      }),
+    )
+
+    await expect(
+      registry.execute({ key: 'web.fetch', input: { url: 'http://example.com/' } }),
+    ).rejects.toThrow('Resolved private network target example.com')
   })
 
   it('executes bounded public web searches through native policy', async () => {

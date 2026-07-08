@@ -47,9 +47,14 @@ export {
 
 export { EchoProvider } from './providers/EchoProvider.js'
 export { MockProvider } from './providers/MockProvider.js'
-export { ProviderRegistry, createDefaultProviderRegistry } from './providers/ProviderRegistry.js'
+export {
+  ProviderRegistry,
+  assertSafeProviderId,
+  createDefaultProviderRegistry,
+} from './providers/ProviderRegistry.js'
 export type {
   DefaultProviderRegistryOptions,
+  ProviderFactory,
   ProviderRegistration,
   ProviderResolveInput,
 } from './providers/ProviderRegistry.js'
@@ -62,6 +67,7 @@ export type { ProviderShellConfig } from './providers/ProviderShell.js'
 export type {
   AgentProvider,
   AgentQuery,
+  ProviderAdapterCapabilities,
   ProviderEvent,
   QueryInput,
   RuntimeCredentialRef,
@@ -334,12 +340,22 @@ export { createShellTool } from './tools/ShellTool.js'
 export {
   backendPreferenceFromComputerId,
   backendSummaryLine,
+  assertSafeExecutionBackendId,
+  createDefaultExecutionBackendRegistry,
   inspectExecutionBackends,
+  getDefaultExecutionBackendRegistry,
   parseExecutionBackendPreference,
   resolveExecutionBackend,
+  ExecutionBackendRegistry,
 } from './tools/ExecutionBackend.js'
 export type {
+  BuiltinProcessExecutionBackend,
+  ExecutionBackendAdapter,
+  ExecutionBackendCapabilities,
+  ExecutionBackendCapabilitySummary,
   ExecutionBackendInventory,
+  ExecutionBackendSpawnSpec,
+  ExecutionBackendSpawnSpecInput,
   ExecutionBackendStatus,
   ProcessExecutionBackend,
   ProcessExecutionBackendPreference,

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
+import { MainspringRuntimeProfileIdSchema } from '#protocol'
 
 const TemplateSeedFileSchema = z.object({
   source: z.string().trim().min(1),
@@ -44,7 +45,7 @@ export interface LocalMarketplaceTemplateRecord {
   exampleDir: string
   providerId?: string
   modelId?: string
-  runtimeProfile?: 'core' | 'core-browser' | 'core-browser-memory'
+  runtimeProfile?: string
   allowedTools: string[]
   approvalMode?: string
   defaults: z.infer<typeof TemplateDefaultsSchema>
@@ -95,6 +96,7 @@ export function installLocalMarketplaceTemplate(input: {
   repoRoot: string
   templateId: string
   workspaceRoot: string
+  workspaceBaseRoot?: string
 }): InstallLocalMarketplaceTemplateResult {
   const template = listLocalMarketplaceTemplates(input.repoRoot).find(
     (candidate) => candidate.templateId === input.templateId,
@@ -102,7 +104,28 @@ export function installLocalMarketplaceTemplate(input: {
   if (!template) throw new Error(`Unknown marketplace template: ${input.templateId}`)
   const exampleRoot = safeExampleRoot(input.repoRoot, template.exampleDir)
   const workspaceRoot = path.resolve(input.workspaceRoot)
+  const workspaceBaseRoot = input.workspaceBaseRoot
+    ? path.resolve(input.workspaceBaseRoot)
+    : undefined
+  if (workspaceBaseRoot) {
+    assertContained(workspaceBaseRoot, workspaceRoot, 'Marketplace workspace root escapes the gateway workspace base.')
+    const existing = nearestExistingPath(workspaceRoot)
+    if (existing) {
+      assertContained(
+        fs.realpathSync.native(workspaceBaseRoot),
+        fs.realpathSync.native(existing),
+        'Marketplace workspace root escapes the gateway workspace base.',
+      )
+    }
+  }
   fs.mkdirSync(workspaceRoot, { recursive: true })
+  if (workspaceBaseRoot) {
+    assertContained(
+      fs.realpathSync.native(workspaceBaseRoot),
+      fs.realpathSync.native(workspaceRoot),
+      'Marketplace workspace root escapes the gateway workspace base.',
+    )
+  }
   const installedFiles: string[] = []
   for (const seedFile of template.seedFiles) {
     const sourcePath = path.resolve(exampleRoot, seedFile.source)
@@ -162,18 +185,21 @@ function assertContained(root: string, target: string, message: string): void {
   }
 }
 
-function normalizeRuntimeProfile(
-  value: string | undefined,
-): 'core' | 'core-browser' | 'core-browser-memory' | undefined {
+function nearestExistingPath(target: string): string | null {
+  let current = path.resolve(target)
+  for (;;) {
+    if (fs.existsSync(current)) return current
+    const parent = path.dirname(current)
+    if (parent === current) return null
+    current = parent
+  }
+}
+
+function normalizeRuntimeProfile(value: string | undefined): string | undefined {
   if (!value) return undefined
   const normalized = value.trim().toLowerCase()
-  if (
-    normalized === 'core'
-    || normalized === 'core-browser'
-    || normalized === 'core-browser-memory'
-  ) {
-    return normalized
-  }
   if (normalized === 'core-memory') return 'core'
-  return undefined
+  return MainspringRuntimeProfileIdSchema.safeParse(normalized).success
+    ? normalized
+    : undefined
 }

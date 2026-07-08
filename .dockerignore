@@ -1,0 +1,15 @@
+.git
+.mainspring
+node_modules
+apps/*/node_modules
+dist
+apps/*/dist
+coverage
+.turbo
+.vite
+.cache
+*.log
+npm-debug.log*
+pnpm-debug.log*
+Dockerfile
+docker-compose*.yml

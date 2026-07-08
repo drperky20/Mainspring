@@ -2,6 +2,7 @@ import type { AgentProvider, ProviderEvent } from '../providers/types.js'
 import type { ContextEncodedRunEventPayload } from '../context/types.js'
 import type {
   MainspringRuntimeProfile,
+  RunIntentMode,
   ProviderRateLimitState,
   RunContextPack,
   RuntimePolicy,
@@ -290,7 +291,7 @@ export interface StartRunInput {
   credentialRef?: string
   modelId?: string
   runtimeProfile?: MainspringRuntimeProfile
-  mode?: 'chat' | 'task'
+  mode?: RunIntentMode
   approvalPolicy?: RuntimePolicy['approvalPolicy']
   allowBrowser?: boolean
   allowMemory?: boolean

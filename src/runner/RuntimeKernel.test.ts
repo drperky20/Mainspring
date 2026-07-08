@@ -249,6 +249,7 @@ class ToolCallingProvider implements AgentProvider {
 
 class ReplayAwareToolProvider implements AgentProvider {
   readonly providerId = 'openrouter'
+  readonly capabilities = { structuredReplay: true }
   readonly queries: PushQuery[] = []
 
   query(input: QueryInput): AgentQuery {
