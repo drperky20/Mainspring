@@ -2438,8 +2438,7 @@ button:disabled,
 
 .client-layout,
 .chat-grid,
-.automation-grid,
-.settings-grid {
+.automation-grid {
   display: grid;
   gap: 16px;
 }
@@ -3500,10 +3499,6 @@ button:disabled,
   color: var(--simple-ink);
 }
 
-.settings-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 .access-panel {
   align-content: start;
 }
@@ -3521,44 +3516,9 @@ button:disabled,
   gap: 10px;
 }
 
-.settings-section.wide {
-  grid-column: 1 / -1;
-}
-
-.provider-catalog-grid,
 .provider-picker {
   display: grid;
   gap: 10px;
-}
-
-.provider-catalog-grid {
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-}
-
-.catalog-card {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 12px;
-  border: 1px solid var(--simple-line);
-  border-radius: 8px;
-  background: #fbfcfd;
-  padding: 12px;
-}
-
-.catalog-card div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.catalog-card p {
-  margin: 4px 0 0;
-  font-size: 13px;
-}
-
-.catalog-card span {
-  color: var(--simple-muted);
-  font-size: 13px;
 }
 
 .provider-badge {
@@ -3586,22 +3546,6 @@ button:disabled,
   max-width: 24px;
   max-height: 24px;
   object-fit: contain;
-}
-
-.provider-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-
-.provider-row span {
-  display: grid;
-  gap: 2px;
-}
-
-.provider-row em {
-  color: var(--simple-muted);
-  font-size: 12px;
-  font-style: normal;
 }
 
 .provider-picker {
@@ -3764,8 +3708,7 @@ button:disabled,
   .chat-grid,
   .agent-builder,
   .automation-workspace,
-  .automation-grid,
-  .settings-grid {
+  .automation-grid {
     grid-template-columns: 1fr;
   }
 
@@ -3864,7 +3807,6 @@ button:disabled,
   .node-canvas,
   .access-grid,
   .access-link-row,
-  .provider-catalog-grid,
   .provider-picker {
     grid-template-columns: 1fr;
   }

@@ -1,4 +1,4 @@
-import type { DragEvent, ReactNode } from 'react'
+import type { DragEvent } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ConsoleGatewayRunEvent, ConsoleGatewaySnapshot } from 'mainspring/gateway'
 import {
@@ -6,7 +6,6 @@ import {
   type LocalGatewayClient,
 } from './localGatewayClient'
 import {
-  ProviderBadge,
   ProviderForm,
   providerCatalog,
   providerModels,
@@ -50,11 +49,20 @@ import {
   ApprovalsScreen,
   ConnectionNotice,
   ConsoleConnectionScreen,
-  type ConsoleConnectionState,
   OverviewScreen,
   RunsScreen,
   UsageScreen,
 } from './OperatorConsoleScreens'
+import { InfoRow, SettingsScreen } from './ConsoleSettings'
+import {
+  ActionRail,
+  Dialog,
+  FragmentWithEdge,
+  ToolToggle,
+  shortId,
+  toolTone,
+  type AutomationNode,
+} from './ConsoleWorkflowPrimitives'
 import {
   buildOperatorRunLogRows,
   buildOperatorCompatibilityRunRows,
@@ -76,15 +84,6 @@ type AgentDraft = {
   skills: Record<string, boolean>
 }
 
-type AutomationNode = {
-  id: string
-  title: string
-  detail: string
-  strong?: boolean
-  tone?: 'agent' | 'prompt' | 'read' | 'write' | 'browser' | 'voice' | 'web'
-}
-
-type HealthAuth = Awaited<ReturnType<LocalGatewayClient['health']>>['auth']
 type SnapshotClient = ConsoleGatewaySnapshot['clients'][number]
 type SnapshotWorkspace = ConsoleGatewaySnapshot['workspaces'][number]
 type SnapshotAgent = ConsoleGatewaySnapshot['agents'][number]
@@ -1450,292 +1449,6 @@ function AccessPanel({
   )
 }
 
-function SettingsScreen({
-  auth,
-  connectionError,
-  connectionState,
-  gatewayUrl,
-  lastUpdatedAt,
-  providers,
-  selectedProviderId,
-  setup,
-  onGatewayUrl,
-  onNewProvider,
-  onProvider,
-  onResetSetup,
-}: {
-  auth?: HealthAuth
-  connectionError?: string
-  connectionState: ConsoleConnectionState
-  gatewayUrl: string
-  lastUpdatedAt?: string
-  providers: SnapshotProvider[]
-  selectedProviderId?: string
-  setup: SetupState
-  onGatewayUrl: (value: string) => void
-  onNewProvider: () => void
-  onProvider: (profileId: string) => void
-  onResetSetup: () => void
-}) {
-  const [gatewayDraft, setGatewayDraft] = useState(gatewayUrl)
-
-  useEffect(() => {
-    setGatewayDraft(gatewayUrl)
-  }, [gatewayUrl])
-
-  return (
-    <section className="settings-screen">
-      <header className="screen-header">
-        <div>
-          <p>{setup.accountName}</p>
-          <h1>Settings</h1>
-        </div>
-        <button className="simple-secondary" type="button" onClick={onNewProvider}>Connect service</button>
-      </header>
-      <div className="settings-grid">
-        <section className="settings-section">
-          <h2>Gateway</h2>
-          <label>
-            Local gateway URL
-            <span className="settings-inline-field">
-              <input value={gatewayDraft} onChange={(event) => setGatewayDraft(event.target.value)} />
-              <button
-                className="simple-secondary"
-                disabled={gatewayDraft.trim().replace(/\/+$/, '') === gatewayUrl}
-                type="button"
-                onClick={() => onGatewayUrl(gatewayDraft)}
-              >
-                Apply
-              </button>
-            </span>
-          </label>
-          <InfoRow label="Connection" value={connectionState} />
-          <InfoRow label="Auth mode" value={auth?.authMode ?? 'local-dev'} />
-          <InfoRow label="Signed in" value={!auth || auth.authenticated || auth.authMode === 'local-dev' ? 'yes' : 'no'} />
-          <InfoRow label="Gateway role" value={auth?.user?.role ?? (auth?.authMode === 'hosted' ? 'signed out' : 'local admin')} />
-          <InfoRow label="Last snapshot" value={lastUpdatedAt ?? 'Not loaded'} />
-          {connectionError ? <p className="settings-error" role="status">{connectionError}</p> : null}
-          <button className="simple-text" type="button" onClick={onResetSetup}>Run setup again</button>
-        </section>
-        <section className="settings-section">
-          <div className="mini-head">
-            <h2>Connected services</h2>
-            <button className="simple-text" type="button" onClick={onNewProvider}>Add</button>
-          </div>
-          {providers.length === 0 ? (
-            <p>No services connected yet.</p>
-          ) : providers.map((profile) => (
-            <button
-              className={profile.profileId === selectedProviderId ? 'provider-row active' : 'provider-row'}
-              key={profile.profileId}
-              type="button"
-              onClick={() => onProvider(profile.profileId)}
-            >
-              <ProviderBadge providerId={profile.providerId} />
-              <span>
-                <strong>{profile.label}</strong>
-                <small>{profile.providerId} | {profile.credentialState}</small>
-              </span>
-              <em>{profile.defaultModelId ?? 'model unset'}</em>
-            </button>
-          ))}
-        </section>
-        <section className="settings-section wide">
-          <h2>Provider paths</h2>
-          <div className="provider-catalog-grid">
-            {providerCatalog.map((provider) => (
-              <article className="catalog-card" key={provider.id}>
-                <ProviderBadge providerId={provider.id} />
-                <div>
-                  <strong>{provider.label}</strong>
-                  <span>{provider.setup}</span>
-                  <p>{provider.note}</p>
-                </div>
-                <small>{provider.status}</small>
-              </article>
-            ))}
-          </div>
-        </section>
-      </div>
-    </section>
-  )
-}
-
-function ActionRail({
-  compact = false,
-  lastRun,
-  runEvents,
-}: {
-  compact?: boolean
-  lastRun?: LastRunState
-  runEvents: ConsoleGatewayRunEvent[]
-}) {
-  const eventRows =
-    runEvents.length > 0
-      ? runEvents.slice(-8).reverse()
-      : lastRun
-        ? [{
-            type: 'run.started' as const,
-            runId: lastRun.runId,
-            sessionId: lastRun.sessionId,
-            payload: { prompt: lastRun.prompt },
-          }]
-        : []
-
-  return (
-    <aside className={compact ? 'action-rail compact' : 'action-rail'}>
-      {compact ? null : (
-        <div className="mini-head">
-          <h2>Actions</h2>
-          <span>{eventRows.length}</span>
-        </div>
-      )}
-      {eventRows.length === 0 ? (
-        compact ? (
-          <div className="run-ready-state">
-            <span>✓</span>
-            <strong>Ready to run</strong>
-            <p>Click Run to execute this automation. Activity will appear here.</p>
-          </div>
-        ) : (
-          <p>No run yet.</p>
-        )
-      ) : (
-        eventRows.map((event, index) => (
-          <article className="action-event" key={`${event.runId}:${event.type}:${event.seq ?? index}`}>
-            <span>{event.type}</span>
-            <strong>{shortId(event.runId)}</strong>
-            {'payload' in event && event.payload ? <small>{previewPayload(event.payload)}</small> : null}
-          </article>
-        ))
-      )}
-    </aside>
-  )
-}
-
-function Dialog({
-  children,
-  onClose,
-  title,
-}: {
-  children: ReactNode
-  onClose: () => void
-  title: string
-}) {
-  return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="dialog-card" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
-        <div className="mini-head">
-          <h2>{title}</h2>
-          <button className="icon-button" type="button" aria-label="Close" onClick={onClose}>x</button>
-        </div>
-        {children}
-      </section>
-    </div>
-  )
-}
-
-function ToolToggle({
-  checked,
-  description,
-  dragKey,
-  label,
-  onChange,
-  onDragComplete,
-  onPointerDragStart,
-}: {
-  checked: boolean
-  description: string
-  dragKey?: string
-  label: string
-  onChange: (checked: boolean) => void
-  onDragComplete?: () => void
-  onPointerDragStart?: () => void
-}) {
-  return (
-    <button
-      className={checked ? 'tool-toggle active' : 'tool-toggle'}
-      data-testid={dragKey ? `tool-${dragKey}` : undefined}
-      draggable={Boolean(dragKey)}
-      type="button"
-      onClick={() => onChange(!checked)}
-      onMouseDown={() => {
-        if (!dragKey) return
-        onPointerDragStart?.()
-      }}
-      onDragStart={(event) => {
-        if (!dragKey) return
-        event.dataTransfer.setData('application/mainspring-tool', dragKey)
-        event.dataTransfer.effectAllowed = 'copy'
-      }}
-      onDragEnd={() => {
-        if (!dragKey) return
-        onDragComplete?.()
-      }}
-    >
-      <span className={`tool-node-icon ${toolTone(dragKey ?? '') ?? ''}`}>{nodeIcon(label, toolTone(dragKey ?? ''))}</span>
-      <span className="switch-dot" />
-      <strong>{label}</strong>
-      <small>{description}</small>
-    </button>
-  )
-}
-
-function FlowNode({
-  detail,
-  strong = false,
-  title,
-  tone,
-}: {
-  detail: string
-  strong?: boolean
-  title: string
-  tone?: AutomationNode['tone']
-}) {
-  return (
-    <div className={strong ? `flow-node strong ${tone ?? ''}` : `flow-node ${tone ?? ''}`}>
-      <span className="flow-node-icon">{nodeIcon(title, tone)}</span>
-      <strong>{title}</strong>
-      <span>{detail}</span>
-      <small>Ready</small>
-    </div>
-  )
-}
-
-function FragmentWithEdge({
-  detail,
-  isLast,
-  strong,
-  title,
-  tone,
-}: {
-  detail: string
-  isLast: boolean
-  strong?: boolean
-  title: string
-  tone?: AutomationNode['tone']
-}) {
-  return (
-    <>
-      <FlowNode detail={detail} strong={strong} title={title} tone={tone} />
-      {isLast ? null : <FlowEdge />}
-    </>
-  )
-}
-
-function FlowEdge() {
-  return <div className="flow-edge" aria-hidden="true" />
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="info-row">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  )
-}
-
 function findWorkspace(snapshot: ConsoleGatewaySnapshot | null, clientId?: string): SnapshotWorkspace | undefined {
   if (!snapshot || !clientId) return undefined
   return snapshot.workspaces.find((workspace) => workspace.clientId === clientId && workspace.status !== 'archived')
@@ -1771,26 +1484,6 @@ function promptSummary(prompt: string) {
   return trimmed.length > 30 ? `${trimmed.slice(0, 27)}...` : trimmed
 }
 
-function toolTone(key: string): AutomationNode['tone'] {
-  if (key === 'agent') return 'agent'
-  if (key === 'prompt') return 'prompt'
-  if (key === 'file.read') return 'read'
-  if (key === 'file.write') return 'write'
-  if (key === 'browser.screenshot') return 'browser'
-  if (key === 'voice.call') return 'voice'
-  return 'web'
-}
-
-function nodeIcon(title: string, tone?: AutomationNode['tone']) {
-  if (tone === 'agent') return 'A'
-  if (tone === 'prompt') return 'P'
-  if (tone === 'read') return 'R'
-  if (tone === 'write') return 'W'
-  if (tone === 'browser') return 'B'
-  if (tone === 'voice') return 'V'
-  return title.slice(0, 1).toUpperCase()
-}
-
 function agentDraft(agent?: SnapshotAgent, provider?: SnapshotProvider): AgentDraft {
   return {
     name: agent?.name ?? 'Client operator',
@@ -1818,21 +1511,6 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '')
     || 'client'
-}
-
-function shortId(value?: string): string {
-  if (!value) return 'run'
-  const parts = value.split('_')
-  return parts.length > 1 ? parts.slice(-1)[0] : value.slice(0, 8)
-}
-
-function previewPayload(payload: unknown): string {
-  try {
-    const value = JSON.stringify(payload)
-    return value.length > 110 ? `${value.slice(0, 107)}...` : value
-  } catch {
-    return String(payload)
-  }
 }
 
 function errorMessage(error: unknown): string {

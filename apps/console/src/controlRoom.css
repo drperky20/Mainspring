@@ -1458,7 +1458,6 @@ button.control-data-row:hover {
 .flow-node,
 .zoom-control,
 .workspace-selector,
-.catalog-card,
 .provider-badge.has-logo {
   border-color: var(--simple-line);
   background: #101516;
@@ -1474,7 +1473,6 @@ button.control-data-row:hover {
 .setup-steps,
 .message-feed,
 .action-event,
-.catalog-card,
 .workspace-mode,
 .node-canvas {
   background-color: #0c1112;
@@ -1549,19 +1547,6 @@ button.control-data-row:hover {
 .dialog-backdrop {
   background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(7px);
-}
-
-.settings-inline-field {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-}
-
-.settings-error {
-  border-left: 2px solid var(--simple-danger);
-  color: #e6a39c;
-  padding-left: 10px;
-  font-size: 11px;
 }
 
 .simple-toast {
@@ -1664,9 +1649,7 @@ button.control-data-row:hover {
   .control-approval-grid,
   .control-budget-grid,
   .control-run-list,
-  .control-run-facts,
-  .settings-grid,
-  .settings-inline-field {
+  .control-run-facts {
     grid-template-columns: 1fr;
   }
 
