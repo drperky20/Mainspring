@@ -131,6 +131,9 @@ Gateway RunLog routes are local development surfaces. They do not create a hoste
 pool, do not change host execution limits, and do not create a multi-tenant control plane.
 
 Browser-facing gateway data must omit secrets, host paths, database paths, provider key environment markers, and backend internals. Gateway JSON/SSE sanitization redacts common browser-unsafe field markers, provider key environment markers, and host absolute paths embedded in free text before writing browser responses.
+The same sanitizer applies to HTTP error bodies, including errors triggered by an
+invalid identifier, rather than treating failures as an exception to the
+browser boundary.
 
 Hosted browser-access URLs are short-lived local bearer URLs for artifact preview/download and SSE reads. They are minted only after normal gateway auth, and ticketed reads reject extra auth-like query parameters such as session-token or OAuth token fields. For a scoped SSE request, the gateway resolves the supplied RunLog run directly from its canonical store before falling back to a compatibility run, then binds the ticket to that exact session/run pair.
 

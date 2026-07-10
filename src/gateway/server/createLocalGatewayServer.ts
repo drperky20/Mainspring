@@ -1097,7 +1097,11 @@ export class LocalGatewayHttpServer {
       throw new GatewayHttpError(404, `Unknown route: ${request.method ?? 'GET'} ${path}`)
     } catch (error) {
       const httpError = asGatewayHttpError(error)
-      this.writeJson(response, httpError.statusCode, { error: httpError.message })
+      this.writeJson(
+        response,
+        httpError.statusCode,
+        sanitizeGatewayResponse({ error: httpError.message }),
+      )
     }
   }
 

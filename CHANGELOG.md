@@ -22,3 +22,4 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 
 ### Security
 - Security language now consistently states that host shell execution is not a sandbox and browser-side provider auth remains prototype-only.
+- Gateway error bodies now pass through the same path/credential sanitizer as successful browser responses.

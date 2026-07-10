@@ -46,6 +46,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - Browser-facing RunLog event responses include only explicitly `public` events. `sensitive` and `artifact-only` event payloads remain host/SDK-only, and artifact-only records are not promoted through the generic event endpoint.
   - Event-stream browser-access target validation resolves a supplied canonical RunLog run from the durable store before falling back to a compatibility run, and only issues a scoped URL when its session/run pair matches. Hosted mode represents that URL with a short-lived ticket; session-only targets retain legacy session validation and global snapshot streams remain supported.
   - Gateway JSON bodies are bounded to 1 MiB before parsing, including streamed requests with missing or misleading `Content-Length` headers.
+  - Gateway HTTP error bodies pass through the same browser-response sanitizer as successful DTOs, so invalid identifiers and host-side failures cannot echo known path or credential markers into the renderer.
 - Console-facing RunLog projection:
   - `LocalMainspringGateway.snapshot()` can include an optional sanitized RunLog read model discovered from the durable RunLog store, including runs created outside gateway app-state metadata.
   - RunLog `usage.reported` events are synchronized into the gateway usage ledger so console totals, pricing, and budget transitions use canonical runtime facts.

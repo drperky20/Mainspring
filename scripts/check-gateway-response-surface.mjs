@@ -100,6 +100,21 @@ async function main() {
     const sessionId = createdClient.session.sessionId
     const workspaceId = createdClient.workspace.workspaceId
 
+    const unsafeArtifactAccess = await fetch(`${started.url}/auth/browser-access`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'artifact',
+        artifactId: `artifact filePath=${path.join(root, 'browser-surface-hidden-artifact.txt')}`,
+      }),
+    })
+    const unsafeArtifactAccessBody = await unsafeArtifactAccess.json()
+    assert(unsafeArtifactAccess.status === 404, 'unsafe artifact identifier did not fail validation')
+    assertNoBrowserLeak('unsafe artifact access error response', unsafeArtifactAccessBody, [
+      root.replaceAll('\\', '\\\\'),
+      'browser-surface-hidden-artifact.txt',
+    ])
+
     const memoryPath = path.join(clientWorkspaceRoot, '.mainspring', 'memory.jsonl')
     fs.mkdirSync(path.dirname(memoryPath), { recursive: true })
     fs.writeFileSync(memoryPath, `${JSON.stringify({

@@ -1682,6 +1682,14 @@ describe('LocalGatewayHttpServer', () => {
       expect(unknownAgent.response.status).toBe(400)
       expect(unknownAgent.body).toEqual({ error: 'Unknown gateway agent: agent_missing' })
 
+      const unsafeAgentId = `agent filePath=${path.join(root, 'private-agent.txt')}`
+      const unsafeAgent = await request({ agentId: unsafeAgentId })
+      expect(unsafeAgent.response.status).toBe(400)
+      expect(unsafeAgent.body.error).toContain('[redacted]')
+      expect(unsafeAgent.body.error).not.toContain('filePath')
+      expect(unsafeAgent.body.error).not.toContain('private-agent.txt')
+      expect(unsafeAgent.body.error).not.toContain(root.replaceAll('\\', '\\\\'))
+
       const sessionWorkspaceMismatch = await request({
         workspaceId: workspaceTwo.workspaceId,
         agentId: undefined,
