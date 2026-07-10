@@ -6,7 +6,7 @@ The console lives in `apps/console` and is live-gateway-first. Its main product 
 
 - complete a first-run setup wizard for the local account and model service
 - create and manage clients; each client gets a default workspace and first agent
-- use Overview, Clients, Runs, Approvals, Usage, and Settings as the global operator navigation
+- use Home, Workspaces, Activity, and Settings as the global operator navigation; runs, approvals, and usage are Activity views
 - edit client details, workspace prompt, agent system prompt, model, tool toggles, and approval mode
 - chat with the selected client's agent through the gateway run API
 - test client-scoped automations through a simple node board and visible action rail
@@ -18,6 +18,15 @@ The console lives in `apps/console` and is live-gateway-first. Its main product 
 - review scoped cron grants and staged memory/skill provenance mutations
 
 The console renders gateway DTOs and contains browser-edge regression guards for unsafe response fields, path markers, provider key environment markers, artifact URLs, SSE URLs, and localhost gateway URL selection.
+
+`useGatewaySnapshot` owns the gateway refresh lifecycle. It performs an
+immediate health plus conditional snapshot read, retains only the last safe
+projection and ETag in memory, aborts obsolete reads, avoids overlapping
+requests, backs off after failures, and refreshes less frequently while the
+page is hidden. The gateway returns `304` without a body when its sanitized
+projection revision is unchanged. `ConsoleNavigation` owns primary/activity
+navigation and `useConsoleRunActivity` owns run-scoped SSE/fallback polling and
+chat-event state.
 
 When the local gateway is configured with a RunLog host, the gateway snapshot can include an optional sanitized projection discovered from the durable RunLog store. The console overview, runs, approvals, and usage screens consume that projection while preserving the browser DTO boundary.
 Run, approval, usage, artifact, and session trace views use that sanitized projection;

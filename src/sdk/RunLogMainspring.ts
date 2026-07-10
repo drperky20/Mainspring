@@ -48,6 +48,11 @@ export interface CreateRunLogMainspringOptions {
   secretResolver?: RuntimeSecretResolver
   workerId?: string
   leaseMs?: number
+  maxConcurrentRuns?: number
+  pollIntervalMs?: number
+  heartbeatIntervalMs?: number
+  retryBaseMs?: number
+  retryCapMs?: number
   maxToolIterations?: number
 }
 
@@ -147,6 +152,11 @@ export class RunLogMainspring {
       secretResolver: options.secretResolver,
       workerId: options.workerId,
       leaseMs: options.leaseMs,
+      maxConcurrentRuns: options.maxConcurrentRuns,
+      pollIntervalMs: options.pollIntervalMs,
+      heartbeatIntervalMs: options.heartbeatIntervalMs,
+      retryBaseMs: options.retryBaseMs,
+      retryCapMs: options.retryCapMs,
       maxToolIterations: options.maxToolIterations,
     })
 

@@ -17,6 +17,7 @@ export interface RunLogKernelOptions extends Omit<RunExecutorOptions, 'store'> {
   leaseMs?: number
   now?: () => Date
   random?: () => number
+  maxConcurrentRuns?: number
   pollIntervalMs?: number
   heartbeatIntervalMs?: number
   retryBaseMs?: number
@@ -49,6 +50,7 @@ export class RunLogKernel {
       leaseMs: options.leaseMs,
       now: options.now,
       random: options.random,
+      maxConcurrentRuns: options.maxConcurrentRuns,
       pollIntervalMs: options.pollIntervalMs,
       heartbeatIntervalMs: options.heartbeatIntervalMs,
       retryBaseMs: options.retryBaseMs,
@@ -148,10 +150,10 @@ export class RunLogKernel {
 
   async drainUntilIdle(maxRuns = 100): Promise<RunExecutionSummary[]> {
     const summaries: RunExecutionSummary[] = []
-    for (let index = 0; index < maxRuns; index += 1) {
-      const summary = await this.drainOnce()
-      if (!summary) break
-      summaries.push(summary)
+    while (summaries.length < maxRuns) {
+      const batch = await this.worker.drainAvailable(maxRuns - summaries.length)
+      if (batch.length === 0) break
+      summaries.push(...batch)
     }
     return summaries
   }

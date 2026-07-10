@@ -37,6 +37,13 @@ SqliteRunLogStore.enqueueDueCronRuns
 - `src/capabilities/cron/RunLogCron.ts` creates scoped headless grants and cron enqueue decisions.
 - `src/hosts/runlog/RunLogProjection.ts` projects run events into a host-friendly read model.
 
+`RunLogWorker` defaults to one active claim, but hosts may set a bounded
+`maxConcurrentRuns` value. The worker fills available slots with independently
+fenced claims and keeps lease heartbeats/cancellation/retry handling per run.
+Within one process, `RunLogExecutor` queues runs for the same workspace so
+concurrent configuration does not turn conflicting local workspace work into
+parallel side effects. This is not distributed workspace locking.
+
 ## Event Boundaries
 
 RunLog events are append-only. Important event families:

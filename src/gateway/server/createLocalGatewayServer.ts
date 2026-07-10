@@ -1,6 +1,6 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import fs from 'node:fs'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { URL } from 'node:url'
 import {
   consoleAgent,
@@ -25,6 +25,7 @@ import {
   consoleWorkspace,
   gatewaySnapshotToConsoleState,
   gatewaySnapshotToExecutionBackendStatus,
+  type ConsoleGatewaySnapshot,
   type LocalGatewayEventListInput,
 } from '../index.js'
 import type { LocalMainspringGateway } from '../LocalGateway.js'
@@ -177,6 +178,11 @@ export class LocalGatewayHttpServer {
   private readonly hostedAuth: HostedGatewayAuthManager | null
   private readonly trustedHostedOrigins: Set<string>
   private readonly browserAccessTickets = new Map<string, BrowserAccessTicket>()
+  private consoleSnapshotCache?: {
+    revision: string
+    snapshot: ConsoleGatewaySnapshot
+    etag: string
+  }
 
   constructor(private readonly options: CreateLocalGatewayServerOptions) {
     this.host = options.host ?? '127.0.0.1'
@@ -269,7 +275,7 @@ export class LocalGatewayHttpServer {
       const path = url.pathname
 
       if (request.method === 'GET' && path === '/health') {
-        const health = this.options.gateway.snapshot().health
+        const health = this.options.gateway.health()
         this.writeJson(response, 200, {
           mode: this.authMode === 'hosted' ? 'local-gateway-hosted' : 'local-gateway-dev',
           host: this.host,
@@ -416,11 +422,7 @@ export class LocalGatewayHttpServer {
       }
 
       if (request.method === 'GET' && path === '/snapshot') {
-        this.writeJson(
-          response,
-          200,
-          gatewaySnapshotToConsoleState(this.options.gateway.snapshot()),
-        )
+        this.writeConsoleSnapshot(request, response)
         return
       }
 
@@ -1452,6 +1454,40 @@ export class LocalGatewayHttpServer {
     response.end(body)
   }
 
+  /**
+   * The console keeps the ETag only in memory and revalidates its last safe
+   * projection. The body remains no-store because even sanitized local
+   * operator state should not be retained by an intermediary cache.
+   */
+  private writeConsoleSnapshot(request: IncomingMessage, response: ServerResponse): void {
+    const revision = this.options.gateway.snapshotRevision()
+    let cached = this.consoleSnapshotCache
+    if (!cached || cached.revision !== revision) {
+      const snapshot = gatewaySnapshotToConsoleState(this.options.gateway.snapshot())
+      // A projection can synchronize durable derived state as part of its
+      // construction. Store the post-projection token so that synchronization
+      // itself does not invalidate the cache on the next unchanged request.
+      cached = {
+        revision: this.options.gateway.snapshotRevision(),
+        snapshot,
+        etag: consoleSnapshotEtag(snapshot),
+      }
+      this.consoleSnapshotCache = cached
+    }
+    const { snapshot, etag } = cached
+    const headers = {
+      'cache-control': 'no-store',
+      etag,
+      vary: 'authorization, origin',
+    }
+    if (requestEtagMatches(request, etag)) {
+      response.writeHead(304, headers)
+      response.end()
+      return
+    }
+    this.writeJson(response, 200, snapshot, headers)
+  }
+
   private async writeArtifact(
     response: ServerResponse,
     artifactId: string,
@@ -1605,6 +1641,25 @@ interface OpenRouterCatalogModel {
     completion?: string
     request?: string
   }
+}
+
+function consoleSnapshotEtag(snapshot: unknown): string {
+  const record = snapshot && typeof snapshot === 'object'
+    ? snapshot as { generatedAt?: unknown }
+    : {}
+  const { generatedAt: _generatedAt, ...stableProjection } = record
+  const content = JSON.stringify(sanitizeGatewayResponse(stableProjection))
+  const digest = createHash('sha256').update(content).digest('base64url')
+  return `"${digest}"`
+}
+
+function requestEtagMatches(request: IncomingMessage, etag: string): boolean {
+  const header = request.headers['if-none-match']
+  if (typeof header !== 'string') return false
+  return header.split(',').some((value) => {
+    const candidate = value.trim()
+    return candidate === '*' || candidate === etag
+  })
 }
 
 function openRouterCatalogModel(value: unknown): OpenRouterCatalogModel | undefined {

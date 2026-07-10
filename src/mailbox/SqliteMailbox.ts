@@ -51,6 +51,11 @@ export interface RecoverStaleProcessingAcksOptions {
 }
 
 const DEFAULT_STALE_PROCESSING_ACK_MS = 15 * 60 * 1000
+let mailboxChangeRevision = 0
+
+function recordMailboxMutation(): void {
+  mailboxChangeRevision += 1
+}
 
 function redactRuntimeProviderSessionIds(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -101,6 +106,15 @@ export class MainspringMailbox {
 
   static fromSessionPath(sessionPath: string): MainspringMailbox {
     return new MainspringMailbox(resolveSessionMailboxPaths(sessionPath))
+  }
+
+  /**
+   * Process-local mutation token for lightweight host projections. It is not
+   * persisted and therefore must be paired with a compatibility probe when a
+   * separate legacy process can write mailbox databases.
+   */
+  static changeRevision(): number {
+    return mailboxChangeRevision
   }
 
   ensureRunnerOwnedStores(): void {
@@ -178,6 +192,7 @@ export class MainspringMailbox {
         )
         .run(messageId, status, mailboxNowIso(), error ? redactRuntimeSensitiveText(error) : null),
     )
+    recordMailboxMutation()
   }
 
   recoverStaleProcessingAcks(options: RecoverStaleProcessingAcksOptions = {}): number {
@@ -188,7 +203,7 @@ export class MainspringMailbox {
     )
     const now = options.now ?? new Date()
     const recoveredAt = now.toISOString()
-    return withDb(this.paths.outboundDbPath, (db) => {
+    const recovered = withDb(this.paths.outboundDbPath, (db) => {
       const rows = db
         .prepare(
           `SELECT message_id, status_changed
@@ -221,6 +236,8 @@ export class MainspringMailbox {
       transaction(staleMessageIds)
       return staleMessageIds.length
     })
+    if (recovered > 0) recordMailboxMutation()
+    return recovered
   }
 
   writeOutbound(row: {
@@ -243,6 +260,7 @@ export class MainspringMailbox {
         )
         .run(id, row.runId, row.sessionId, row.inReplyTo ?? null, mailboxNowIso(), kind, content),
     )
+    recordMailboxMutation()
     return id
   }
 
@@ -339,7 +357,7 @@ export class MainspringMailbox {
     this.ensureRunnerOwnedStores()
     const parsed = MainspringEventSchema.parse(sanitizeStoredRuntimeValue(event))
     const runId = 'runId' in parsed && parsed.runId ? parsed.runId : 'system'
-    return withDb(this.paths.eventsDbPath, (db) => {
+    const sequence = withDb(this.paths.eventsDbPath, (db) => {
       const result = db
         .prepare(
           `INSERT INTO events_out (run_id, session_id, type, timestamp, payload)
@@ -348,6 +366,8 @@ export class MainspringMailbox {
         .run(runId, sessionId, parsed.type, mailboxNowIso(), JSON.stringify(parsed))
       return Number(result.lastInsertRowid)
     })
+    recordMailboxMutation()
+    return sequence
   }
 
   readRecentEvents(input: {
@@ -464,6 +484,7 @@ export class MainspringMailbox {
         )
         .run(id, row.runId, row.sessionId, row.kind, mailboxNowIso(), row.content),
     )
+    recordMailboxMutation()
     return id
   }
 

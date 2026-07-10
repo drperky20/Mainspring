@@ -570,6 +570,8 @@ export interface LocalGatewayAppStateStore {
   readonly schemaVersion: number
   readonly managedSecretKeyPath: string
   readonly managedSecretKeyStorage: ManagedSecretKeyStorageStatus
+  /** Monotonic for writes performed through this process-local store connection. */
+  revision(): number
   clients: {
     create(input: CreateLocalGatewayClientInput): LocalGatewayClientRecord
     update(input: UpdateLocalGatewayClientInput): LocalGatewayClientRecord
@@ -3384,6 +3386,11 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
       iv: row?.managed_secret_iv ?? null,
       authTag: row?.managed_secret_auth_tag ?? null,
     }
+  }
+
+  revision(): number {
+    const row = this.db.prepare('SELECT total_changes() AS changes').get() as { changes: number }
+    return Number(row.changes)
   }
 
   close(): void {

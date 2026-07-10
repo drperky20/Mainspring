@@ -4,8 +4,11 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SqliteRunLogStore } from '../adapters/sqlite/SqliteRunLogStore.js'
 import { MockProvider } from '../providers/MockProvider.js'
+import { RunLogExecutor } from './RunLogExecutor.js'
 import { RunLogKernel } from './RunLogKernel.js'
+import { RunLogWorker } from './RunLogWorker.js'
 import { SingleProviderRouter } from './ProviderRouter.js'
+import type { RunExecutionSummary } from './types.js'
 
 const roots: string[] = []
 const stores: SqliteRunLogStore[] = []
@@ -14,6 +17,15 @@ function root(): string {
   const value = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-worker-'))
   roots.push(value)
   return value
+}
+
+async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error(`Timed out waiting for ${label}.`)
 }
 
 afterEach(() => {
@@ -143,5 +155,57 @@ describe('durable RunLog worker', () => {
     })
     expect(store.listEvents({ runId: run.runId }).map((event) => event.type))
       .toEqual(expect.arrayContaining(['run.retry.scheduled', 'runtime.error', 'run.failed']))
+  })
+
+  it('fills configured worker capacity and drains the next queued claim after a slot frees', async () => {
+    const store = new SqliteRunLogStore({ dbPath: path.join(root(), 'runlog.sqlite') })
+    stores.push(store)
+    const kernel = new RunLogKernel({
+      store,
+      providerRouter: new SingleProviderRouter(new MockProvider([])),
+    })
+    kernel.putAgent({ agentId: 'concurrency-agent', instructions: 'Queue safely.' })
+    const first = kernel.startRun({ agentId: 'concurrency-agent', input: 'first' })
+    const second = kernel.startRun({ agentId: 'concurrency-agent', input: 'second' })
+    const third = kernel.startRun({ agentId: 'concurrency-agent', input: 'third' })
+    const started: string[] = []
+    const releases = new Map<string, () => void>()
+    const executor = {
+      execute: async (run: { runId: string }): Promise<RunExecutionSummary> => {
+        started.push(run.runId)
+        await new Promise<void>((resolve) => releases.set(run.runId, resolve))
+        return {
+          runId: run.runId,
+          status: 'completed',
+          eventsAppended: 0,
+          checkpointsAppended: 0,
+        }
+      },
+      cancel: (runId: string) => {
+        releases.get(runId)?.()
+        return true
+      },
+    } as unknown as RunLogExecutor
+    const worker = new RunLogWorker({
+      store,
+      executor,
+      workerId: 'concurrency-worker',
+      maxConcurrentRuns: 2,
+      pollIntervalMs: 10,
+    })
+
+    worker.start()
+    try {
+      await waitFor(() => started.length === 2, 'two concurrent executions')
+      expect(started).toEqual([first.runId, second.runId])
+      expect(started).not.toContain(third.runId)
+
+      releases.get(first.runId)?.()
+      await waitFor(() => started.length === 3, 'the next queued execution')
+      expect(started).toEqual([first.runId, second.runId, third.runId])
+    } finally {
+      for (const release of releases.values()) release()
+      await worker.stop()
+    }
   })
 })

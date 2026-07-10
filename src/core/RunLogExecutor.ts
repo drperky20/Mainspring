@@ -152,6 +152,48 @@ function publicApprovalRequestSnapshot(
   return publicSnapshot
 }
 
+type WorkspaceExecutionLock = {
+  release(): void
+}
+
+function workspaceExecutionKey(run: RunRecord): string | undefined {
+  if (run.workspaceRoot) return `root:${path.resolve(run.workspaceRoot)}`
+  return run.workspaceId ? `workspace:${run.workspaceId}` : undefined
+}
+
+function waitForWorkspaceTurn(predecessor: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(new RunLogExecutionError(
+      'RunLog execution was cancelled while waiting for its workspace turn.',
+      true,
+      'execution_aborted_waiting_for_workspace',
+    ))
+  }
+  return new Promise<void>((resolve, reject) => {
+    let settled = false
+    let onAbort: () => void
+    const cleanup = () => signal.removeEventListener('abort', onAbort)
+    const onReady = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve()
+    }
+    onAbort = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(new RunLogExecutionError(
+        'RunLog execution was cancelled while waiting for its workspace turn.',
+        true,
+        'execution_aborted_waiting_for_workspace',
+      ))
+    }
+    predecessor.then(onReady, onReady)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 export class RunLogExecutor {
   private readonly store: RunLogStore
   private readonly tools: RuntimeTool[]
@@ -159,7 +201,9 @@ export class RunLogExecutor {
   private readonly maxToolIterations: number
   private readonly activeQueries = new Map<string, AgentQuery>()
   private readonly activeToolControllers = new Map<string, AbortController>()
+  private readonly activeExecutionControllers = new Map<string, AbortController>()
   private readonly activeClaims = new Map<string, ExecutionClaim>()
+  private readonly workspaceExecutionQueues = new Map<string, Promise<void>>()
 
   constructor(private readonly options: RunExecutorOptions) {
     this.store = options.store
@@ -174,9 +218,11 @@ export class RunLogExecutor {
   cancel(runId: string): boolean {
     const query = this.activeQueries.get(runId)
     const toolController = this.activeToolControllers.get(runId)
+    const executionController = this.activeExecutionControllers.get(runId)
     if (query) this.abortQuery(runId, query)
     if (toolController) toolController.abort()
-    return Boolean(query || toolController)
+    if (executionController) executionController.abort()
+    return Boolean(query || toolController || executionController)
   }
 
   private abortQuery(runId: string, query: AgentQuery): void {
@@ -197,61 +243,78 @@ export class RunLogExecutor {
 
   async execute(run: RunRecord, claim?: ExecutionClaim): Promise<RunExecutionSummary> {
     if (claim) this.activeClaims.set(run.runId, claim)
-    const agent = this.store.getAgent(run.agentId)
-    if (!agent) throw new Error(`Unknown agent for run ${run.runId}: ${run.agentId}`)
+    const executionController = new AbortController()
+    this.activeExecutionControllers.set(run.runId, executionController)
     const eventsBefore = this.store.countEvents({ runId: run.runId })
     let checkpointsAppended = 0
     let workspaceLease: WorkspaceLease | null = null
+    let workspaceLock: WorkspaceExecutionLock | null = null
     let finalStatus = run.status
 
     try {
+      const agent = this.store.getAgent(run.agentId)
+      if (!agent) throw new Error(`Unknown agent for run ${run.runId}: ${run.agentId}`)
       const current = this.store.getRun(run.runId)
       if (!current) throw new Error(`Unknown run: ${run.runId}`)
       if (current.status !== 'running') {
         finalStatus = current.status
       } else {
-        workspaceLease = await this.leaseWorkspace(run, agent)
-        if (this.store.getRun(run.runId)?.status === 'cancelled') {
+        workspaceLock = await this.acquireWorkspaceExecutionLock(run, executionController.signal)
+        const afterLock = this.store.getRun(run.runId)
+        if (afterLock?.status === 'cancelled') {
           finalStatus = 'cancelled'
+        } else if (executionController.signal.aborted) {
+          throw new RunLogExecutionError(
+            'RunLog execution stopped before its workspace turn began.',
+            true,
+            'execution_aborted_before_workspace_lease',
+          )
         } else {
-          const allowedTools = effectiveAllowedTools(agent, run, this.options.policy)
-          const selectedTools = toolSchemaSubset(this.tools, allowedTools)
-          const policy = defaultPolicy(agent, run, this.options.policy)
-          const approvedReceipt = this.store.getApprovedUnusedReceipt(run.runId)
-
-          if (approvedReceipt) {
-            checkpointsAppended += await this.resumeApprovedTool({
-              run,
-              agent,
-              receipt: approvedReceipt,
-              workspaceLease,
-              selectedTools,
-              policy,
-            })
-            finalStatus = this.store.getRun(run.runId)?.status ?? 'failed'
+          workspaceLease = await this.leaseWorkspace(run, agent)
+          if (this.store.getRun(run.runId)?.status === 'cancelled') {
+            finalStatus = 'cancelled'
           } else {
-            const result = await this.runProviderQuery({
-              run,
-              agent,
-              workspaceRoot: workspaceLease.root,
-              selectedTools,
-              policy,
-              queryInput: providerQueryInput({
+            const allowedTools = effectiveAllowedTools(agent, run, this.options.policy)
+            const selectedTools = toolSchemaSubset(this.tools, allowedTools)
+            const policy = defaultPolicy(agent, run, this.options.policy)
+            const approvedReceipt = this.store.getApprovedUnusedReceipt(run.runId)
+
+            if (approvedReceipt) {
+              checkpointsAppended += await this.resumeApprovedTool({
+                run,
+                agent,
+                receipt: approvedReceipt,
+                workspaceLease,
+                selectedTools,
+                policy,
+              })
+              finalStatus = this.store.getRun(run.runId)?.status ?? 'failed'
+            } else {
+              const result = await this.runProviderQuery({
                 run,
                 agent,
                 workspaceRoot: workspaceLease.root,
-                tools: selectedTools,
-                secretResolver: this.options.secretResolver,
-              }),
-            })
-            checkpointsAppended += result.checkpointsAppended
-            finalStatus = result.status
+                selectedTools,
+                policy,
+                queryInput: providerQueryInput({
+                  run,
+                  agent,
+                  workspaceRoot: workspaceLease.root,
+                  tools: selectedTools,
+                  secretResolver: this.options.secretResolver,
+                }),
+              })
+              checkpointsAppended += result.checkpointsAppended
+              finalStatus = result.status
+            }
           }
         }
       }
     } catch (error) {
-      if (error instanceof RunLogExecutionError && error.retryable) throw error
       const current = this.store.getRun(run.runId)
+      if (error instanceof RunLogExecutionError && error.retryable && current?.status !== 'cancelled') {
+        throw error
+      }
       if (current?.status === 'cancelled' || current?.status === 'failed') {
         finalStatus = current.status
       } else {
@@ -279,6 +342,9 @@ export class RunLogExecutor {
       if (claim && this.activeClaims.get(run.runId) === claim) {
         this.activeClaims.delete(run.runId)
       }
+      if (this.activeExecutionControllers.get(run.runId) === executionController) {
+        this.activeExecutionControllers.delete(run.runId)
+      }
       if (workspaceLease) {
         await workspaceLease.release()
         this.store.appendEvent({
@@ -290,6 +356,7 @@ export class RunLogExecutor {
           },
         })
       }
+      workspaceLock?.release()
     }
 
     const eventsAfter = this.store.countEvents({ runId: run.runId })
@@ -368,6 +435,57 @@ export class RunLogExecutor {
       workerId: claim.workerId,
       claimToken: claim.claimToken,
       leaseEpoch: claim.leaseEpoch,
+    }
+  }
+
+  /**
+   * Bounded worker concurrency may run independent work in parallel, but a
+   * single executor never overlaps runs that target the same workspace scope.
+   * This is deliberately process-local; cross-host workspace coordination
+   * still belongs to a future durable workspace lease adapter.
+   */
+  private async acquireWorkspaceExecutionLock(
+    run: RunRecord,
+    signal: AbortSignal,
+  ): Promise<WorkspaceExecutionLock> {
+    const key = workspaceExecutionKey(run)
+    if (!key) return { release: () => {} }
+
+    const predecessor = this.workspaceExecutionQueues.get(key) ?? Promise.resolve()
+    let openGate!: () => void
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve
+    })
+    const tail = predecessor.then(() => gate, () => gate)
+    this.workspaceExecutionQueues.set(key, tail)
+    void tail.then(() => {
+      if (this.workspaceExecutionQueues.get(key) === tail) {
+        this.workspaceExecutionQueues.delete(key)
+      }
+    })
+
+    try {
+      await waitForWorkspaceTurn(predecessor, signal)
+    } catch (error) {
+      openGate()
+      throw error
+    }
+    if (signal.aborted) {
+      openGate()
+      throw new RunLogExecutionError(
+        'RunLog execution was cancelled while waiting for its workspace turn.',
+        true,
+        'execution_aborted_waiting_for_workspace',
+      )
+    }
+
+    let released = false
+    return {
+      release: () => {
+        if (released) return
+        released = true
+        openGate()
+      },
     }
   }
 

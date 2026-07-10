@@ -295,6 +295,103 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('revalidates unchanged console snapshots from a server-only revision cache', async () => {
+    const root = makeTempRoot('mainspring-gateway-snapshot-etag-')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+      pollIntervalMs: 10,
+    })
+    const gateway = createLocalMainspringGateway({
+      runtime: mainspring,
+      appState,
+      cells: testCellBackendOptions(),
+    })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const compatibilitySession = mainspring.sessions.create({
+      sessionId: 'snapshot-revision-session',
+      workspace: { root: path.join(root, 'workspace', 'snapshot-revision-session') },
+    })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+
+    await mainspring.start()
+    try {
+      const started = await server.start()
+      const health = await fetch(`${started.url}/health`)
+      expect(health.status).toBe(200)
+      expect(await health.json()).toMatchObject({ health: { running: true } })
+      expect(snapshotCalls).toBe(0)
+
+      const first = await fetch(`${started.url}/snapshot`)
+      const firstEtag = first.headers.get('etag')
+
+      expect(first.status).toBe(200)
+      expect(first.headers.get('cache-control')).toBe('no-store')
+      expect(firstEtag).toMatch(/^"[A-Za-z0-9_-]+"$/)
+      expect(await first.json()).toMatchObject({ health: { running: true } })
+
+      expect(snapshotCalls).toBe(1)
+
+      const unchanged = await fetch(`${started.url}/snapshot`, {
+        headers: { 'if-none-match': firstEtag ?? '' },
+      })
+      expect(unchanged.status).toBe(304)
+      expect(unchanged.headers.get('etag')).toBe(firstEtag)
+      expect(await unchanged.text()).toBe('')
+
+      expect(snapshotCalls).toBe(1)
+
+      MainspringMailbox.fromSessionPath(compatibilitySession.record.sessionPath).writeEvent(
+        { type: 'run.status', runId: 'run_snapshot_revision', status: 'running' },
+        compatibilitySession.record.sessionId,
+      )
+      const mailboxChanged = await fetch(`${started.url}/snapshot`, {
+        headers: { 'if-none-match': firstEtag ?? '' },
+      })
+      const mailboxEtag = mailboxChanged.headers.get('etag')
+      expect(mailboxChanged.status).toBe(200)
+      expect(mailboxEtag).not.toBe(firstEtag)
+      expect(await mailboxChanged.json()).toMatchObject({
+        runs: [expect.objectContaining({ runId: 'run_snapshot_revision' })],
+      })
+      expect(snapshotCalls).toBe(2)
+
+      const created = await fetch(`${started.url}/clients`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Snapshot version client',
+          workspaceName: 'Snapshot version workspace',
+          workspaceRoot: path.join(root, 'workspace', 'snapshot-version-client'),
+        }),
+      })
+      expect(created.status).toBe(201)
+
+      const changed = await fetch(`${started.url}/snapshot`, {
+        headers: { 'if-none-match': mailboxEtag ?? '' },
+      })
+      expect(changed.status).toBe(200)
+      expect(changed.headers.get('etag')).not.toBe(mailboxEtag)
+      expect(await changed.json()).toMatchObject({
+        clients: [expect.objectContaining({ name: 'Snapshot version client' })],
+      })
+      expect(snapshotCalls).toBe(3)
+    } finally {
+      await server.stop()
+      appState.close()
+      await mainspring.stop()
+    }
+  })
+
   it('keeps managed provider secrets write-only while HTTP-created profiles drive runtime provider resolution', async () => {
     const root = makeTempRoot('mainspring-gateway-server-secret-http-')
     const sessionsRoot = path.join(root, 'sessions')

@@ -31,7 +31,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - Requested `computerId` values are first-class durable RunLog state. They are preserved through child runs and passed to tool contexts so shell backend selection honors the requested host/WSL/Docker computer instead of silently falling back to host execution.
 - Durable execution and projection spine:
   - SQLite lifecycle commands commit run status, lifecycle events, and execution-outbox records together.
-  - `RunLogWorker` claims work with fenced leases, heartbeats, bounded retry backoff, cancellation propagation, and restart recovery.
+  - `RunLogWorker` claims work with fenced leases, heartbeats, bounded retry backoff, cancellation propagation, restart recovery, and opt-in bounded concurrency. `maxConcurrentRuns` defaults to one; same-workspace execution is serialized inside the local process.
   - Run summaries use a persisted projection cursor and bounded event tails; projection catch-up is idempotent and restart-safe.
   - `context.assembled` telemetry records sanitized inclusion, compression, rehydration, and drop decisions before provider dispatch.
 - Explicit RunLog gateway/API lane:
@@ -51,10 +51,16 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `gatewaySnapshotToConsoleState()` projects RunLog runs, pending approvals, tool calls, checkpoint summaries, policy decision summaries, and error summaries without exposing raw private event fields.
   - The React console data-source summary and dashboard projection count RunLog active runs and pending approvals beside legacy compatibility runs.
   - The selected-client console detail panel now shows RunLog run summaries with checkpoint, policy decision, error, tool-call, and artifact counts from sanitized DTO fields.
+- Gateway snapshot transport:
+  - `GET /health` returns runtime liveness without constructing the broad console snapshot.
+  - `GET /snapshot` remains a compatible sanitized aggregate, with `no-store` cache policy, ETag/`If-None-Match` support, and a `304` response with no body for unchanged state.
+  - The server caches only the sanitized projection in process memory. The console retains its ETag and last safe projection in memory, adapts refresh timing to visibility/failure state, aborts stale work, and does not put auth material in URLs.
+  - In-process mailbox writes invalidate the snapshot revision immediately; a 30-second compatibility probe discovers legacy external mailbox writers eventually. This is not a real-time cross-process event stream.
 - Live SaaS-style console:
   - `apps/console/src/ConnectedConsoleApp.tsx` is the default app surface and connects to the local gateway over the public browser-safe gateway client.
   - The first-run UI is a setup wizard for account basics and provider profile setup.
-  - The first-level UI is organized around Overview, Clients, Runs, Approvals, Usage, and Settings, with explicit loading, stale, offline, unauthorized, empty, and error states.
+  - The first-level UI is organized around Home, Workspaces, Activity, and Settings. Runs, approvals, and usage remain explicit Activity views; loading, stale, offline, unauthorized, empty, and error states remain visible.
+  - `ConsoleNavigation.tsx` owns primary/activity navigation and `useConsoleRunActivity.ts` owns scoped run streaming, fallback polling, and chat-event projection, leaving the connected shell focused on selection and gateway commands.
   - The run detail view exposes the sanitized event timeline, tool calls, checkpoints, policy decisions, errors, and native RunLog or compatibility-run cancellation.
   - Chat and run-control state is scoped by client and agent so switching workspaces does not leak UI state between operators' contexts.
   - Each client gets a default workspace and first agent; chat, agent editing, and automation testing are scoped inside the selected client.

@@ -20,6 +20,7 @@ import {
 export const defaultLocalGatewayDevHost = '127.0.0.1'
 export const defaultLocalGatewayDevPort = 8787
 export const defaultLocalGatewayCellLeaseTtlMs = 6 * 60 * 60 * 1_000
+export const defaultRunLogMaxConcurrentRuns = 1
 
 export function resolveLocalGatewayEnvironment(value: string | undefined): 'local-dev' | 'production' {
   return value?.trim().toLowerCase() === 'production' ? 'production' : 'local-dev'
@@ -78,6 +79,13 @@ export function resolveRunLogApprovalKeyMode(
   value: string | undefined,
 ): 'local-dev' | 'configured' {
   return value?.trim() === 'configured' ? 'configured' : 'local-dev'
+}
+
+export function resolveRunLogMaxConcurrentRuns(value: string | undefined): number {
+  const parsed = Number.parseInt(value?.trim() || String(defaultRunLogMaxConcurrentRuns), 10)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 16
+    ? parsed
+    : defaultRunLogMaxConcurrentRuns
 }
 
 export function resolveLocalGatewayTrustedOrigins(value: string | undefined): string[] {
@@ -155,6 +163,7 @@ Environment:
   MAINSPRING_RUNLOG_WORKSPACE_ROOT=.mainspring/runlog/workspaces
   MAINSPRING_RUNLOG_APPROVAL_KEY=
   MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=local-dev
+  MAINSPRING_RUNLOG_MAX_CONCURRENT_RUNS=${defaultRunLogMaxConcurrentRuns}
   MAINSPRING_GATEWAY_AUTH_MODE=local-dev
   MAINSPRING_GATEWAY_BOOTSTRAP_USERNAME=
   MAINSPRING_GATEWAY_BOOTSTRAP_PASSWORD=
@@ -201,6 +210,9 @@ async function main(): Promise<void> {
   )
   const runLogApprovalKeyMode = resolveRunLogApprovalKeyMode(
     process.env.MAINSPRING_RUNLOG_APPROVAL_KEY_MODE,
+  )
+  const runLogMaxConcurrentRuns = resolveRunLogMaxConcurrentRuns(
+    process.env.MAINSPRING_RUNLOG_MAX_CONCURRENT_RUNS,
   )
   const gatewayAuth = resolveLocalGatewayDevAuth(process.env, host)
   assertExternalGatewayApprovalKey(process.env, host, runLogApprovalKeyMode)
@@ -276,6 +288,7 @@ async function main(): Promise<void> {
     },
     approvalReceiptKey: process.env.MAINSPRING_RUNLOG_APPROVAL_KEY,
     approvalReceiptKeyMode: runLogApprovalKeyMode,
+    maxConcurrentRuns: runLogMaxConcurrentRuns,
     secretResolver: (ref) =>
       ref.kind === 'env'
         ? process.env[ref.key]

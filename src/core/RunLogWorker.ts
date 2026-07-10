@@ -12,6 +12,7 @@ export interface RunLogWorkerOptions {
   workerId?: string
   now?: () => Date
   random?: () => number
+  maxConcurrentRuns?: number
   pollIntervalMs?: number
   leaseMs?: number
   heartbeatIntervalMs?: number
@@ -23,6 +24,7 @@ export class RunLogWorker {
   private readonly workerId: string
   private readonly now: () => Date
   private readonly random: () => number
+  private readonly maxConcurrentRuns: number
   private readonly pollIntervalMs: number
   private readonly leaseMs: number
   private readonly heartbeatIntervalMs: number
@@ -37,6 +39,10 @@ export class RunLogWorker {
     this.workerId = options.workerId ?? `worker_${process.pid}`
     this.now = options.now ?? (() => new Date())
     this.random = options.random ?? Math.random
+    this.maxConcurrentRuns = options.maxConcurrentRuns ?? 1
+    if (!Number.isInteger(this.maxConcurrentRuns) || this.maxConcurrentRuns < 1) {
+      throw new Error('RunLog maxConcurrentRuns must be a positive integer.')
+    }
     this.pollIntervalMs = Math.max(10, options.pollIntervalMs ?? 250)
     this.leaseMs = Math.max(100, options.leaseMs ?? 60_000)
     this.heartbeatIntervalMs = Math.max(
@@ -64,21 +70,16 @@ export class RunLogWorker {
   }
 
   async runOnce(): Promise<RunExecutionSummary | null> {
-    if (this.stopping) return null
-    const claim = this.options.store.claimNextExecution({
-      workerId: this.workerId,
-      leaseMs: this.leaseMs,
-      now: this.now().toISOString(),
-    })
-    if (!claim) return null
+    const execution = this.startNextExecution()
+    return execution ? await execution : null
+  }
 
-    const execution = this.executeClaim(claim)
-    this.active.set(claim.run.runId, execution)
-    try {
-      return await execution
-    } finally {
-      this.active.delete(claim.run.runId)
-    }
+  async drainAvailable(maxRuns = this.maxConcurrentRuns): Promise<RunExecutionSummary[]> {
+    const requested = Number.isInteger(maxRuns) && maxRuns > 0
+      ? maxRuns
+      : this.maxConcurrentRuns
+    const executions = this.startAvailable(Math.min(requested, this.maxConcurrentRuns))
+    return await Promise.all(executions)
   }
 
   heartbeatOnce(claim: ExecutionClaim): boolean {
@@ -149,10 +150,49 @@ export class RunLogWorker {
     }
   }
 
+  private startAvailable(maxRuns: number): Array<Promise<RunExecutionSummary>> {
+    const executions: Array<Promise<RunExecutionSummary>> = []
+    while (!this.stopping && this.active.size < this.maxConcurrentRuns && executions.length < maxRuns) {
+      const execution = this.startNextExecution()
+      if (!execution) break
+      executions.push(execution)
+    }
+    return executions
+  }
+
+  private startNextExecution(): Promise<RunExecutionSummary> | null {
+    if (this.stopping || this.active.size >= this.maxConcurrentRuns) return null
+    const claim = this.options.store.claimNextExecution({
+      workerId: this.workerId,
+      leaseMs: this.leaseMs,
+      now: this.now().toISOString(),
+    })
+    if (!claim) return null
+
+    const execution = this.executeClaim(claim)
+    this.active.set(claim.run.runId, execution)
+    void execution.then(
+      () => this.releaseActiveClaim(claim.run.runId, execution),
+      () => this.releaseActiveClaim(claim.run.runId, execution),
+    )
+    return execution
+  }
+
+  private releaseActiveClaim(runId: string, execution: Promise<RunExecutionSummary>): void {
+    if (this.active.get(runId) !== execution) return
+    this.active.delete(runId)
+    if (this.running && !this.stopping) this.schedulePoll(0)
+  }
+
   private schedulePoll(delayMs: number): void {
     if (!this.running || this.stopping) return
+    if (this.pollTimer) clearTimeout(this.pollTimer)
     this.pollTimer = setTimeout(() => {
-      void this.runOnce().finally(() => this.schedulePoll(this.pollIntervalMs))
+      this.pollTimer = null
+      this.startAvailable(this.maxConcurrentRuns)
+      if (this.active.size < this.maxConcurrentRuns) {
+        this.schedulePoll(this.pollIntervalMs)
+      }
     }, delayMs)
     this.pollTimer.unref?.()
   }

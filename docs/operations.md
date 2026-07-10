@@ -7,6 +7,7 @@ pnpm verify
 pnpm release:check
 pnpm test:typecheck
 pnpm console:e2e
+pnpm benchmark:overhaul
 ```
 
 `verify` runs the repository doctor explicitly through `pnpm run doctor`, then source
@@ -46,6 +47,12 @@ It runs `optional-verifiers:check` so optional verifier prerequisite diagnostics
 
 `examples:check` is an alias for the runnable examples smoke suite. It includes the RunLog-native `provider-run`, `tool-approval`, `coding-agent`, `personal-assistant`, `support-agent`, `agency-client-agent`, and `local-first-agent` examples.
 
+`benchmark:overhaul` builds the package and runs deterministic local fixtures
+for bounded RunLog concurrency plus fresh, cached, and conditionally
+revalidated console snapshots. It records comparative evidence only; do not
+turn its timings into a cross-machine CI threshold or a claim about live
+provider latency.
+
 ## Focused Checks
 
 ```bash
@@ -66,6 +73,7 @@ pnpm optional-verifiers:check
 pnpm openrouter:e2e
 pnpm test:typecheck
 pnpm console:e2e
+pnpm benchmark:overhaul
 ```
 
 ## Gateway Checks

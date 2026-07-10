@@ -35,6 +35,68 @@ describe('createLocalGatewayClient', () => {
     })
   })
 
+  it('revalidates a snapshot with an in-memory ETag and accepts an empty 304 response', async () => {
+    let requestCount = 0
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestCount += 1
+      expect(String(input)).toBe('http://127.0.0.1:8787/snapshot')
+      if (requestCount === 1) {
+        expect(init?.headers).toEqual({})
+        return new Response(
+          JSON.stringify({
+            generatedAt: '2026-07-10T00:00:00.000Z',
+            health: { ok: true, running: true, activeSessions: 0 },
+            counts: {
+              clients: 0,
+              workspaces: 0,
+              agents: 0,
+              providerProfiles: 0,
+              sessions: 0,
+              runs: 0,
+              storedApprovals: 0,
+              artifacts: 0,
+              cronSchedules: 0,
+              budgets: 0,
+              usageLedgerEntries: 0,
+              auditEvents: 0,
+              memoryEntries: 0,
+              pendingApprovals: 0,
+            },
+            clients: [],
+            workspaces: [],
+            agents: [],
+            providerProfiles: [],
+            sessions: [],
+            runs: [],
+            approvals: [],
+            approvalMetadata: [],
+            artifacts: [],
+            cronSchedules: [],
+            budgets: [],
+            budgetEvaluations: [],
+            usageLedger: [],
+            auditEvents: [],
+            memoryEntries: [],
+          }),
+          { status: 200, headers: { etag: '"snapshot-v1"' } },
+        )
+      }
+      expect(init?.headers).toEqual({ 'if-none-match': '"snapshot-v1"' })
+      return new Response(null, { status: 304, headers: { etag: '"snapshot-v1"' } })
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+
+    await expect(client.snapshotIfChanged()).resolves.toMatchObject({
+      kind: 'updated',
+      etag: '"snapshot-v1"',
+      snapshot: { health: { ok: true, running: true } },
+    })
+    await expect(client.snapshotIfChanged({ etag: '"snapshot-v1"' })).resolves.toEqual({
+      kind: 'not-modified',
+      etag: '"snapshot-v1"',
+    })
+  })
+
   it('fetches snapshot, run events, run start, and approval resolution through the expected routes', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

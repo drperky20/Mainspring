@@ -31,6 +31,15 @@ function storeAt(root: string): SqliteRunLogStore {
   return store
 }
 
+async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error(`Timed out waiting for ${label}.`)
+}
+
 function echoTool(options: { approvalRequired?: boolean } = {}): RuntimeTool {
   return {
     manifest: builtinManifest({
@@ -236,6 +245,47 @@ class BlockingProvider implements AgentProvider {
         provider.markStarted()
         await provider.blockedQuery
         if (!aborted) yield { type: 'result' as const, text: 'too late' }
+      })(),
+    }
+  }
+}
+
+class WorkspaceBlockingProvider implements AgentProvider {
+  readonly started: string[] = []
+  private readonly releases = new Map<string, () => void>()
+
+  release(prompt: string): void {
+    this.releases.get(prompt)?.()
+  }
+
+  releaseAll(): void {
+    for (const release of this.releases.values()) release()
+  }
+
+  query(input: QueryInput): AgentQuery {
+    const prompt = input.prompt
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    this.releases.set(prompt, release)
+    const provider = this
+    return {
+      push() {},
+      end() {},
+      abort() {
+        provider.release(prompt)
+      },
+      events: (async function* () {
+        yield {
+          type: 'init' as const,
+          provider: 'workspace-blocking',
+          providerSessionId: `workspace-${prompt}`,
+          modelId: input.model,
+        }
+        provider.started.push(prompt)
+        await gate
+        yield { type: 'result' as const, text: `completed ${prompt}` }
       })(),
     }
   }
@@ -452,6 +502,101 @@ describe('RunLogKernel', () => {
     ).toBe(true)
     expect(kernel.cancelRun({ runId: run.runId }).status).toBe('cancelled')
     expect(projection.errors).toHaveLength(0)
+  })
+
+  it('serializes concurrent runs that target the same workspace scope', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const provider = new WorkspaceBlockingProvider()
+    const sharedWorkspace = path.join(root, 'workspace-shared')
+    const kernel = new RunLogKernel({
+      store,
+      maxConcurrentRuns: 2,
+      workspace: new LocalWorkspaceAdapter(path.join(root, 'workspaces')),
+      providerRouter: new SingleProviderRouter(provider),
+    })
+    kernel.putAgent({
+      agentId: 'agent_workspace_serial',
+      instructions: 'Work inside the shared workspace.',
+      capabilities: ['provider', 'workspace'],
+    })
+    const first = kernel.startRun({
+      agentId: 'agent_workspace_serial',
+      input: 'first workspace turn',
+      workspaceId: 'workspace_shared',
+      workspaceRoot: sharedWorkspace,
+    })
+    const second = kernel.startRun({
+      agentId: 'agent_workspace_serial',
+      input: 'second workspace turn',
+      workspaceId: 'workspace_shared',
+      workspaceRoot: sharedWorkspace,
+    })
+    const draining = kernel.drainUntilIdle()
+
+    try {
+      await waitFor(() => provider.started.length === 1, 'the first workspace provider turn')
+      expect(provider.started).toEqual(['first workspace turn'])
+
+      provider.release('first workspace turn')
+      await waitFor(() => provider.started.length === 2, 'the second workspace provider turn')
+      expect(provider.started).toEqual(['first workspace turn', 'second workspace turn'])
+
+      provider.release('second workspace turn')
+      const summaries = await draining
+      expect(summaries.map((summary) => summary.runId)).toEqual([first.runId, second.runId])
+      expect(summaries.every((summary) => summary.status === 'completed')).toBe(true)
+    } finally {
+      provider.releaseAll()
+      await draining.catch(() => undefined)
+    }
+  })
+
+  it('cancels a run while it waits for an occupied workspace scope', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const provider = new WorkspaceBlockingProvider()
+    const sharedWorkspace = path.join(root, 'workspace-cancelled')
+    const kernel = new RunLogKernel({
+      store,
+      maxConcurrentRuns: 2,
+      workspace: new LocalWorkspaceAdapter(path.join(root, 'workspaces')),
+      providerRouter: new SingleProviderRouter(provider),
+    })
+    kernel.putAgent({
+      agentId: 'agent_workspace_wait_cancel',
+      instructions: 'Respect a cancelled workspace turn.',
+      capabilities: ['provider', 'workspace'],
+    })
+    const first = kernel.startRun({
+      agentId: 'agent_workspace_wait_cancel',
+      input: 'active workspace turn',
+      workspaceId: 'workspace_cancelled',
+      workspaceRoot: sharedWorkspace,
+    })
+    const second = kernel.startRun({
+      agentId: 'agent_workspace_wait_cancel',
+      input: 'cancelled workspace turn',
+      workspaceId: 'workspace_cancelled',
+      workspaceRoot: sharedWorkspace,
+    })
+    const draining = kernel.drainUntilIdle()
+
+    try {
+      await waitFor(() => provider.started.length === 1, 'the active workspace provider turn')
+      expect(kernel.cancelRun({ runId: second.runId, reason: 'Do not enter the shared workspace.' }).status)
+        .toBe('cancelled')
+      provider.release('active workspace turn')
+
+      const summaries = await draining
+      expect(provider.started).toEqual(['active workspace turn'])
+      expect(store.getRun(first.runId)?.status).toBe('completed')
+      expect(store.getRun(second.runId)?.status).toBe('cancelled')
+      expect(summaries.map((summary) => summary.status)).toEqual(['completed', 'cancelled'])
+    } finally {
+      provider.releaseAll()
+      await draining.catch(() => undefined)
+    }
   })
 
   it('records a tool outcome when cancellation races a side effect', async () => {

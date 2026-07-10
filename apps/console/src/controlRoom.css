@@ -321,6 +321,53 @@ body {
   padding: 8px 0 24px;
 }
 
+.control-activity-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 18px;
+  padding: 4px;
+  border: 1px solid var(--simple-line);
+  border-radius: 12px;
+  background: rgba(14, 19, 20, 0.86);
+}
+
+.control-activity-nav button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--simple-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.control-activity-nav button:hover,
+.control-activity-nav button.active {
+  background: var(--simple-panel);
+  color: var(--simple-ink);
+}
+
+.control-activity-nav button.active {
+  box-shadow: inset 0 0 0 1px var(--simple-line);
+}
+
+.control-activity-nav span {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--simple-accent-soft);
+  color: var(--simple-accent-strong);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
 .control-screen-header > div:first-child {
   display: grid;
   gap: 8px;

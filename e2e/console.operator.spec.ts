@@ -16,7 +16,9 @@ function consoleUrlWithGateway(url: string): string {
 
 async function finishFirstRun(page: Page) {
   await page.goto(consoleUrl())
-  await expect(page.getByRole('heading', { name: 'Set up your account' })).toBeVisible()
+  await page.evaluate(() => window.localStorage.removeItem('mainspring.console.setup.v2'))
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Set up your account' })).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Continue' }).click()
   await expect(page.getByRole('heading', { name: 'Connect a service' })).toBeVisible()
   await page.getByRole('button', { name: 'Skip for now' }).click()
@@ -29,7 +31,7 @@ test.describe('operator console', () => {
   test('connects a first-run workspace and records a durable run to completion', async ({ page }) => {
     await finishFirstRun(page)
 
-    await page.getByRole('button', { name: 'Clients', exact: true }).click()
+    await page.getByRole('button', { name: 'Workspaces', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Northline Dental' })).toBeVisible()
 
     const composer = page.locator('textarea').first()
@@ -50,6 +52,7 @@ test.describe('operator console', () => {
     }, { timeout: 15_000 }).toBe('completed')
 
     await page.reload()
+    await page.getByRole('button', { name: 'Activity', exact: true }).click()
     await page.getByRole('button', { name: 'Runs', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible()
     const runRow = page.locator('.control-run-row').first()

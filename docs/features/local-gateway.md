@@ -28,6 +28,29 @@ The local dev server created by `pnpm gateway:dev` now configures that RunLog ho
 
 `MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=configured` makes RunLog approval receipt signing fail closed unless `MAINSPRING_RUNLOG_APPROVAL_KEY` is set. The default `local-dev` mode keeps no-key source checkout examples ergonomic and should not be used for non-local deployments.
 
+## Health and snapshot transport
+
+`GET /health` is a cheap liveness response. It reads the runtime health state
+without constructing the broad console projection, so startup probes and
+desktop diagnostics do not pay the cost of `/snapshot`.
+
+`GET /snapshot` remains a compatible full sanitized console document. It sends
+`Cache-Control: no-store`, `Vary: Authorization, Origin`, and a deterministic
+ETag. A client may send `If-None-Match`; unchanged state receives `304 Not
+Modified` with no body. The server keeps only its already-sanitized DTO in a
+process-local revision cache. The browser client keeps its ETag and last safe
+projection only in memory, never in URLs or persistent browser storage.
+
+The revision combines app-state writes, RunLog lifecycle state, runtime health,
+and a process-local mailbox mutation token. A bounded 30-second database/WAL
+fingerprint probe remains for mailbox-compatible external writers. This makes normal
+in-process refreshes inexpensive while retaining eventual discovery of legacy
+out-of-process mailbox writes. It is not a real-time multi-process event bus.
+
+The full snapshot is still a compatibility aggregate. Runs, traces, and other
+advanced read models should move to bounded, purpose-specific endpoints before
+the aggregate is narrowed or removed.
+
 When a gateway has a RunLog host, cron tick and run-now dispatch create ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events. Provider-only cron schedules queue normally; side-effecting schedules fail closed unless their metadata carries a scoped, unexpired cron grant. Operators can call `GET /cron/:scheduleId/grant` to preview the current grant decision and `POST /cron/:scheduleId/grant` to create an expiring scoped grant derived from the current schedule. The React console also exposes review/create controls that display the grant state without raw prompt hashes or secret refs. Gateways without a RunLog host keep the mailbox-compatible cron path for older embedders and migration verifiers.
 
 Staged memory/skill provenance reviews are exposed through local gateway routes:

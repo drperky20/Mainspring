@@ -22,6 +22,15 @@ SDK / HTTP / channel adapter
 
 The harness records durable intent before work starts, claims queued work through a lease, routes provider calls through a provider registry, executes tools only through `ToolRegistry`, pauses on approval-required operations, and projects the same event spine to SDK callers, the local gateway, the console, and audit views.
 
+`RunLogWorker` supports a bounded `maxConcurrentRuns` option. It defaults to
+one active claim so existing hosts remain serial unless they opt in; the local
+gateway dev server exposes the same setting as
+`MAINSPRING_RUNLOG_MAX_CONCURRENT_RUNS` (accepted range 1-16). Claims remain
+fenced and heartbeated, cancellation still aborts active provider/tool work,
+and retry/terminal-state rules are unchanged. The executor also queues work
+for the same workspace inside one process, so the concurrency setting is for
+independent work rather than conflicting local side effects.
+
 Provider credentials are runtime references, not prompt text. Environment refs such as `env:OPENROUTER_API_KEY`, provider-profile refs, and managed secret refs can be resolved host-side without sending raw keys through browser DTOs or logs.
 
 ## What It Does Not Do
@@ -29,6 +38,10 @@ Provider credentials are runtime references, not prompt text. Environment refs s
 Mainspring does not make host execution safe by naming it a tool. Host shell execution is not a sandbox. Docker and WSL routes are explicit execution backends, not a complete VM isolation product. Browser automation is not a security boundary, and local hosted auth is not enterprise SSO.
 
 The legacy mailbox/`RuntimeKernel` path is still present for compatibility while the RunLog migration continues. New runtime behavior should target RunLog Fabric first unless it is intentionally maintaining compatibility.
+
+Same-workspace coordination is currently process-local. Multiple hosts sharing
+one workspace require a durable workspace-lock adapter before they can be
+described as coordinated execution.
 
 ## How To Verify
 

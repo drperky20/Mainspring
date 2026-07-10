@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import Database from 'better-sqlite3'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MainspringMailbox } from '../mailbox/SqliteMailbox.js'
 import { EchoProvider } from '../providers/EchoProvider.js'
 import { MockProvider } from '../providers/MockProvider.js'
@@ -109,6 +110,52 @@ async function waitFor<T>(
 }
 
 describe('LocalMainspringGateway', () => {
+  it('refreshes the bounded mailbox revision probe for external SQLite WAL writers', () => {
+    const { sessionsRoot, workspaceRoot } = makeTempGatewayPaths('mainspring-gateway-wal-revision-')
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring })
+    const session = mainspring.sessions.create({
+      sessionId: 'gateway-wal-revision-session',
+      workspace: { root: workspaceRoot },
+    })
+    const mailbox = MainspringMailbox.fromSessionPath(session.record.sessionPath)
+    mailbox.writeEvent(
+      { type: 'run.status', runId: 'run_wal_revision', status: 'queued' },
+      session.record.sessionId,
+    )
+    const externalDb = new Database(mailbox.paths.eventsDbPath)
+
+    vi.useFakeTimers()
+    try {
+      externalDb.pragma('journal_mode = WAL')
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      const initialRevision = gateway.snapshotRevision()
+      const inProcessRevision = MainspringMailbox.changeRevision()
+
+      externalDb.prepare(
+        `INSERT INTO events_out (run_id, session_id, type, timestamp, payload)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(
+        'run_wal_revision',
+        session.record.sessionId,
+        'run.status',
+        '2026-01-01T00:00:01.000Z',
+        JSON.stringify({ type: 'run.status', runId: 'run_wal_revision', status: 'running' }),
+      )
+
+      vi.setSystemTime(new Date('2026-01-01T00:00:30.001Z'))
+      expect(gateway.snapshotRevision()).not.toBe(initialRevision)
+      expect(MainspringMailbox.changeRevision()).toBe(inProcessRevision)
+    } finally {
+      vi.useRealTimers()
+      externalDb.close()
+    }
+  })
+
   it('creates a workspace-linked runtime session for gateway-created clients', () => {
     const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
       'mainspring-gateway-client-session-',

@@ -197,6 +197,7 @@
     "test": "pnpm exec vitest run src apps/console/src apps/desktop/src --passWithNoTests",
     "console:e2e": "pnpm build && node scripts/run-console-e2e.mjs",
     "doctor": "node scripts/doctor.mjs",
+    "benchmark:overhaul": "pnpm build && node scripts/benchmark-overhaul.mjs",
     "repo:doctor": "pnpm run doctor",
     "docs:check": "node scripts/check-docs-surface.mjs",
     "runlog:migration:check": "node scripts/check-runlog-migration.mjs",

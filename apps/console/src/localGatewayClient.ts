@@ -68,8 +68,19 @@ export interface GatewayProviderModel {
 
 export type HostedGatewayRole = 'admin' | 'operator' | 'viewer'
 
+export type GatewaySnapshotRefresh =
+  | {
+      kind: 'updated'
+      snapshot: ConsoleGatewaySnapshot
+      etag?: string
+    }
+  | {
+      kind: 'not-modified'
+      etag?: string
+    }
+
 export interface LocalGatewayClient {
-  health(): Promise<{
+  health(input?: { signal?: AbortSignal }): Promise<{
     mode: string
     health: { ok: boolean; running: boolean; activeSessions: number }
     auth?: {
@@ -81,6 +92,7 @@ export interface LocalGatewayClient {
     }
   }>
   snapshot(): Promise<ConsoleGatewaySnapshot>
+  snapshotIfChanged(input?: { etag?: string; signal?: AbortSignal }): Promise<GatewaySnapshotRefresh>
   authSession(): Promise<{
     auth: {
       authMode: 'hosted'
@@ -503,8 +515,36 @@ export function createLocalGatewayClient(
     sessionToken ? { authorization: `Bearer ${sessionToken}` } : {}
 
   return {
-    health: () => requestJson(fetchImpl, `${normalizedBaseUrl}/health`, { headers: authHeaders() }),
+    health: (input = {}) => requestJson(fetchImpl, `${normalizedBaseUrl}/health`, {
+      headers: authHeaders(),
+      ...(input.signal ? { signal: input.signal } : {}),
+    }),
     snapshot: () => requestJson(fetchImpl, `${normalizedBaseUrl}/snapshot`, { headers: authHeaders() }),
+    snapshotIfChanged: async (input = {}) => {
+      const etag = input.etag?.trim()
+      const response = await fetchImpl(`${normalizedBaseUrl}/snapshot`, {
+        headers: {
+          ...authHeaders(),
+          ...(etag ? { 'if-none-match': etag } : {}),
+        },
+        ...(input.signal ? { signal: input.signal } : {}),
+      })
+      const responseEtag = response.headers.get('etag')?.trim() || undefined
+      if (response.status === 304) {
+        const effectiveEtag = responseEtag ?? etag
+        return { kind: 'not-modified', ...(effectiveEtag ? { etag: effectiveEtag } : {}) }
+      }
+      const payload = (await response.json()) as { error?: string }
+      if (!response.ok) {
+        throw new Error(payload.error || `Gateway request failed: ${response.status}`)
+      }
+      assertBrowserSafeGatewayPayload(`${normalizedBaseUrl}/snapshot`, payload)
+      return {
+        kind: 'updated',
+        snapshot: payload as ConsoleGatewaySnapshot,
+        ...(responseEtag ? { etag: responseEtag } : {}),
+      }
+    },
     authSession: () => requestJson(fetchImpl, `${normalizedBaseUrl}/auth/session`, { headers: authHeaders() }),
     bootstrapAuth: (input) =>
       requestJson<Awaited<ReturnType<LocalGatewayClient['bootstrapAuth']>>>(fetchImpl, `${normalizedBaseUrl}/auth/bootstrap`, {

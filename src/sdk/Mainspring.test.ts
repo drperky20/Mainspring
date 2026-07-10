@@ -95,6 +95,47 @@ describe('Mainspring SDK', () => {
     }
   })
 
+  it('keeps the cached session catalog isolated and coherent across lifecycle writes', () => {
+    const { sessionsRoot, workspaceRoot } = makeTempMainspringPaths('mainspring-sdk-session-catalog-')
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+    })
+    const session = mainspring.sessions.create({
+      sessionId: 'session-catalog',
+      workspace: { root: workspaceRoot },
+      metadata: { label: 'original', nested: { preserved: true } },
+    })
+
+    const firstRead = mainspring.storage.stateStore.listSessions()
+    const firstMetadata = firstRead[0]!.metadata as {
+      label: string
+      nested: { preserved: boolean }
+    }
+    firstMetadata.label = 'mutated outside the store'
+    firstMetadata.nested.preserved = false
+
+    expect(mainspring.storage.stateStore.listSessions()).toEqual([
+      expect.objectContaining({
+        sessionId: session.record.sessionId,
+        status: 'open',
+        metadata: { label: 'original', nested: { preserved: true } },
+      }),
+    ])
+
+    mainspring.sessions.update(session.record.sessionId, {
+      status: 'closed',
+      metadata: { label: 'updated' },
+    })
+    expect(mainspring.storage.stateStore.listSessions()).toEqual([
+      expect.objectContaining({ status: 'closed', metadata: { label: 'updated' } }),
+    ])
+
+    mainspring.sessions.delete(session.record.sessionId)
+    expect(mainspring.storage.stateStore.listSessions()).toEqual([])
+  })
+
   it('handles approval-gated tool execution and monitoring in-process', async () => {
     const { sessionsRoot, workspaceRoot } = makeTempMainspringPaths('mainspring-sdk-approval-')
     const provider = new MockProvider([

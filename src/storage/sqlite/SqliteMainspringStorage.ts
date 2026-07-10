@@ -61,6 +61,12 @@ function writeSessionRecord(record: MainspringSessionRecord): MainspringSessionR
   return record
 }
 
+function copySessionRecord(record: MainspringSessionRecord): MainspringSessionRecord {
+  // Session records are JSON persisted. Return an independent value just as a
+  // fresh filesystem read did before the catalog cache was introduced.
+  return JSON.parse(JSON.stringify(record)) as MainspringSessionRecord
+}
+
 function buildGatewayDispatch(
   session: MainspringSessionRecord,
   input: StartRunInput,
@@ -135,6 +141,11 @@ function buildGatewayDispatch(
 }
 
 export class SqliteMainspringStateStore implements StateStore {
+  private sessionListCache?: {
+    directoryKey: string
+    records: MainspringSessionRecord[]
+  }
+
   constructor(private readonly sessionsRoot: string, private readonly workspaceRoot: string) {}
 
   createSession(input: CreateMainspringSessionInput): MainspringSessionRecord {
@@ -147,7 +158,7 @@ export class SqliteMainspringStateStore implements StateStore {
     const createdAt = nowIso()
     const workspaceRoot = path.resolve(input.workspace?.root ?? this.workspaceRoot)
     fs.mkdirSync(workspaceRoot, { recursive: true })
-    return writeSessionRecord({
+    const record = writeSessionRecord({
       sessionId,
       sessionPath: paths.sessionPath,
       workspaceRoot,
@@ -156,17 +167,31 @@ export class SqliteMainspringStateStore implements StateStore {
       updatedAt: createdAt,
       metadata: input.metadata,
     })
+    this.invalidateSessionListCache()
+    return record
   }
 
   listSessions(): MainspringSessionRecord[] {
-    if (!fs.existsSync(this.sessionsRoot)) return []
-    return fs
+    if (!fs.existsSync(this.sessionsRoot)) {
+      this.sessionListCache = { directoryKey: '', records: [] }
+      return []
+    }
+    const sessionDirectories = fs
       .readdirSync(this.sessionsRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => resolveContainedSessionMailboxPaths(this.sessionsRoot, entry.name))
+      .map((entry) => entry.name)
+      .sort((left, right) => left.localeCompare(right))
+    const directoryKey = sessionDirectories.join('\u0000')
+    if (this.sessionListCache?.directoryKey === directoryKey) {
+      return this.sessionListCache.records.map(copySessionRecord)
+    }
+    const records = sessionDirectories
+      .map((sessionId) => resolveContainedSessionMailboxPaths(this.sessionsRoot, sessionId))
       .map((paths) => readSessionRecord(paths))
       .filter((record): record is MainspringSessionRecord => Boolean(record))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    this.sessionListCache = { directoryKey, records }
+    return records.map(copySessionRecord)
   }
 
   getSession(sessionId: string): MainspringSessionRecord | null {
@@ -181,19 +206,26 @@ export class SqliteMainspringStateStore implements StateStore {
       ? path.resolve(input.workspace.root)
       : existing.workspaceRoot
     fs.mkdirSync(workspaceRoot, { recursive: true })
-    return writeSessionRecord({
+    const record = writeSessionRecord({
       ...existing,
       workspaceRoot,
       status: input.status ?? existing.status,
       metadata: input.metadata ?? existing.metadata,
       updatedAt: nowIso(),
     })
+    this.invalidateSessionListCache()
+    return record
   }
 
   deleteSession(sessionId: string): void {
     const existing = this.getSession(sessionId)
     if (!existing) return
     fs.rmSync(existing.sessionPath, { recursive: true, force: true })
+    this.invalidateSessionListCache()
+  }
+
+  private invalidateSessionListCache(): void {
+    this.sessionListCache = undefined
   }
 }
 

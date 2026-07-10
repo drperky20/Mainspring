@@ -9,6 +9,7 @@ import {
   type RuntimePolicy,
 } from '#protocol'
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import type {
   MainspringApprovalRecord,
@@ -20,7 +21,12 @@ import type {
   UsageUpdatedRunEventPayload,
 } from '../contracts/runtime.js'
 import { latestProviderInitDetailFromRunEvents } from '../contracts/runtime.js'
-import { MainspringMailbox, type InboundMessage } from '../mailbox/SqliteMailbox.js'
+import {
+  MainspringMailbox,
+  type InboundMessage,
+  type RuntimeEventRow,
+} from '../mailbox/SqliteMailbox.js'
+import { normalizeRuntimeEventRow } from '../events/normalizeRuntimeEvent.js'
 import type { Mainspring } from '../sdk/Mainspring.js'
 import type { RunLogMainspring } from '../sdk/RunLogMainspring.js'
 import type {
@@ -971,6 +977,27 @@ function artifactPathFromId(rootPath: string, artifactId: string): string | null
   return candidate
 }
 
+const COMPATIBILITY_MAILBOX_REVISION_PROBE_MS = 30_000
+
+function mailboxFileRevision(session: MainspringSessionRecord): string {
+  const paths = MainspringMailbox.fromSessionPath(session.sessionPath).paths
+  return [paths.inboundDbPath, paths.outboundDbPath, paths.eventsDbPath]
+    // Legacy writers can commit to SQLite's WAL without checkpointing the
+    // main database file. Probe both so an external compatibility writer is
+    // visible to the bounded revision check.
+    .flatMap((filePath) => [fileRevision(filePath), fileRevision(`${filePath}-wal`)])
+    .join('|')
+}
+
+function fileRevision(filePath: string): string {
+  try {
+    const stat = fs.statSync(filePath)
+    return `${Math.trunc(stat.mtimeMs)}:${Math.trunc(stat.ctimeMs)}:${stat.size}`
+  } catch {
+    return 'missing'
+  }
+}
+
 function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -1056,6 +1083,12 @@ type LocalGatewayUsageEvaluationContext = {
   clientsById: Map<string, LocalGatewayClientRecord>
 }
 
+type LocalGatewaySnapshotReadCache = {
+  eventsBySessionId: Map<string, RunEvent[]>
+  rawEventsBySessionId: Map<string, RuntimeEventRow[]>
+  runMetadataBySessionId: Map<string, Map<string, LocalGatewayRunMetadataRecord>>
+}
+
 /**
  * In-process Local Gateway boundary over the SDK/runtime package.
  *
@@ -1080,6 +1113,8 @@ export class LocalMainspringGateway {
   private readonly pricingCatalogStatus: LocalGatewayPricingCatalogStatus
   private readonly budgetEvaluationStateById = new Map<string, LocalGatewayBudgetEvaluation['status']>()
   private readonly hyperCells?: HyperCellScheduler
+  private compatibilityMailboxRevision?: { checkedAtMs: number; fingerprint: string }
+  private snapshotReadCache?: LocalGatewaySnapshotReadCache
   private cronTimer: NodeJS.Timeout | null = null
   private cronLastTickAt?: string
   private cronLastError?: string
@@ -1545,43 +1580,106 @@ export class LocalMainspringGateway {
   }
 
   snapshot(): LocalGatewaySnapshot {
-    this.syncDerivedAppState()
     const sessions = this.sessions.list()
-    const runs = sessions.flatMap((session) => this.runs.list(session.sessionId))
-    const approvals = this.approvals.list()
-    return {
-      generatedAt: new Date().toISOString(),
-      health: this.runtime.health(),
-      executionBackends: this.inspectExecutionBackends(),
-      appState: {
-        clients: this.appState?.clients.list() ?? [],
-        workspaces: this.appState?.workspaces.list() ?? [],
-        agents: this.appState?.agents.list() ?? [],
-        providerProfiles: this.appState?.providerProfiles.list() ?? [],
-        runs: this.appState?.runs.list() ?? [],
-        approvals: this.appState?.approvals.list() ?? [],
-        artifacts: this.appState?.artifacts.list() ?? [],
-        toolCalls: this.appState?.toolCalls.list() ?? [],
-        deploymentTargets: this.appState?.deploymentTargets.list() ?? [],
-        deploymentRuns: this.appState?.deploymentRuns.list() ?? [],
-        cells: this.appState?.cells.list() ?? [],
-        cellLeases: this.appState?.cellLeases.list() ?? [],
-        cellSnapshots: this.appState?.cellSnapshots.list() ?? [],
-        cronSchedules: this.appState?.cronSchedules.list() ?? [],
-        budgets: this.appState?.budgets.list() ?? [],
-        usageLedger: this.appState?.usageLedger.list() ?? [],
-        auditEvents: this.appState?.auditEvents.list() ?? [],
-      },
-      sessions,
-      runs,
-      approvals,
-      ...(this.runLogRuntime ? { runLog: this.projectRunLogSnapshot() } : {}),
-      cron: this.cron.status(),
-      pricingCatalog: this.pricingCatalogStatus,
-      usageStatus: this.usageStatus(),
-      budgetStatus: this.budgetStatus(),
-      cellStatus: this.cellStatus(),
+    this.snapshotReadCache = this.createSnapshotReadCache()
+    try {
+      this.syncDerivedAppState()
+      // This aggregate has already synchronized derived state. Reuse its
+      // bounded reads rather than traversing every compatibility mailbox again.
+      const runs = sessions.flatMap((session) => this.listRuns(session.sessionId, session))
+      return {
+        generatedAt: new Date().toISOString(),
+        health: this.runtime.health(),
+        executionBackends: this.inspectExecutionBackends(),
+        appState: {
+          clients: this.appState?.clients.list() ?? [],
+          workspaces: this.appState?.workspaces.list() ?? [],
+          agents: this.appState?.agents.list() ?? [],
+          providerProfiles: this.appState?.providerProfiles.list() ?? [],
+          runs: this.appState?.runs.list() ?? [],
+          approvals: this.appState?.approvals.list() ?? [],
+          artifacts: this.appState?.artifacts.list() ?? [],
+          toolCalls: this.appState?.toolCalls.list() ?? [],
+          deploymentTargets: this.appState?.deploymentTargets.list() ?? [],
+          deploymentRuns: this.appState?.deploymentRuns.list() ?? [],
+          cells: this.appState?.cells.list() ?? [],
+          cellLeases: this.appState?.cellLeases.list() ?? [],
+          cellSnapshots: this.appState?.cellSnapshots.list() ?? [],
+          cronSchedules: this.appState?.cronSchedules.list() ?? [],
+          budgets: this.appState?.budgets.list() ?? [],
+          usageLedger: this.appState?.usageLedger.list() ?? [],
+          auditEvents: this.appState?.auditEvents.list() ?? [],
+        },
+        sessions,
+        runs,
+        approvals: this.snapshotApprovals(),
+        ...(this.runLogRuntime ? { runLog: this.projectRunLogSnapshot() } : {}),
+        cron: this.cron.status(),
+        pricingCatalog: this.pricingCatalogStatus,
+        usageStatus: this.usageStatus(),
+        budgetStatus: this.budgetStatus(),
+        cellStatus: this.cellStatus(),
+      }
+    } finally {
+      this.snapshotReadCache = undefined
     }
+  }
+
+  /**
+   * Cheap liveness state for transport probes. Full operator state belongs to
+   * `snapshot()` and must not be rebuilt merely to answer `/health`.
+   */
+  health(): RuntimeHealth {
+    return this.runtime.health()
+  }
+
+  /**
+   * A server-only change token for revalidating the sanitized console snapshot.
+   * It intentionally contains no projection data, paths, or credentials.
+   */
+  snapshotRevision(): string {
+    const sessions = this.runtime.storage.stateStore.listSessions()
+    const runLog = this.runLogRuntime
+    const health = this.runtime.health()
+    const runLogRevision = runLog
+      ? runLog.runs.list().map((run) => [
+          run.runId,
+          run.status,
+          run.attemptCount,
+          runLog.store.latestEventSeq(run.runId),
+        ].join(':'))
+      : []
+    const revisionMaterial = JSON.stringify({
+      appStateRevision: this.appState?.revision() ?? 0,
+      health: {
+        ok: health.ok,
+        running: health.running,
+        activeSessions: health.activeSessions,
+      },
+      sessions: sessions.map((session) => ({
+        sessionId: session.sessionId,
+        status: session.status,
+        updatedAt: session.updatedAt,
+      })),
+      mailbox: this.mailboxRevision(sessions),
+      runLog: runLogRevision,
+      runLogWorkerState: this.runLogWorkerState,
+    })
+    return createHash('sha256').update(revisionMaterial).digest('base64url')
+  }
+
+  private mailboxRevision(sessions: MainspringSessionRecord[]): string {
+    const now = Date.now()
+    const cached = this.compatibilityMailboxRevision
+    const compatibilityRevision =
+      !cached || now - cached.checkedAtMs >= COMPATIBILITY_MAILBOX_REVISION_PROBE_MS
+        ? {
+            checkedAtMs: now,
+            fingerprint: sessions.map(mailboxFileRevision).join('|'),
+          }
+        : cached
+    this.compatibilityMailboxRevision = compatibilityRevision
+    return `${MainspringMailbox.changeRevision()}:${compatibilityRevision.fingerprint}`
   }
 
   private projectRunLogSnapshot(): LocalGatewayRunLogSnapshot {
@@ -1637,13 +1735,92 @@ export class LocalMainspringGateway {
     }
   }
 
-  private listRuns(sessionId: string): LocalGatewayRunProjection[] {
-    const session = this.runtime.storage.stateStore.getSession(sessionId)
+  private createSnapshotReadCache(): LocalGatewaySnapshotReadCache {
+    const runMetadataBySessionId = new Map<string, Map<string, LocalGatewayRunMetadataRecord>>()
+    for (const record of this.appState?.runs.list() ?? []) {
+      const recordsForSession = runMetadataBySessionId.get(record.sessionId) ?? new Map()
+      recordsForSession.set(record.runId, record)
+      runMetadataBySessionId.set(record.sessionId, recordsForSession)
+    }
+    return {
+      eventsBySessionId: new Map(),
+      rawEventsBySessionId: new Map(),
+      runMetadataBySessionId,
+    }
+  }
+
+  private runMetadataByRunId(sessionId: string): Map<string, LocalGatewayRunMetadataRecord> {
+    const cached = this.snapshotReadCache?.runMetadataBySessionId.get(sessionId)
+    if (cached) return cached
+    return new Map(
+      (this.appState?.runs.list({ sessionId }) ?? []).map((record) => [record.runId, record] as const),
+    )
+  }
+
+  private nativeMailboxEvents(session: MainspringSessionRecord): RuntimeEventRow[] {
+    const cached = this.snapshotReadCache
+    if (cached?.rawEventsBySessionId.has(session.sessionId)) {
+      return cached.rawEventsBySessionId.get(session.sessionId)!
+    }
+    const rows = MainspringMailbox.fromSessionPath(session.sessionPath).readRecentEvents({
+      sessionId: session.sessionId,
+      limit: 500,
+    })
+    cached?.rawEventsBySessionId.set(session.sessionId, rows)
+    return rows
+  }
+
+  private nativeSessionEvents(
+    sessionId: string,
+    knownSession?: MainspringSessionRecord,
+  ): RunEvent[] {
+    const cached = this.snapshotReadCache
+    if (cached?.eventsBySessionId.has(sessionId)) {
+      return cached.eventsBySessionId.get(sessionId)!
+    }
+    const session = knownSession ?? this.runtime.storage.stateStore.getSession(sessionId)
+    const events = cached && session
+      ? this.nativeMailboxEvents(session)
+        .map(normalizeRuntimeEventRow)
+        .filter((event): event is RunEvent => Boolean(event))
+      : this.runtime.storage.eventStore.listSessionEvents({ sessionId, limit: 500 })
+    cached?.eventsBySessionId.set(sessionId, events)
+    return events
+  }
+
+  private snapshotApprovals(): MainspringApprovalRecord[] {
+    if (!this.appState) return this.runtime.approvals.list()
+    return this.appState.approvals
+      .list({ status: 'pending' })
+      .map((record) => {
+        const metadata = recordValue(record.metadata)
+        return {
+          approvalId: record.approvalId,
+          runId: record.runId,
+          sessionId: record.sessionId,
+          status: 'pending' as const,
+          requestedAt: record.requestedAt,
+          ...(record.resolvedAt ? { resolvedAt: record.resolvedAt } : {}),
+          ...(record.targetKey ? { targetKey: record.targetKey } : {}),
+          reasons: Array.isArray(metadata?.reasons) ? metadata.reasons.map(String) : [],
+          permissionCategories: Array.isArray(metadata?.permissionCategories)
+            ? metadata.permissionCategories.map(String)
+            : [],
+        }
+      })
+      .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
+  }
+
+  private listRuns(
+    sessionId: string,
+    knownSession?: MainspringSessionRecord,
+  ): LocalGatewayRunProjection[] {
+    const session = knownSession ?? this.runtime.storage.stateStore.getSession(sessionId)
     if (!session) return []
 
     const byRunId = new Map<string, LocalGatewayRunProjection>()
 
-    for (const metadata of this.appState?.runs.list({ sessionId }) ?? []) {
+    for (const metadata of this.runMetadataByRunId(sessionId).values()) {
       const metadataRecord = metadata.metadata && typeof metadata.metadata === 'object'
         ? metadata.metadata as Record<string, unknown>
         : {}
@@ -1673,10 +1850,7 @@ export class LocalMainspringGateway {
       byRunId.set(pending.runId, mergeRunProjection(byRunId.get(pending.runId), pending))
     }
 
-    const events = this.runtime.storage.eventStore.listSessionEvents({
-      sessionId,
-      limit: 500,
-    })
+    const events = this.nativeSessionEvents(sessionId, session)
     const eventsByRunId = new Map<string, RunEvent[]>()
     for (const event of events) {
       const existing = eventsByRunId.get(event.runId) ?? []
@@ -1819,15 +1993,8 @@ export class LocalMainspringGateway {
     if (!this.appState) return
 
     for (const session of this.runtime.storage.stateStore.listSessions()) {
-      const runMetadataByRunId = new Map(
-        this.appState.runs
-          .list({ sessionId: session.sessionId })
-          .map((record) => [record.runId, record] as const),
-      )
-      const events = this.runtime.storage.eventStore.listSessionEvents({
-        sessionId: session.sessionId,
-        limit: 500,
-      })
+      const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
+      const events = this.nativeSessionEvents(session.sessionId, session)
 
       for (const event of events) {
         const approvalId = approvalIdFromEvent(event)
@@ -1884,15 +2051,8 @@ export class LocalMainspringGateway {
     if (!this.appState) return
 
     for (const session of this.runtime.storage.stateStore.listSessions()) {
-      const runMetadataByRunId = new Map(
-        this.appState.runs
-          .list({ sessionId: session.sessionId })
-          .map((record) => [record.runId, record] as const),
-      )
-      const sessionEvents = this.runtime.storage.eventStore.listSessionEvents({
-        sessionId: session.sessionId,
-        limit: 500,
-      })
+      const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
+      const sessionEvents = this.nativeSessionEvents(session.sessionId, session)
       const usageEvents = sessionEvents.filter(
         (event): event is RunEvent<UsageUpdatedRunEventPayload> => event.type === 'usage.updated',
       )
@@ -2064,15 +2224,8 @@ export class LocalMainspringGateway {
     if (!this.appState) return
 
     for (const session of this.runtime.storage.stateStore.listSessions()) {
-      const runMetadataByRunId = new Map(
-        this.appState.runs
-          .list({ sessionId: session.sessionId })
-          .map((record) => [record.runId, record] as const),
-      )
-      const events = this.runtime.storage.eventStore.listSessionEvents({
-        sessionId: session.sessionId,
-        limit: 500,
-      })
+      const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
+      const events = this.nativeSessionEvents(session.sessionId, session)
 
       for (const event of events) {
         let status: LocalGatewayToolCallRecord['status'] | null = null
@@ -2258,16 +2411,8 @@ export class LocalMainspringGateway {
     if (!this.appState) return
 
     for (const session of this.runtime.storage.stateStore.listSessions()) {
-      const runMetadataByRunId = new Map(
-        this.appState.runs
-          .list({ sessionId: session.sessionId })
-          .map((record) => [record.runId, record] as const),
-      )
-      const mailbox = MainspringMailbox.fromSessionPath(session.sessionPath)
-      const rows = mailbox.readRecentEvents({
-        sessionId: session.sessionId,
-        limit: 500,
-      })
+      const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
+      const rows = this.nativeMailboxEvents(session)
 
       for (const row of rows) {
         const event = row.event
