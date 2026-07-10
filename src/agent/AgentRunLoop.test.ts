@@ -5,7 +5,7 @@ import { AgentRunLoop } from './AgentRunLoop.js'
 import type { ProjectedTurnEvent } from './TurnLifecycle.js'
 
 class DelayedProviderQuery implements AgentQuery {
-  private aborted = false
+  aborted = false
   private release: (() => void) | null = null
   private readonly done = new Promise<void>((resolve) => {
     this.release = resolve
@@ -199,7 +199,7 @@ describe('AgentRunLoop', () => {
   it('invokes hooks and still reaches provider abort', async () => {
     const provider = new DelayedProvider()
     const controller = new AbortController()
-    let queryFromHook: AgentQuery | undefined
+    let queryFromHook: DelayedProviderQuery | undefined
     const projectedEvents: ProjectedTurnEvent[] = []
 
     const loop = new AgentRunLoop(provider, {
@@ -207,7 +207,7 @@ describe('AgentRunLoop', () => {
       queryInput: { prompt: 'hooked', cwd: '/workspace' },
       signal: controller.signal,
       onQuery: (query) => {
-        queryFromHook = query
+        queryFromHook = query as DelayedProviderQuery
       },
       onEvent: (event) => {
         projectedEvents.push(event)

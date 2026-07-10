@@ -1,6 +1,6 @@
 # RunLog Migration And Legacy Retirement Map
 
-Last updated: 2026-07-02.
+Last updated: 2026-07-10.
 
 RunLog Fabric is the canonical runtime target. A RunLog-backed SDK host now exists for
 new embedded usage. The legacy mailbox and `RuntimeKernel` path still exists for the
@@ -50,6 +50,7 @@ The compatibility path is not a second product architecture. It is the migration
 | `src/events/normalizeRuntimeEvent.ts` | SDK/gateway projections for mailbox rows | `src/hosts/runlog/RunLogProjection.ts` | Compatibility projection | `src/events/normalizeRuntimeEvent.test.ts`, `src/hosts/runlog` tests | Keep only for mailbox row projection; new hosts should consume `RunLogProjection`. |
 | `src/contracts/runtime.ts` run DTOs | SDK, gateway, console client types | `src/core/types.ts` `RunIntent` / `RunLogEvent` and host DTOs | Public compatibility DTOs | `src/package-exports.test.ts`, SDK/gateway tests | Keep DTO shape until public API migration has compatibility tests. |
 | `src/sdk/Mainspring.ts` session/run creation | Legacy SDK and gateway compatibility | `src/sdk/RunLogMainspring.ts` creates `RunIntent` and projects `RunLogProjection` | Public compatibility host plus RunLog-native SDK host. README, all runnable examples, and `openrouter:e2e` now use the RunLog SDK host. The local gateway dev server also creates a RunLog host. | `src/index.test.ts`, `src/sdk/RunLogMainspring.test.ts`, `scripts/check-agentic-harness.mjs`, examples smoke, `scripts/openrouter-e2e.mjs` | Keep `createMainspring` until legacy embedders and non-RunLog gateway tests are deprecated or have RunLog-backed compatibility coverage; use `createRunLogMainspring` for new SDK work. |
+| `src/runner/main.ts` package executable | `mainspring-runtime` and `pnpm start` | `src/runner/runlog-main.ts` plus `mainspring-runlog` / `pnpm start:runlog` | The legacy executable remains compatibility-preserving. New deployments can use the RunLog worker command, which owns the durable SQLite worker lifecycle. | `src/runner/RunLogRunner.test.ts`, package checks | Keep the legacy executable until a breaking migration can move channel and mailbox import/export behavior onto RunLog. Do not silently switch existing operators. |
 | `src/gateway/LocalGateway.ts` session/run APIs | HTTP server, console, gateway tests | RunLog intake plus `RunLogProjection` read model | Mixed gateway/app-state surface: local dev and configured gateways use RunLog for default HTTP run start, RunLog-configured gateway cron dispatch, HTTP/client cron grant preview/create, and console cron grant controls. Gateways without RunLog remain mailbox-compatible. Provider-profile credential refs now resolve host-side for RunLog starts. | `src/gateway/LocalGateway.test.ts`, `src/gateway/server/createLocalGatewayServer.test.ts`, `src/gateway/ConsoleSnapshotAdapter.test.ts`, `apps/console/src/localGatewayClient.test.ts`, `apps/console/src/App.test.tsx`, `pnpm gateway:dev:help` | Keep mailbox compatibility until public SDK/runtime migration is complete. |
 | `apps/console/src/App.tsx` gateway state | Browser operator UI | Gateway DTOs projected from RunLog host state | Browser client surface now reads optional sanitized RunLog projection through gateway DTOs and selected-client RunLog detail panels | `apps/console/src`, console browser-safety check | Keep browser DTO boundary; do not expose raw RunLog/private fields. |
 | `src/compat/runlog.ts` | Temporary RunLog migration subpath | Direct `mainspring/core`, `mainspring/adapters/sqlite`, `mainspring/hosts/runlog` imports | Temporary compatibility exports | `src/package-exports.test.ts`, `scripts/check-package-surface.mjs` | Remove after consumers use canonical subpaths. |
@@ -68,3 +69,4 @@ The compatibility path is not a second product architecture. It is the migration
 1. Use persisted memory/skill taint labels in context assembly and policy prompts.
 2. Add checkpoint replay/retry controls only after RunLog replay semantics are code-backed.
 3. Retire mailbox event projection once SDK/gateway/console no longer need it.
+4. Move control-channel ingress onto RunLog before changing the default package executable.

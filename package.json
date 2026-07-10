@@ -54,7 +54,9 @@
     "RELEASE.md"
   ],
   "bin": {
-    "mainspring-runtime": "dist/runner/main.js"
+    "mainspring-runtime": "dist/runner/main.js",
+    "mainspring-runlog": "dist/runner/runlog-main.js",
+    "mainspring-runtime-compat": "dist/runner/main.js"
   },
   "exports": {
     ".": {
@@ -144,6 +146,8 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "pnpm run clean && pnpm exec tsc",
     "start": "node dist/runner/main.js",
+    "start:runlog": "node dist/runner/runlog-main.js",
+    "start:compat": "node dist/runner/main.js",
     "console:dev": "pnpm --filter @mainspring/console dev",
     "console:build": "pnpm --filter @mainspring/console build",
     "console:browser-safety:check": "node scripts/check-console-browser-safety.mjs",
@@ -187,7 +191,8 @@
     "examples:check": "pnpm examples:smoke",
     "examples:smoke": "pnpm build && pnpm example:provider-run:run && pnpm example:tool-approval:run && pnpm example:coding-agent:run && pnpm example:personal-assistant:run && pnpm example:support-agent:run && pnpm example:agency-client-agent:run && pnpm example:local-first-agent:run",
     "typecheck": "pnpm exec tsc --noEmit",
-    "test:typecheck": "pnpm exec tsc --project tsconfig.production-tests.json",
+    "test:typecheck": "pnpm exec tsc --project tsconfig.tests.json",
+    "test:typecheck:production": "pnpm exec tsc --project tsconfig.production-tests.json",
     "test": "pnpm exec vitest run src apps/console/src apps/desktop/src --passWithNoTests",
     "console:e2e": "pnpm build && node scripts/run-console-e2e.mjs",
     "doctor": "node scripts/doctor.mjs",
@@ -204,7 +209,7 @@
     "package:pack:check": "node scripts/check-pnpm-pack.mjs",
     "openrouter:e2e": "pnpm build && node scripts/openrouter-e2e.mjs",
     "release:check": "pnpm verify && pnpm security:truth && pnpm skills:check && pnpm runlog:migration:check && pnpm gateway:systems:check && pnpm gateway:dev:help && pnpm examples:smoke && pnpm agentic:check && pnpm desktop:systems:check && pnpm release:workflow:check && pnpm optional-verifiers:check && pnpm package:check && pnpm package:pack:check && npm pack --dry-run && node scripts/check-docker-compose-config.mjs",
-    "verify": "pnpm run doctor && pnpm typecheck && pnpm test && pnpm build && pnpm run security:mainspring && pnpm run security:sensitive-patterns && pnpm security:truth && pnpm skills:check && pnpm runlog:migration:check && pnpm docs:check && pnpm console:typecheck && pnpm console:browser-safety:check && pnpm console:build"
+    "verify": "pnpm run doctor && pnpm typecheck && pnpm test:typecheck && pnpm test && pnpm build && pnpm run security:mainspring && pnpm run security:sensitive-patterns && pnpm security:truth && pnpm skills:check && pnpm runlog:migration:check && pnpm docs:check && pnpm console:typecheck && pnpm console:browser-safety:check && pnpm console:build"
   },
   "dependencies": {
     "@openai/codex": "0.142.5",

@@ -157,7 +157,7 @@ const outSql = (patch: Record<string, unknown> = {}) => ({
   timestamp: ts2,
   delivered: 0,
   deliver_after: null,
-  kind: 'assistant_message',
+  kind: 'assistant_message' as const,
   content: '{"text":"done"}',
   ...patch,
 })
@@ -167,7 +167,7 @@ const outMsg = (patch: Record<string, unknown> = {}) => ({
   sessionId: 'run_run_1',
   timestamp: ts2,
   delivered: false,
-  kind: 'assistant_message',
+  kind: 'assistant_message' as const,
   content: '{"text":"done"}',
   ...patch,
 })

@@ -1345,6 +1345,7 @@ export class LocalMainspringGateway {
           sessionId: resolvedInput.sessionId,
           workspaceId: resolvedInput.workspaceId,
           ...(workspaceRoot ? { workspaceRoot } : {}),
+          ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
           providerId: resolvedInput.providerId,
           modelId: resolvedInput.modelId,
           credentialRef: resolvedInput.credentialRef,
@@ -1353,7 +1354,6 @@ export class LocalMainspringGateway {
           metadata: {
             gatewaySurface: 'runlog',
             ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
-            ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
             ...(resolvedInput.runtimeProfile
               ? { runtimeProfile: this.runtimeProfiles.assertRegistered(resolvedInput.runtimeProfile) }
               : {}),

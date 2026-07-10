@@ -516,6 +516,8 @@ describe('RuntimeKernel', () => {
             budgetId: 'budget_runtime_block',
             label: 'Runtime workspace budget',
             reason: 'Runtime budget exhausted',
+            requireApproval: false,
+            enforceUsageLimit: true,
           },
         },
       }),
@@ -1440,7 +1442,9 @@ describe('RuntimeKernel', () => {
             toolType: 'file',
           },
           execute: ({ input }) => {
-            const pathValue = typeof input?.path === 'string' ? input.path : ''
+            const pathValue = typeof (input as { path?: unknown })?.path === 'string'
+              ? (input as { path: string }).path
+              : ''
             return { text: pathValue.includes('one') ? 'one' : pathValue.includes('two') ? 'two' : '' }
           },
         },

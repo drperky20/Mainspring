@@ -58,6 +58,7 @@ function snapshot(): LocalGatewaySnapshot {
       ],
       approvals: [],
       artifacts: [],
+      toolCalls: [],
       usageLedger: [],
       auditEvents: [],
     },
@@ -92,7 +93,7 @@ function snapshot(): LocalGatewaySnapshot {
       },
     ],
     approvals: [],
-  }
+  } as unknown as LocalGatewaySnapshot
 }
 
 describe('Gateway route context', () => {

@@ -720,7 +720,7 @@ describe('LocalMainspringGateway', () => {
 
     const [pending] = MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(1)
     if (!pending?.dispatch.success) {
-      throw new Error(`Expected a valid mailbox dispatch, got ${pending?.dispatch.error.message ?? 'none'}.`)
+      throw new Error(`Expected a valid mailbox dispatch, got ${pending?.dispatch.error?.message ?? 'none'}.`)
     }
     expect(pending.runId).toBe(run.runId)
     expect(pending.dispatch.data.intent.message).toBe('Queue through the gateway.')
@@ -801,7 +801,7 @@ describe('LocalMainspringGateway', () => {
 
       const [pending] = MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(1)
       if (!pending?.dispatch.success) {
-        throw new Error(`Expected a valid mailbox dispatch, got ${pending?.dispatch.error.message ?? 'none'}.`)
+        throw new Error(`Expected a valid mailbox dispatch, got ${pending?.dispatch.error?.message ?? 'none'}.`)
       }
       const dispatch = pending.dispatch.data
       expect(pending.runId).toBe(run.runId)
@@ -1685,7 +1685,7 @@ describe('LocalMainspringGateway', () => {
       )
       await waitFor(
         () => gateway.events.list({ sessionId, runId: run.runId, limit: 500 }),
-        (events) => events.some((event) => event.type === 'approval.denied'),
+        (events): events is NonNullable<typeof events> => events?.some((event) => event.type === 'approval.denied') === true,
       )
       await waitFor(
         () => gateway.runs.list(sessionId).find((candidate) => candidate.runId === run.runId),
@@ -1782,7 +1782,7 @@ describe('LocalMainspringGateway', () => {
       )
       await waitFor(
         () => gateway.events.list({ sessionId, runId: run.runId, limit: 500 }),
-        (events) => events.some((event) => event.type === 'approval.approved'),
+        (events): events is NonNullable<typeof events> => events?.some((event) => event.type === 'approval.approved') === true,
       )
       const sdkEvents = mainspring.storage.eventStore.listRunEvents({
         sessionId,
@@ -2937,7 +2937,7 @@ describe('LocalMainspringGateway', () => {
       const run = gateway.cron.runNow(schedule.scheduleId)
       const [pending] = MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(1)
       if (!pending?.dispatch.success) {
-        throw new Error(`Expected cron mailbox dispatch, got ${pending?.dispatch.error.message ?? 'none'}.`)
+        throw new Error(`Expected cron mailbox dispatch, got ${pending?.dispatch.error?.message ?? 'none'}.`)
       }
 
       expect(schedule).toMatchObject({
@@ -3388,7 +3388,7 @@ describe('LocalMainspringGateway', () => {
 
       const [pending] = MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(1)
       if (!pending?.dispatch.success) {
-        throw new Error(`Expected scheduled mailbox dispatch, got ${pending?.dispatch.error.message ?? 'none'}.`)
+        throw new Error(`Expected scheduled mailbox dispatch, got ${pending?.dispatch.error?.message ?? 'none'}.`)
       }
 
       expect(pending.dispatch.data.intent.message).toBe('Run from scheduler.')

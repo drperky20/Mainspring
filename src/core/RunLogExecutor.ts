@@ -960,6 +960,7 @@ export class RunLogExecutor {
       runId: input.run.runId,
       sessionId: input.run.sessionId,
       workspaceRoot: input.workspaceRoot,
+      ...(input.run.computerId ? { computerId: input.run.computerId } : {}),
       policy: input.policy,
       emitEvent: () => {},
       recordDecision: (record) => this.recordPolicyDecision(input.run.runId, record),

@@ -305,7 +305,7 @@ describe('Mainspring SDK', () => {
 
     const [message] = MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(1)
     if (!message?.dispatch.success) {
-      throw new Error(`Expected a valid dispatch, got ${message?.dispatch.error.message ?? 'none'}.`)
+      throw new Error(`Expected a valid dispatch, got ${message?.dispatch.error?.message ?? 'none'}.`)
     }
 
     const dispatch = message.dispatch.data
@@ -540,7 +540,7 @@ describe('Mainspring SDK', () => {
       const providerInitWarning = events.find(
         (event): event is RunEventOfType<'runtime.warning'> =>
           event.type === 'runtime.warning'
-          && event.payload.message === PROVIDER_INIT_LOG_MESSAGE,
+          && (event.payload as { message?: unknown }).message === PROVIDER_INIT_LOG_MESSAGE,
       )
       expect(providerInitWarning?.payload).toMatchObject({
         level: 'debug',

@@ -1554,11 +1554,14 @@ function runLogEventPublic(event: RunLogEvent) {
     type: event.type,
     timestamp: event.timestamp,
     visibility: event.visibility,
-    ...(event.payload !== undefined ? { payload: event.payload } : {}),
+    // Browser clients receive only events explicitly marked public. Sensitive
+    // and artifact-only records remain available to trusted host/SDK readers.
+    ...(event.visibility === 'public' && event.payload !== undefined ? { payload: event.payload } : {}),
   }
 }
 
 function runLogProjectionResponse(projection: RunLogRunProjection) {
+  const publicEvents = projection.events.filter((event) => event.visibility === 'public')
   return {
     run: runLogRunDispatch(projection.run),
     status: projection.status,
@@ -1568,11 +1571,17 @@ function runLogProjectionResponse(projection: RunLogRunProjection) {
     toolCalls: projection.toolCalls,
     checkpoints: projection.checkpoints,
     policyDecisions: projection.policyDecisions,
-    artifacts: projection.artifacts,
+    // Artifact records require a separate authorized download flow. Returning
+    // only public artifact-created payloads avoids treating artifact-only
+    // records as browser-visible merely because they are present in a host
+    // projection.
+    artifacts: publicEvents
+      .filter((event) => event.type === 'artifact.created')
+      .map((event) => event.payload),
     usage: projection.usage,
     errors: projection.errors,
     latestSeq: projection.latestSeq,
-    events: projection.events.map(runLogEventPublic),
+    events: publicEvents.map(runLogEventPublic),
   }
 }
 

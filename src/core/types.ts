@@ -25,7 +25,7 @@ export interface AgentSpec {
   memoryScope?: string
   workspacePolicy?: 'none' | 'lazy' | 'required'
   approvalPolicy?: RuntimePolicy['approvalPolicy']
-  capabilities?: RunLogCapability[]
+  capabilities?: readonly RunLogCapability[]
   metadata?: Record<string, unknown>
 }
 
@@ -37,6 +37,7 @@ export interface RunIntent {
   parentRunId?: string
   workspaceId?: string
   workspaceRoot?: string
+  computerId?: string
   requestedCapabilities?: RunLogCapability[]
   providerId?: string
   modelId?: string
@@ -66,6 +67,7 @@ export interface RunRecord {
   parentRunId?: string
   workspaceId?: string
   workspaceRoot?: string
+  computerId?: string
   providerId?: string
   modelId?: string
   credentialRef?: string

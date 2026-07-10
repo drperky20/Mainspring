@@ -49,7 +49,7 @@ const requestBody = (requests: Array<{ init?: RequestInit }>, index = 0) =>
 
 const tool = (
   key: string,
-  toolType: string,
+  toolType: 'browser' | 'memory' | 'file' | 'shell' | 'mcp' | 'builtin' | 'web',
   permissions: Record<string, unknown>,
   approval: Record<string, unknown> = {},
 ) => ({

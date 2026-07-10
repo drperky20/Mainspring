@@ -26,6 +26,9 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `pnpm example:agency-client-agent` now uses `createRunLogMainspring` for a read-then-approved-write client deliverable workflow.
   - `pnpm example:local-first-agent` now uses `createRunLogMainspring` for approval-gated `memory.write`, provenance-scanned persistence, and `memory.read`.
   - `pnpm openrouter:e2e` now uses `createRunLogMainspring` for optional live OpenRouter verification when `OPENROUTER_API_KEY` and network access are available.
+  - `mainspring-runlog` and `pnpm start:runlog` launch a durable local RunLog worker with explicit SQLite paths, ordered worker shutdown, host-side env secret resolution, and an EchoProvider fallback for no-key local bring-up. The existing `mainspring-runtime` executable remains the named mailbox compatibility runner.
+  - Public child-run helpers preserve parent authority: a child can provide only prompt, run ID, and metadata; session, workspace, provider, credential ref, model, agent, and tool scope are inherited from its persisted parent.
+  - Requested `computerId` values are first-class durable RunLog state. They are preserved through child runs and passed to tool contexts so shell backend selection honors the requested host/WSL/Docker computer instead of silently falling back to host execution.
 - Durable execution and projection spine:
   - SQLite lifecycle commands commit run status, lifecycle events, and execution-outbox records together.
   - `RunLogWorker` claims work with fenced leases, heartbeats, bounded retry backoff, cancellation propagation, and restart recovery.
@@ -40,6 +43,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `pnpm gateway:dev` now constructs a local RunLog host by default, backed by `.mainspring/runlog/runlog.sqlite` and `.mainspring/runlog/workspaces`.
   - Local gateway server startup owns the RunLog worker lifecycle. Its sanitized snapshot exposes worker state, queued-run count, and durable outbox counts; shutdown stops the worker before the dev host closes its store.
   - RunLog `RunIntent` / `RunRecord` now carry opaque provider credential refs such as `env:...` or `managed:...`; provider calls receive only parsed refs plus an in-process host secret resolver.
+  - Browser-facing RunLog event responses include only explicitly `public` events. `sensitive` and `artifact-only` event payloads remain host/SDK-only, and artifact-only records are not promoted through the generic event endpoint.
 - Console-facing RunLog projection:
   - `LocalMainspringGateway.snapshot()` can include an optional sanitized RunLog read model discovered from the durable RunLog store, including runs created outside gateway app-state metadata.
   - RunLog `usage.reported` events are synchronized into the gateway usage ledger so console totals, pricing, and budget transitions use canonical runtime facts.
@@ -56,7 +60,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - The console exposes OpenRouter and OpenAI provider profiles as live backend-backed service connections; Codex OAuth, direct Anthropic, and other providers are visible as connector or catalog paths until backend adapters exist.
   - Dedicated per-client dashboard links, per-client accounts, and tenant authorization are not implemented.
 - Package subpaths now expose `mainspring/core`, `mainspring/adapters`, `mainspring/adapters/sqlite`, `mainspring/adapters/local-blob`, `mainspring/capabilities`, `mainspring/hosts/runlog`, and `mainspring/compat`.
-- Repository verification invokes the project doctor explicitly through `pnpm run doctor`. The release gate uses `pnpm package:pack:check` to create and validate a pnpm tarball in a temporary directory that is removed before success is reported; npm's package dry-run remains a separate check.
+- Repository verification invokes the project doctor explicitly through `pnpm run doctor`, strict-compiles all root test files through `pnpm test:typecheck`, and then runs the test suite. The release gate uses `pnpm package:pack:check` to create and validate a pnpm tarball in a temporary directory that is removed before success is reported; npm's package dry-run remains a separate check.
 - `docs/migration-runlog.md` records the legacy mailbox/`RuntimeKernel` retirement map and `pnpm runlog:migration:check` keeps that map tied to existing source files, package exports, and release checks.
 - Focused tests prove provider-only runs, tool calls, approval pauses, approval/denial decisions, SQLite-backed approval resume, SQLite restart recovery, cron-created runs, lazy workspace materialization, and 1000 idle agents stored as data.
 - RunLog approval resume now has scoped signed receipts:
@@ -111,14 +115,13 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Full replacement of `RuntimeKernel` and per-session mailbox execution with RunLog execution.
 - Broader provider-account auth beyond env/local managed refs, such as OAuth provider auth or hosted KMS.
 - AI SDK streaming transport endpoint for the console chat surface; the UI package dependency exists, but gateway chat dispatch still goes through `/runs/start`.
-- A strict root-test TypeScript lane. Vitest executes the root tests successfully, but existing fixtures still rely on intentionally partial objects and legacy contract shapes that do not pass a standalone strict `tsc` project; migrate those fixtures before adding `typecheck:tests` to `verify`.
-- Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
+- Postgres, Redis/BullMQ, S3/R2/MinIO, Kubernetes, and managed-cloud adapters. Docker execution plus local/container/VPS deployment drivers exist, but they are not managed-cloud infrastructure or VM isolation.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Browser/page multimodal context and provider-specific content-part adapters.
 - Complete per-tool/per-provider/usage projections beyond the current persisted run-summary cursor.
 - Remote skill marketplace trust, signed catalog distribution, and third-party reputation.
 - General checkpoint replay/retry controls beyond the implemented approval-resume continuation.
-- Child-run/subagent helper APIs beyond the parent-run data model.
+- Remote child-run/subagent dispatch, identity, and trust boundaries beyond the local attenuating child-run SDK helper.
 - Hosted or remote provenance review trust beyond the local staged review queue.
 - Not implemented: hosted multi-tenant auth, real billing, remote marketplace trust, VM isolation, secure desktop credential vault, or packaged updater publishing.
 

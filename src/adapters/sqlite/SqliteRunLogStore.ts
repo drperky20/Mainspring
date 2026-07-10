@@ -65,6 +65,7 @@ function mapRun(row: Record<string, unknown>): RunRecord {
   if (row.parent_run_id) run.parentRunId = String(row.parent_run_id)
   if (row.workspace_id) run.workspaceId = String(row.workspace_id)
   if (row.workspace_root) run.workspaceRoot = String(row.workspace_root)
+  if (row.computer_id) run.computerId = String(row.computer_id)
   if (row.provider_id) run.providerId = String(row.provider_id)
   if (row.model_id) run.modelId = String(row.model_id)
   if (row.credential_ref) run.credentialRef = String(row.credential_ref)
@@ -269,6 +270,7 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
         input TEXT NOT NULL,
         workspace_id TEXT,
         workspace_root TEXT,
+        computer_id TEXT,
         provider_id TEXT,
         model_id TEXT,
         credential_ref TEXT,
@@ -404,6 +406,7 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
         ON run_execution_outbox(run_id, generation);
     `)
     this.ensureRunColumn('credential_ref', 'TEXT')
+    this.ensureRunColumn('computer_id', 'TEXT')
     this.ensureRunColumn('allowed_tools_json', 'TEXT')
     this.ensureRunColumn('execution_generation', 'INTEGER NOT NULL DEFAULT 1')
     this.ensureRunColumn('lease_epoch', 'INTEGER NOT NULL DEFAULT 0')
@@ -541,6 +544,7 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       parentRunId: intent.parentRunId,
       workspaceId: intent.workspaceId,
       workspaceRoot: intent.workspaceRoot,
+      computerId: intent.computerId,
       providerId: intent.providerId ?? agent.providerId,
       modelId: intent.modelId ?? agent.modelId,
       credentialRef: intent.credentialRef,
@@ -554,12 +558,12 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       .prepare(`
         INSERT INTO runs (
           run_id, agent_id, session_id, parent_run_id, status, input,
-          workspace_id, workspace_root, provider_id, model_id, credential_ref, allowed_tools_json, metadata_json,
+          workspace_id, workspace_root, computer_id, provider_id, model_id, credential_ref, allowed_tools_json, metadata_json,
           created_at, updated_at
         )
         VALUES (
           @runId, @agentId, @sessionId, @parentRunId, @status, @input,
-          @workspaceId, @workspaceRoot, @providerId, @modelId, @credentialRef, @allowedToolsJson, @metadataJson,
+          @workspaceId, @workspaceRoot, @computerId, @providerId, @modelId, @credentialRef, @allowedToolsJson, @metadataJson,
           @createdAt, @updatedAt
         )
       `)
@@ -572,6 +576,7 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
         input: run.input,
         workspaceId: run.workspaceId ?? null,
         workspaceRoot: run.workspaceRoot ?? null,
+        computerId: run.computerId ?? null,
         providerId: run.providerId ?? null,
         modelId: run.modelId ?? null,
         credentialRef: run.credentialRef ?? null,

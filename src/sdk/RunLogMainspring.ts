@@ -53,6 +53,16 @@ export type StartRunLogRunInput = Omit<RunIntent, 'agentId'> & {
   agentId?: string
 }
 
+/**
+ * A child run is intentionally an attenuating operation. It can supply a new
+ * prompt and metadata, but inherits execution identity and all authority
+ * bearing fields from its parent rather than accepting caller-controlled
+ * workspace, provider, credential, or tool overrides.
+ */
+export type StartChildRunLogInput = Pick<RunIntent, 'input' | 'runId' | 'metadata'> & {
+  parentRunId: string
+}
+
 export class RunLogMainspringRunHandle {
   constructor(
     private readonly runtime: RunLogMainspring,
@@ -96,6 +106,10 @@ export class RunLogMainspringRunHandle {
       ...input,
       approvalId: input.approvalId ?? this.requiredPendingApprovalId(),
     })
+  }
+
+  startChild(input: Omit<StartChildRunLogInput, 'parentRunId'>): RunLogMainspringRunHandle {
+    return this.runtime.runs.startChild({ ...input, parentRunId: this.record.runId })
   }
 
   private requiredPendingApprovalId(): string {
@@ -159,6 +173,26 @@ export class RunLogMainspring {
       const run = this.kernel.startRun({
         ...input,
         agentId: input.agentId ?? this.defaultAgentId,
+      })
+      return new RunLogMainspringRunHandle(this, run)
+    },
+    startChild: (input: StartChildRunLogInput): RunLogMainspringRunHandle => {
+      const parent = this.store.getRun(input.parentRunId)
+      if (!parent) throw new Error(`Unknown parent RunLog run: ${input.parentRunId}`)
+      const run = this.kernel.startRun({
+        runId: input.runId,
+        parentRunId: parent.runId,
+        agentId: parent.agentId,
+        sessionId: parent.sessionId,
+        input: input.input,
+        workspaceId: parent.workspaceId,
+        workspaceRoot: parent.workspaceRoot,
+        computerId: parent.computerId,
+        providerId: parent.providerId,
+        modelId: parent.modelId,
+        credentialRef: parent.credentialRef,
+        allowedTools: parent.allowedTools,
+        metadata: input.metadata,
       })
       return new RunLogMainspringRunHandle(this, run)
     },

@@ -490,6 +490,11 @@ const sourceSnapshot: LocalGatewaySnapshot = {
   ],
   runLog: {
     configured: true,
+    worker: {
+      state: 'running',
+      queuedRuns: 1,
+      outbox: { pending: 1, claimed: 0, retryable: 0, completed: 0, failed: 0, cancelled: 0 },
+    },
     runs: [
       {
         runId: 'runlog_1',
@@ -714,6 +719,11 @@ describe('gatewaySnapshotToConsoleState', () => {
       ])
       expect(consoleState.runLog).toEqual({
         configured: true,
+        worker: {
+          state: 'running',
+          queuedRuns: 1,
+          outbox: { pending: 1, claimed: 0, retryable: 0, completed: 0, failed: 0, cancelled: 0 },
+        },
         runs: [
           {
             runId: 'runlog_1',
@@ -1170,7 +1180,7 @@ describe('gatewaySnapshotToConsoleState', () => {
           ],
           cronSchedules: [
             {
-              ...sourceSnapshot.appState.cronSchedules[0],
+              ...sourceSnapshot.appState.cronSchedules![0]!,
               prompt:
                 'run artifactPath=C:\\secret\\cron-artifact.md databasePath=/var/lib/mainspring/gateway.sqlite sessionsRoot=/sessions/root',
               lastError:
@@ -1227,11 +1237,15 @@ describe('gatewaySnapshotToConsoleState', () => {
 
   it('builds a sanitized run event DTO', () => {
     const event = consoleRunEvent({
+      eventId: 'event_1',
       type: 'tool.call.updated',
       runId: 'run_1',
       sessionId: 'session_1',
       timestamp: '2026-06-27T12:30:00.000Z',
       seq: 2,
+      visibility: 'public',
+      traceId: 'trace_1',
+      spanId: 'span_1',
       payload: {
         toolCallId: 'tool_1',
         message:
@@ -1515,6 +1529,16 @@ describe('consoleMarketplaceInstall', () => {
         runtimeProfile: 'core-browser',
         allowedTools: ['file.read', 'shell.exec filePath=C:\\secret\\market-tool.txt'],
         approvalMode: `manual OPENAI_API_${'KEY'}`,
+        exampleDir: 'examples/poisoned-template',
+        defaults: {
+          clientName: 'Template client',
+          workspaceName: 'Template workspace',
+          agentName: 'Template agent',
+          outcome: 'Template outcome',
+          voice: 'direct',
+          instructions: 'Follow the operator request.',
+        },
+        seedFiles: [{ source: 'agent.config.json', destination: 'agent.config.json' }],
       },
       client: {
         clientId: 'client_template',
@@ -1534,13 +1558,11 @@ describe('consoleMarketplaceInstall', () => {
       },
       agent: {
         agentId: 'agent_template',
-        clientId: 'client_template',
         workspaceId: 'workspace_template',
         name: 'Template agent artifactPath=C:\\secret\\template-agent.md',
-        description: 'safe',
+        version: 'v1',
+        defaultModelId: 'gpt-5',
         status: 'active',
-        runtimeProfile: 'core-browser',
-        allowedTools: ['file.read'],
         createdAt: '2026-06-27T11:00:00.000Z',
         updatedAt: '2026-06-27T11:00:01.000Z',
       },

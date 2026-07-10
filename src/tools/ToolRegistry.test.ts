@@ -530,6 +530,8 @@ describe('ToolRegistry', () => {
           budgetId: 'budget_tool_block',
           label: 'Workspace budget',
           reason: 'Workspace budget exhausted',
+          requireApproval: false,
+          enforceUsageLimit: true,
         },
       })),
     })
@@ -567,6 +569,8 @@ describe('ToolRegistry', () => {
           budgetId: 'budget_tool_warn',
           label: 'Workspace budget',
           reason: 'Workspace budget warning',
+          requireApproval: false,
+          enforceUsageLimit: true,
           costSensitiveTools: {
             mode: 'approval',
             reason: 'Cost-sensitive tools need budget review',
@@ -620,6 +624,8 @@ describe('ToolRegistry', () => {
           status: 'warn',
           budgetId: 'budget_tool_cost_block',
           label: 'Workspace budget',
+          requireApproval: false,
+          enforceUsageLimit: true,
           costSensitiveTools: {
             mode: 'block',
             reason: 'Cost-sensitive tools are blocked by remaining budget',

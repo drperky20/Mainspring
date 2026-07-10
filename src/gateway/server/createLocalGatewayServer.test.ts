@@ -251,7 +251,7 @@ describe('LocalGatewayHttpServer', () => {
     const mainspring = createMainspring({
       sessionsRoot: path.join(root, 'sessions'),
       workspaceRoot: path.join(root, 'workspace'),
-      provider: new MockProvider(),
+      provider: new MockProvider([]),
     })
     const gateway = createLocalMainspringGateway({
       runtime: mainspring,
@@ -490,6 +490,18 @@ describe('LocalGatewayHttpServer', () => {
             run.runId === runId && run.status === 'completed',
         )
       }, 'RunLog HTTP managed secret run completion')
+      runLog.store.appendEvent({
+        runId,
+        type: 'runtime.warning',
+        visibility: 'sensitive',
+        payload: { secret: 'must-not-cross-browser-boundary' },
+      })
+      runLog.store.appendEvent({
+        runId,
+        type: 'artifact.created',
+        visibility: 'artifact-only',
+        payload: { artifactId: 'artifact-private' },
+      })
       const runLogEvents = await fetch(
         `${started.url}/runlog/runs/${encodeURIComponent(runId)}/events?limit=100`,
       ).then((response) => response.json())
@@ -509,6 +521,14 @@ describe('LocalGatewayHttpServer', () => {
       expect(runLogEvents.events).toEqual(
         expect.arrayContaining([expect.objectContaining({ type: 'run.completed' })]),
       )
+      expect(runLogEvents.events).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ visibility: 'sensitive' }),
+          expect.objectContaining({ visibility: 'artifact-only' }),
+        ]),
+      )
+      expect(serializedHttp).not.toContain('must-not-cross-browser-boundary')
+      expect(serializedHttp).not.toContain('artifact-private')
       expect(serializedHttp).not.toContain(managedSecretValue)
       expect(serializedHttp).not.toContain('secretRef')
       expect(fileContains(root, managedSecretValue)).toBeNull()
@@ -629,7 +649,7 @@ describe('LocalGatewayHttpServer', () => {
     const runtime = createMainspring({
       sessionsRoot,
       workspaceRoot,
-      provider: new MockProvider(),
+      provider: new MockProvider([]),
     })
     const client = appState.clients.create({ name: 'Ingress Authorization Client' })
     const workspaceOne = appState.workspaces.create({
@@ -661,7 +681,7 @@ describe('LocalGatewayHttpServer', () => {
     })
     const runLog = createRunLogMainspring({
       rootPath: path.join(root, 'runlog'),
-      provider: new MockProvider(),
+      provider: new MockProvider([]),
       agent: { agentId: 'agent_default_ingress', instructions: 'Do not run invalid requests.' },
       approvalReceiptKey: 'runlog-ingress-authorization-test-key',
     })
@@ -725,7 +745,7 @@ describe('LocalGatewayHttpServer', () => {
     const mainspring = createMainspring({
       sessionsRoot,
       workspaceRoot,
-      provider: new MockProvider([{ type: 'result', text: 'ok' }]),
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'ok' } }]),
       pollIntervalMs: 10,
     })
     const gateway = createLocalMainspringGateway({
@@ -1002,7 +1022,7 @@ describe('LocalGatewayHttpServer', () => {
     const mainspring = createMainspring({
       sessionsRoot,
       workspaceRoot,
-      provider: new MockProvider([{ type: 'result', text: 'ok' }]),
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'ok' } }]),
       pollIntervalMs: 10,
     })
     const gateway = createLocalMainspringGateway({
@@ -2698,7 +2718,7 @@ describe('LocalGatewayHttpServer', () => {
     const runtime = createMainspring({
       sessionsRoot,
       workspaceRoot,
-      provider: new MockProvider(),
+      provider: new MockProvider([]),
     })
     const session = runtime.sessions.create({
       sessionId: 'session_enqueue_only_worker',
@@ -3164,7 +3184,7 @@ describe('LocalGatewayHttpServer', () => {
     const mainspring = createMainspring({
       sessionsRoot,
       workspaceRoot,
-      provider: new MockProvider([{ type: 'result', text: 'ok' }]),
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'ok' } }]),
       pollIntervalMs: 10,
     })
     const gateway = createLocalMainspringGateway({
@@ -3357,7 +3377,7 @@ describe('LocalGatewayHttpServer', () => {
     const mainspring = createMainspring({
       sessionsRoot,
       workspaceRoot,
-      provider: new MockProvider(),
+      provider: new MockProvider([]),
       pollIntervalMs: 10,
     })
     const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })

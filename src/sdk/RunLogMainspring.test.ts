@@ -207,4 +207,98 @@ describe('RunLogMainspring SDK host', () => {
     )
     expect(reopened.runs.list({ status: 'cancelled' })).toHaveLength(2)
   })
+
+  it('creates attenuated child runs that inherit the parent execution scope', () => {
+    const root = tempRoot()
+    const app = runtime({
+      rootPath: root,
+      provider: new MockProvider([]),
+      agent: {
+        agentId: 'agent_children',
+        instructions: 'Delegate only inside the parent scope.',
+        capabilities: ['provider'],
+      },
+    })
+    const parent = app.runs.start({
+      input: 'Parent work',
+      sessionId: 'session_parent',
+      workspaceId: 'workspace_parent',
+      workspaceRoot: path.join(root, 'workspace_parent'),
+      computerId: 'computer_docker',
+      providerId: 'provider_parent',
+      modelId: 'model_parent',
+      credentialRef: 'env:PARENT_TOKEN',
+      allowedTools: ['file.read'],
+    })
+
+    const child = parent.startChild({
+      input: 'Child work',
+      metadata: { purpose: 'summarize' },
+    })
+
+    expect(child.record).toMatchObject({
+      parentRunId: parent.record.runId,
+      agentId: parent.record.agentId,
+      sessionId: parent.record.sessionId,
+      workspaceId: parent.record.workspaceId,
+      workspaceRoot: parent.record.workspaceRoot,
+      computerId: parent.record.computerId,
+      providerId: parent.record.providerId,
+      modelId: parent.record.modelId,
+      credentialRef: parent.record.credentialRef,
+      allowedTools: parent.record.allowedTools,
+      input: 'Child work',
+      metadata: { purpose: 'summarize' },
+    })
+    expect(() => app.runs.startChild({ parentRunId: 'missing', input: 'No parent' })).toThrow(
+      'Unknown parent RunLog run: missing',
+    )
+  })
+
+  it('persists and forwards a requested computer identity into RunLog tool execution', async () => {
+    const root = tempRoot()
+    const seenComputerIds: Array<string | undefined> = []
+    const captureTool: RuntimeTool = {
+      manifest: builtinManifest({
+        key: 'computer.capture',
+        name: 'Computer Capture',
+        description: 'Captures the selected execution computer for a test.',
+        permissions: { filesystem: 'read' },
+        approval: {},
+        toolType: 'builtin',
+      }),
+      execute: ({ computerId }) => {
+        seenComputerIds.push(computerId)
+        return { computerId }
+      },
+    }
+    const app = runtime({
+      rootPath: root,
+      provider: new MockProvider([
+        {
+          type: 'event',
+          event: { type: 'tool_call', name: 'computer.capture', toolCallId: 'capture_1', input: {} },
+        },
+        { type: 'await_push', produce: { type: 'result', text: 'captured' } },
+      ]),
+      tools: [captureTool],
+      agent: {
+        agentId: 'agent_computer',
+        instructions: 'Use the selected computer.',
+        tools: ['computer.capture'],
+        capabilities: ['provider', 'tools'],
+      },
+    })
+
+    const run = app.runs.start({
+      input: 'Capture the computer.',
+      computerId: 'computer_wsl',
+      allowedTools: ['computer.capture'],
+    })
+    await run.drainUntilIdle()
+
+    expect(run.record.computerId).toBe('computer_wsl')
+    expect(app.runs.project(run.record.runId).run.computerId).toBe('computer_wsl')
+    expect(seenComputerIds).toEqual(['computer_wsl'])
+  })
 })
