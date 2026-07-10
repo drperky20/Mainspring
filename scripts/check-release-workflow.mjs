@@ -17,6 +17,7 @@ requirePackageScript('execution-backends:check')
 requirePackageScript('gateway:dev:help')
 requirePackageScript('console:browser-safety:check')
 requirePackageScript('docs:check')
+requirePackageScript('doctor')
 requirePackageScript('security:truth')
 requirePackageScript('examples:smoke')
 requirePackageScript('agentic:check')
@@ -26,6 +27,9 @@ requirePackageScript('desktop:packaging:check')
 requirePackageScript('optional-verifiers:check')
 requirePackageScript('release:workflow:check')
 requirePackageScript('package:check')
+requirePackageScript('package:pack:check')
+requirePackageScriptCommand('repo:doctor', 'pnpm run doctor')
+requirePackageScriptCommand('package:pack:check', 'node scripts/check-pnpm-pack.mjs')
 
 requireReleaseCheckCommand('pnpm verify')
 requireReleaseCheckCommand('pnpm security:truth')
@@ -37,9 +41,10 @@ requireReleaseCheckCommand('pnpm desktop:systems:check')
 requireReleaseCheckCommand('pnpm release:workflow:check')
 requireReleaseCheckCommand('pnpm optional-verifiers:check')
 requireReleaseCheckCommand('pnpm package:check')
-requireReleaseCheckCommand('pnpm pack --dry-run')
+requireReleaseCheckCommand('pnpm package:pack:check')
 requireReleaseCheckCommand('npm pack --dry-run')
-requireReleaseCheckCommand('docker compose -f docker/compose.local.yml config')
+requireReleaseCheckCommand('node scripts/check-docker-compose-config.mjs')
+requireVerifyCommand('pnpm run doctor')
 requireVerifyCommand('pnpm docs:check')
 requireVerifyCommand('pnpm security:truth')
 requireVerifyCommand('pnpm console:browser-safety:check')
@@ -47,6 +52,7 @@ requireVerifyCommand('pnpm console:browser-safety:check')
 const jobs = {
   'release-check': requireJob('release-check'),
   'desktop-windows': requireJob('desktop-windows'),
+  'desktop-macos': requireJob('desktop-macos'),
 }
 
 requireWorkflowTrigger('pull_request:')
@@ -64,7 +70,7 @@ for (const [jobName, job] of Object.entries(jobs)) {
   if (!job) continue
   requireJobCommand(jobName, job, 'uses: actions/checkout@v4')
   requireJobCommand(jobName, job, 'uses: actions/setup-node@v4')
-  requireJobCommand(jobName, job, 'node-version: 20')
+  requireJobCommand(jobName, job, 'node-version: 22.12.0')
   requireJobCommand(jobName, job, 'run: corepack enable')
   requireJobCommand(jobName, job, 'run: pnpm install --frozen-lockfile')
 }
@@ -81,9 +87,9 @@ requireJobCommand('release-check', jobs['release-check'], 'run: pnpm agentic:che
 requireJobCommand('release-check', jobs['release-check'], 'run: pnpm release:workflow:check')
 requireJobCommand('release-check', jobs['release-check'], 'run: pnpm optional-verifiers:check')
 requireJobCommand('release-check', jobs['release-check'], 'run: pnpm package:check')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm pack --dry-run')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm package:pack:check')
 requireJobCommand('release-check', jobs['release-check'], 'run: npm pack --dry-run')
-requireJobCommand('release-check', jobs['release-check'], 'run: docker compose -f docker/compose.local.yml config')
+requireJobCommand('release-check', jobs['release-check'], 'run: node scripts/check-docker-compose-config.mjs')
 
 requireGatewaySystemsCheck('scripts/check-execution-backends.mjs')
 
@@ -95,8 +101,15 @@ requireJobCommand('desktop-windows', jobs['desktop-windows'], 'run: pnpm run des
 requireJobCommand('desktop-windows', jobs['desktop-windows'], 'name: mainspring-desktop-windows')
 requireJobCommand('desktop-windows', jobs['desktop-windows'], 'apps/desktop/release/Mainspring Setup 0.1.0.exe')
 
+requireJobCommand('desktop-macos', jobs['desktop-macos'], 'runs-on: macos-latest')
+requireJobCommand('desktop-macos', jobs['desktop-macos'], 'timeout-minutes: 35')
+requireJobCommand('desktop-macos', jobs['desktop-macos'], 'run: pnpm verify')
+requireJobCommand('desktop-macos', jobs['desktop-macos'], 'run: pnpm run desktop:typecheck')
+requireJobCommand('desktop-macos', jobs['desktop-macos'], 'run: pnpm run desktop:build')
+
 requireCiWorkflow()
 requireNoLinuxDesktopPackaging()
+requireUnsupportedPnpmPackCommandIsAbsent()
 
 for (const line of workflow.split(/\r?\n/)) {
   if (line.includes('run: pnpm install') && !line.includes('--frozen-lockfile')) {
@@ -120,6 +133,13 @@ console.log('MAINSPRING_RELEASE_WORKFLOW_CHECK_OK')
 
 function requirePackageScript(name) {
   if (!packageJson.scripts?.[name]) failures.push(`package.json is missing script "${name}"`)
+}
+
+function requirePackageScriptCommand(name, command) {
+  const script = packageJson.scripts?.[name]
+  if (script !== command) {
+    failures.push(`package.json script "${name}" must be "${command}", got "${script ?? ''}"`)
+  }
 }
 
 function requireReleaseCheckCommand(command) {
@@ -183,11 +203,13 @@ function requireCiWorkflow() {
   requireWorkflowText(ciWorkflowPath, ciWorkflow, 'cancel-in-progress: true')
 
   const ciJob = requireWorkflowJob(ciWorkflowPath, ciWorkflow, 'verify')
-  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'runs-on: ubuntu-latest')
-  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'timeout-minutes: 20')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'runs-on: ${{ matrix.os }}')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'timeout-minutes: 30')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'fail-fast: false')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'os: [ubuntu-latest, macos-latest, windows-latest]')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/checkout@v4')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/setup-node@v4')
-  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'node-version: 20')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'node-version: 22.12.0')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: corepack enable')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm install --frozen-lockfile')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm verify')
@@ -205,6 +227,17 @@ function requireNoLinuxDesktopPackaging() {
     if (/(AppImage|appimage|\.deb\b|rpm\b|snap\b|flatpak\b)/.test(line)) {
       failures.push(`${workflowPath} must not reference Linux desktop package artifacts: ${line.trim()}`)
     }
+  }
+}
+
+function requireUnsupportedPnpmPackCommandIsAbsent() {
+  const unsupportedCommand = ['pnpm', 'pack', '--dry-run'].join(' ')
+  const releaseCheck = packageJson.scripts?.['release:check'] ?? ''
+  if (releaseCheck.includes(unsupportedCommand)) {
+    failures.push(`package.json release:check must not include unsupported command "${unsupportedCommand}"`)
+  }
+  if (workflow.includes(unsupportedCommand)) {
+    failures.push(`${workflowPath} must not include unsupported command "${unsupportedCommand}"`)
   }
 }
 

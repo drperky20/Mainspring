@@ -16,6 +16,7 @@ pnpm verify
 Use the smallest check that proves your change, then run broader checks before handing off.
 
 ```bash
+pnpm run doctor
 pnpm typecheck
 pnpm test
 pnpm verify
@@ -37,19 +38,23 @@ pnpm desktop:systems:check
 Preserve the runtime spine:
 
 ```text
-SDK / control host
--> per-session SQLite mailbox
--> SessionRuntimeSupervisor
--> RuntimeKernel
--> AgentProvider.query
+SDK / HTTP / channel adapter
+-> RunLog intake
+-> SQLite WAL RunLog
+-> RunLogScheduler lease
+-> RunLogExecutor / ProviderRouter
 -> ToolRegistry
 -> RuntimePolicyGuard / ApprovalReceipt
--> tools
--> events_out
--> SDK / control event projection
+-> tools / workspace / memory / artifacts
+-> RunLog events + checkpoints
+-> SDK / gateway / console projection
 ```
 
-Do not bypass `RuntimeKernel`, the mailbox/event journal, or approval receipts.
+New runtime work should target the RunLog path. The mailbox, `SessionRuntimeSupervisor`,
+and `RuntimeKernel` remain compatibility surfaces for existing `createMainspring`
+consumers; keep them working while migration continues, but do not add a second source
+of runtime truth. Provider calls, tool execution, policy decisions, approval receipts,
+durable events, and sanitized host projections remain the seams to preserve.
 
 ## Security Boundaries
 

@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": ".",
+    "types": ["node", "vitest/importMeta"]
+  },
+  "include": [
+    "src/core/RunLogKernel.test.ts",
+    "src/core/RunLogWorker.test.ts",
+    "src/context/ContextAssembly.test.ts",
+    "apps/desktop/src/DesktopDiagnostics.test.ts",
+    "apps/desktop/src/DesktopLifecycle.test.ts",
+    "e2e/console.operator.spec.ts"
+  ]
+}

@@ -5,6 +5,7 @@ import {
   type GatewayRunDispatch,
   type MainspringRuntimeProfile,
   type MainspringRuntimeProfileRegistration,
+  type ProviderUsage,
   type RuntimePolicy,
 } from '#protocol'
 import fs from 'node:fs'
@@ -634,7 +635,21 @@ export interface LocalGatewaySnapshot {
 
 export interface LocalGatewayRunLogSnapshot {
   configured: boolean
+  worker: LocalGatewayRunLogWorkerStatus
   runs: LocalGatewayRunLogRunProjection[]
+}
+
+export interface LocalGatewayRunLogWorkerStatus {
+  state: 'running' | 'stopped'
+  queuedRuns: number
+  outbox: {
+    pending: number
+    claimed: number
+    retryable: number
+    completed: number
+    failed: number
+    cancelled: number
+  }
 }
 
 export interface LocalGatewayRunLogRunProjection {
@@ -855,7 +870,7 @@ function projectLocalRunLogRun(projection: RunLogRunProjection): LocalGatewayRun
     updatedAt: projection.run.updatedAt,
     assistantText: projection.assistantText,
     latestSeq: projection.latestSeq,
-    eventCount: projection.events.length,
+    eventCount: projection.eventCount,
     ...(projection.events.at(-1)?.type ? { lastEventType: projection.events.at(-1)?.type } : {}),
     pendingApprovals: projection.pendingApprovals.map((approval) => ({
       ...(approval.approvalId ? { approvalId: approval.approvalId } : {}),
@@ -890,6 +905,38 @@ function usageEntryIdForEvent(event: RunEvent): string {
   return `usage_${event.eventId}`
 }
 
+function usageEntryIdForRunLogEvent(event: RunLogEvent): string {
+  return `usage_runlog_${event.eventId}`
+}
+
+function providerUsageFromRunLogEvent(event: RunLogEvent): ProviderUsage | null {
+  if (event.type !== 'usage.reported') return null
+  const payload = recordValue(event.payload)
+  const usage = recordValue(payload?.usage)
+  if (!usage) return null
+
+  const result: ProviderUsage = {}
+  for (const key of ['provider', 'modelId', 'modelFamily', 'providerTransport'] as const) {
+    const value = textValue(usage[key])
+    if (value) result[key] = value
+  }
+  for (const key of [
+    'inputTokens',
+    'outputTokens',
+    'totalTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+    'reasoningTokens',
+  ] as const) {
+    const value = usage[key]
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 0) result[key] = value
+  }
+  if (recordValue(usage.rateLimit)) {
+    result.rateLimit = usage.rateLimit as ProviderUsage['rateLimit']
+  }
+  return result
+}
+
 function executionCellId(workspaceId: string, backendKey: string): string {
   return `cell_exec_${workspaceId}_${backendKey}`.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
@@ -898,8 +945,16 @@ function executionLeaseId(toolCallId: string, backendSessionId?: string): string
   return `lease_exec_${(backendSessionId ?? toolCallId)}`.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
-function artifactPathFromId(rootPath: string, artifactId: string): string {
-  return `${rootPath}/${artifactId}`.replace(/\\/g, '/')
+function artifactPathFromId(rootPath: string, artifactId: string): string | null {
+  const normalizedArtifactId = artifactId.trim()
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(normalizedArtifactId)) {
+    return null
+  }
+  const root = path.resolve(rootPath)
+  const candidate = path.resolve(root, normalizedArtifactId)
+  const relative = path.relative(root, candidate)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null
+  return candidate
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -1071,6 +1126,7 @@ export class LocalMainspringGateway {
   }
 
   private readonly runLogRuntime?: RunLogMainspring
+  private runLogWorkerState: LocalGatewayRunLogWorkerStatus['state'] = 'stopped'
 
   readonly sessions = {
     list: (): LocalGatewaySessionProjection[] =>
@@ -1270,7 +1326,10 @@ export class LocalMainspringGateway {
     runs: {
       start: async (input: LocalGatewayStartRunInput): Promise<LocalGatewayRunLogStartResult> => {
         const runtime = this.requireRunLogRuntime()
-        const resolvedInput = input.providerProfileId ? this.resolveAppStateRunInput(input) : input
+        // A configured app-state store is the authorization boundary for gateway identifiers.
+        // Resolve every RunLog ingress through it, rather than only provider-profile starts: a
+        // caller must not be able to pair a session from one workspace with an agent from another.
+        const resolvedInput = this.appState ? this.resolveAppStateRunInput(input) : input
         const session = this.runtime.storage.stateStore.getSession(resolvedInput.sessionId)
         if (!session) throw new Error(`Unknown session: ${resolvedInput.sessionId}`)
         const runtimeProfile = this.runtimeProfiles.assertRegistered(resolvedInput.runtimeProfile)
@@ -1300,7 +1359,6 @@ export class LocalMainspringGateway {
               : {}),
           },
         })
-        await handle.drainUntilIdle()
         this.persistRunLogMetadata(
           handle.record,
           { ...resolvedInput, ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}) },
@@ -1315,12 +1373,30 @@ export class LocalMainspringGateway {
           runId: handle.record.runId,
           sessionId: resolvedInput.sessionId,
         })
-        return { run: runtime.store.getRun(handle.record.runId) ?? handle.record, projection: handle.projection() }
+        return { run: handle.record, projection: handle.projection() }
       },
+      list: (input?: Parameters<RunLogMainspring['runs']['list']>[0]): RunLogRunRecord[] =>
+        this.requireRunLogRuntime().runs.list(input),
       project: (runId: string): RunLogRunProjection => this.requireRunLogRuntime().project(runId),
       events: (input: { runId: string; afterSeq?: number; limit?: number }): RunLogEvent[] =>
         this.requireRunLogRuntime().store.listEvents(input),
+      cancel: (runId: string, reason?: string): RunLogRunRecord =>
+        this.requireRunLogRuntime().runs.cancel(runId, reason),
     },
+    startWorker: (): void => {
+      const runtime = this.requireRunLogRuntime()
+      runtime.startWorker()
+      this.runLogWorkerState = 'running'
+    },
+    stopWorker: async (): Promise<void> => {
+      const runtime = this.requireRunLogRuntime()
+      try {
+        await runtime.stopWorker()
+      } finally {
+        this.runLogWorkerState = 'stopped'
+      }
+    },
+    workerStatus: (): LocalGatewayRunLogWorkerStatus => this.runLogWorkerStatus(),
     approvals: {
       approve: async (input: LocalGatewayApprovalResponseInput): Promise<RunLogRunProjection> => {
         const runtime = this.requireRunLogRuntime()
@@ -1328,7 +1404,6 @@ export class LocalMainspringGateway {
           approvalId: input.approvalId,
           actor: input.reason ?? 'local-gateway',
         })
-        await runtime.drainUntilIdle()
         this.recordGatewayApprovalDecision(input, 'approved')
         return runtime.project(input.runId)
       },
@@ -1351,8 +1426,9 @@ export class LocalMainspringGateway {
 
   private ensureRunLogAgent(input: LocalGatewayStartRunInput, agentId: string): void {
     const runtime = this.requireRunLogRuntime()
-    if (runtime.store.getAgent(agentId)) return
+    const existing = runtime.store.getAgent(agentId)
     const appAgent = input.agentId ? this.appState?.agents.get(input.agentId) : undefined
+    if (existing && !appAgent) return
     const metadata = appAgent?.metadata && typeof appAgent.metadata === 'object'
       ? appAgent.metadata as Record<string, unknown>
       : {}
@@ -1363,13 +1439,18 @@ export class LocalMainspringGateway {
           ? metadata.instructions
           : appAgent?.name
             ? `You are ${appAgent.name}.`
-            : 'You are a Mainspring RunLog gateway agent.',
-      providerId: input.providerId,
-      modelId: input.modelId ?? appAgent?.defaultModelId,
-      tools: input.allowedTools ?? [],
-      approvalPolicy: approvalPolicyFromGatewayMode(metadata.approvalMode),
-      capabilities: runLogCapabilitiesFromGatewayInput(input),
+            : existing?.instructions ?? 'You are a Mainspring RunLog gateway agent.',
+      providerId: input.providerId ?? existing?.providerId,
+      modelId: input.modelId ?? appAgent?.defaultModelId ?? existing?.modelId,
+      tools: input.allowedTools ?? existing?.tools ?? [],
+      approvalPolicy:
+        approvalPolicyFromGatewayMode(metadata.approvalMode) ?? existing?.approvalPolicy,
+      capabilities:
+        runLogCapabilitiesFromGatewayInput(input).length > 0
+          ? runLogCapabilitiesFromGatewayInput(input)
+          : existing?.capabilities,
       metadata: {
+        ...existing?.metadata,
         gatewayAgent: true,
         ...(appAgent?.workspaceId ? { workspaceId: appAgent.workspaceId } : {}),
       },
@@ -1473,21 +1554,55 @@ export class LocalMainspringGateway {
 
   private projectRunLogSnapshot(): LocalGatewayRunLogSnapshot {
     const runtime = this.runLogRuntime
-    if (!runtime) return { configured: false, runs: [] }
-    const runMetadata = (this.appState?.runs.list() ?? []).filter((record) => {
-      const metadata = record.metadata && typeof record.metadata === 'object'
-        ? record.metadata as Record<string, unknown>
-        : {}
-      return metadata.runtime === 'runlog'
-    })
-    const runs = runMetadata.flatMap((record) => {
+    if (!runtime) {
+      return {
+        configured: false,
+        worker: {
+          state: 'stopped',
+          queuedRuns: 0,
+          outbox: {
+            pending: 0,
+            claimed: 0,
+            retryable: 0,
+            completed: 0,
+            failed: 0,
+            cancelled: 0,
+          },
+        },
+        runs: [],
+      }
+    }
+    const runs = runtime.runs.list().flatMap((record) => {
       try {
         return [projectLocalRunLogRun(runtime.project(record.runId))]
       } catch {
         return []
       }
     })
-    return { configured: true, runs }
+    return { configured: true, worker: this.runLogWorkerStatus(), runs }
+  }
+
+  private runLogWorkerStatus(): LocalGatewayRunLogWorkerStatus {
+    const runtime = this.runLogRuntime
+    const outbox = {
+      pending: 0,
+      claimed: 0,
+      retryable: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    }
+    if (!runtime) {
+      return { state: 'stopped', queuedRuns: 0, outbox }
+    }
+    for (const item of runtime.store.listExecutionOutbox()) {
+      outbox[item.status] += 1
+    }
+    return {
+      state: this.runLogWorkerState,
+      queuedRuns: runtime.runs.list({ status: 'queued' }).length,
+      outbox,
+    }
   }
 
   private listRuns(sessionId: string): LocalGatewayRunProjection[] {
@@ -1832,6 +1947,85 @@ export class LocalMainspringGateway {
         })
       }
     }
+
+    this.syncRunLogUsageLedger()
+  }
+
+  private syncRunLogUsageLedger(): void {
+    const runtime = this.runLogRuntime
+    if (!runtime || !this.appState) return
+
+    for (const run of runtime.runs.list()) {
+      const runMetadata = this.appState.runs.get(run.runId)
+      const providerInit = runtime.store
+        .listEvents({ runId: run.runId, types: ['provider.init'], limit: 500 })
+        .at(-1)
+      const providerInitPayload = recordValue(providerInit?.payload)
+      const usageEvents = runtime.store.listEvents({
+        runId: run.runId,
+        types: ['usage.reported'],
+        limit: 10_000,
+      })
+
+      for (const event of usageEvents) {
+        const entryId = usageEntryIdForRunLogEvent(event)
+        if (this.appState.usageLedger.get(entryId)) continue
+        const usage = providerUsageFromRunLogEvent(event)
+        if (!usage) continue
+
+        const budgetStatusBefore = new Map(
+          this.evaluateBudgets(this.appState).map((evaluation) => [evaluation.budgetId, evaluation] as const),
+        )
+        const providerSessionId = textValue(recordValue(event.payload)?.providerSessionId)
+        const providerId = usage.provider ?? textValue(providerInitPayload?.provider) ?? runMetadata?.providerId ?? run.providerId
+        const modelId = usage.modelId ?? textValue(providerInitPayload?.modelId) ?? runMetadata?.modelId ?? run.modelId
+        const costEstimate = estimateUsageCost({ usage, catalog: this.pricingCatalog })
+
+        this.appState.usageLedger.create({
+          entryId,
+          runId: run.runId,
+          sessionId: run.sessionId,
+          ...(runMetadata?.workspaceId ?? run.workspaceId
+            ? { workspaceId: runMetadata?.workspaceId ?? run.workspaceId }
+            : {}),
+          ...(providerId ? { providerId } : {}),
+          ...(modelId ? { modelId } : {}),
+          ...(typeof usage.inputTokens === 'number' ? { inputTokens: usage.inputTokens } : {}),
+          ...(typeof usage.outputTokens === 'number' ? { outputTokens: usage.outputTokens } : {}),
+          ...(typeof usage.totalTokens === 'number' ? { totalTokens: usage.totalTokens } : {}),
+          ...(typeof costEstimate.estimatedCostUsd === 'number'
+            ? { estimatedCostUsd: costEstimate.estimatedCostUsd }
+            : {}),
+          metadata: {
+            runtime: 'runlog',
+            sourceEventId: event.eventId,
+            sourceSeq: event.seq,
+            pricingStatus: costEstimate.pricingStatus,
+            ...(costEstimate.pricing ? { pricingModelId: costEstimate.pricing.modelId } : {}),
+            ...(usage.modelFamily ? { modelFamily: usage.modelFamily } : {}),
+            ...(usage.providerTransport ? { providerTransport: usage.providerTransport } : {}),
+            ...(providerSessionId ? { providerSessionId } : {}),
+            ...(typeof usage.cacheReadTokens === 'number'
+              ? { cacheReadTokens: usage.cacheReadTokens }
+              : {}),
+            ...(typeof usage.cacheWriteTokens === 'number'
+              ? { cacheWriteTokens: usage.cacheWriteTokens }
+              : {}),
+            ...(typeof usage.reasoningTokens === 'number'
+              ? { reasoningTokens: usage.reasoningTokens }
+              : {}),
+            ...(usage.rateLimit ? { rateLimit: usage.rateLimit } : {}),
+          },
+        })
+        this.recordBudgetTransitions({
+          appState: this.appState,
+          runId: run.runId,
+          sessionId: run.sessionId,
+          entryId,
+          previousStatuses: budgetStatusBefore,
+        })
+      }
+    }
   }
 
   private syncToolCalls(): void {
@@ -2046,15 +2240,18 @@ export class LocalMainspringGateway {
       for (const row of rows) {
         const event = row.event
         if (event.type === 'artifact.created') {
-          if (this.appState.artifacts.get(event.artifactId)) continue
+          const artifactId = textValue(event.artifactId)
+          if (!artifactId || this.appState.artifacts.get(artifactId)) continue
+          const artifactPath = artifactPathFromId(this.runtime.storage.artifactStore.rootPath, artifactId)
+          if (!artifactPath) continue
           const runMetadata = runMetadataByRunId.get(event.runId)
           this.appState.artifacts.create({
-            artifactId: event.artifactId,
+            artifactId,
             runId: event.runId,
             sessionId: row.sessionId,
             ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
             kind: event.kind,
-            path: artifactPathFromId(this.runtime.storage.artifactStore.rootPath, event.artifactId),
+            path: artifactPath,
             metadata: {
               sourceEventId: `native:${row.seq}`,
               sourceSeq: row.seq,
@@ -2068,6 +2265,8 @@ export class LocalMainspringGateway {
         const output = recordValue(event.output)
         const artifactId = textValue(output?.artifactId) ?? textValue(output?.artifact)
         if (!artifactId || this.appState.artifacts.get(artifactId)) continue
+        const artifactPath = artifactPathFromId(this.runtime.storage.artifactStore.rootPath, artifactId)
+        if (!artifactPath) continue
 
         const runMetadata = runMetadataByRunId.get(event.runId)
         const toolName = textValue(event.name) ?? 'runtime-artifact'
@@ -2086,7 +2285,7 @@ export class LocalMainspringGateway {
           ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
           kind,
           ...(artifactLabel ? { label: artifactLabel } : {}),
-          path: artifactPathFromId(this.runtime.storage.artifactStore.rootPath, artifactId),
+          path: artifactPath,
           ...(mediaType ? { mediaType } : {}),
           metadata: {
             sourceEventId: `native:${row.seq}`,
@@ -2610,9 +2809,20 @@ export class LocalMainspringGateway {
 
   private resolveAppStateRunInput(input: LocalGatewayAppStateRunInput): LocalGatewayStartRunInput {
     const appState = this.requireAppState()
+    const session = this.runtime.storage.stateStore.getSession(input.sessionId)
+    if (!session) throw new Error(`Unknown session: ${input.sessionId}`)
+
+    const sessionMetadata = recordValue(session.metadata) ?? {}
+    const sessionWorkspaceId = textValue(sessionMetadata.workspaceId)
+    const sessionWorkspace = this.resolveGatewayWorkspace(appState, sessionWorkspaceId)
     const workspace = this.resolveGatewayWorkspace(appState, input.workspaceId)
     const agent = this.resolveGatewayAgent(appState, input.agentId)
     const providerProfile = this.resolveGatewayProviderProfile(appState, input.providerProfileId)
+
+    this.assertGatewayWorkspaceRunnable(appState, sessionWorkspace)
+    this.assertGatewayWorkspaceRunnable(appState, workspace)
+    this.assertGatewayAgentRunnable(agent)
+    this.assertGatewayProviderProfileRunnable(providerProfile)
 
     if (
       workspace &&
@@ -2621,6 +2831,26 @@ export class LocalMainspringGateway {
     ) {
       throw new Error(
         `Agent ${agent.agentId} belongs to workspace ${agent.workspaceId}, not ${workspace.workspaceId}.`,
+      )
+    }
+
+    if (
+      sessionWorkspace &&
+      workspace &&
+      sessionWorkspace.workspaceId !== workspace.workspaceId
+    ) {
+      throw new Error(
+        `Session ${session.sessionId} belongs to workspace ${sessionWorkspace.workspaceId}, not ${workspace.workspaceId}.`,
+      )
+    }
+
+    if (
+      sessionWorkspace &&
+      agent?.workspaceId &&
+      sessionWorkspace.workspaceId !== agent.workspaceId
+    ) {
+      throw new Error(
+        `Session ${session.sessionId} belongs to workspace ${sessionWorkspace.workspaceId}, not agent ${agent.agentId}'s workspace ${agent.workspaceId}.`,
       )
     }
 
@@ -2639,7 +2869,8 @@ export class LocalMainspringGateway {
     }
 
     const { providerProfileId: _providerProfileId, ...runInput } = input
-    const workspaceId = workspace?.workspaceId ?? agent?.workspaceId ?? runInput.workspaceId
+    const workspaceId =
+      workspace?.workspaceId ?? sessionWorkspace?.workspaceId ?? agent?.workspaceId ?? runInput.workspaceId
     const agentId = agent?.agentId ?? runInput.agentId
     const providerId = runInput.providerId ?? providerProfile?.providerId
     const modelId =
@@ -2652,6 +2883,42 @@ export class LocalMainspringGateway {
       ...(providerId ? { providerId } : {}),
       ...(providerProfile?.secretRef ? { credentialRef: providerProfile.secretRef } : {}),
       ...(modelId ? { modelId } : {}),
+    }
+  }
+
+  private assertGatewayWorkspaceRunnable(
+    appState: LocalGatewayAppStateStore,
+    workspace: LocalGatewayWorkspaceRecord | null,
+  ): void {
+    if (!workspace) return
+    if (workspace.status !== 'active') {
+      throw new Error(`Gateway workspace ${workspace.workspaceId} is archived and cannot run agents.`)
+    }
+    if (!workspace.clientId) return
+    const client = appState.clients.get(workspace.clientId)
+    if (!client) {
+      throw new Error(
+        `Gateway workspace ${workspace.workspaceId} references unknown client ${workspace.clientId}.`,
+      )
+    }
+    if (client.status !== 'active') {
+      throw new Error(
+        `Gateway workspace ${workspace.workspaceId} belongs to archived client ${client.clientId}.`,
+      )
+    }
+  }
+
+  private assertGatewayAgentRunnable(agent: LocalGatewayAgentRecord | null): void {
+    if (agent?.status === 'archived') {
+      throw new Error(`Gateway agent ${agent.agentId} is archived and cannot run.`)
+    }
+  }
+
+  private assertGatewayProviderProfileRunnable(
+    providerProfile: LocalGatewayProviderProfileRecord | null,
+  ): void {
+    if (providerProfile?.status === 'archived') {
+      throw new Error(`Gateway provider profile ${providerProfile.profileId} is archived and cannot run.`)
     }
   }
 
@@ -3006,8 +3273,11 @@ export class LocalMainspringGateway {
       ? fs.realpathSync.native(this.workspaceBaseRoot)
       : this.workspaceBaseRoot
     const resolved = path.resolve(path.isAbsolute(trimmed) ? trimmed : path.join(base, trimmed))
-    assertPathContained(base, resolved, `${label} must stay inside the gateway workspace base.`)
     const existing = nearestExistingPath(resolved)
+    const canonicalResolved = existing
+      ? path.join(fs.realpathSync.native(existing), path.relative(existing, resolved))
+      : resolved
+    assertPathContained(base, canonicalResolved, `${label} must stay inside the gateway workspace base.`)
     if (existing) {
       assertPathContained(
         base,

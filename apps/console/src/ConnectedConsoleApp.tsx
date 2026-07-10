@@ -14,8 +14,27 @@ import {
   type GatewayProviderModel,
   type LocalGatewayClient,
 } from './localGatewayClient'
+import {
+  isAllowedLocalGatewayUrl,
+  localGatewayUrlFromEnv,
+} from './localGatewayTransport'
+import {
+  ApprovalsScreen,
+  ConnectionNotice,
+  ConsoleConnectionScreen,
+  type ConsoleConnectionState,
+  OverviewScreen,
+  RunsScreen,
+  UsageScreen,
+} from './OperatorConsoleScreens'
+import {
+  buildOperatorConsoleViewModel,
+  type OperatorApprovalRow,
+  type OperatorRunRow,
+} from './operatorConsoleViewModel'
+import './controlRoom.css'
 
-type AppScreen = 'clients' | 'settings'
+type AppScreen = 'overview' | 'clients' | 'runs' | 'approvals' | 'usage' | 'settings'
 type ClientTab = 'chat' | 'agents' | 'automations' | 'access'
 type ProviderStatus = 'live' | 'connector' | 'catalog'
 type ToastKind = 'ok' | 'error' | 'info'
@@ -66,6 +85,14 @@ type LastRunState = {
   prompt: string
 }
 
+type ScopedRunUiState = {
+  chatInput: string
+  automationPrompt: string
+  chatMessages: MainspringChatMessage[]
+  lastRun?: LastRunState
+  runEvents: ConsoleGatewayRunEvent[]
+}
+
 type AutomationNode = {
   id: string
   title: string
@@ -92,8 +119,13 @@ type SnapshotWorkspace = ConsoleGatewaySnapshot['workspaces'][number]
 type SnapshotAgent = ConsoleGatewaySnapshot['agents'][number]
 type SnapshotProvider = ConsoleGatewaySnapshot['providerProfiles'][number]
 
-const DEFAULT_GATEWAY_URL = import.meta.env.VITE_MAINSPRING_GATEWAY_URL ?? 'http://127.0.0.1:8787'
+const DEFAULT_GATEWAY_URL = localGatewayUrlFromEnv(
+  typeof window === 'undefined' ? '' : window.location.search,
+)
 const SETUP_STORAGE_KEY = 'mainspring.console.setup.v2'
+const DEFAULT_CHAT_INPUT = 'Check what this client needs next and suggest one safe action.'
+const DEFAULT_AUTOMATION_PROMPT =
+  'Review new inbox items, draft a short client update, and stop before sending anything external.'
 
 const toolOptions = [
   { key: 'agent', label: 'Agent', description: 'Support agent', locked: true },
@@ -242,19 +274,20 @@ export function ConnectedConsoleApp() {
   const [setup, setSetup] = useState<SetupState>(() => readSetupState())
   const [snapshot, setSnapshot] = useState<ConsoleGatewaySnapshot | null>(null)
   const [auth, setAuth] = useState<HealthAuth>()
-  const [screen, setScreen] = useState<AppScreen>('clients')
+  const [connectionState, setConnectionState] = useState<ConsoleConnectionState>('loading')
+  const [connectionError, setConnectionError] = useState<string>()
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string>()
+  const [screen, setScreen] = useState<AppScreen>('overview')
   const [clientTab, setClientTab] = useState<ClientTab>('chat')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedClientId, setSelectedClientId] = useState<string>()
   const [selectedAgentId, setSelectedAgentId] = useState<string>()
   const [selectedProviderProfileId, setSelectedProviderProfileId] = useState<string>()
-  const [chatInput, setChatInput] = useState('Check what this client needs next and suggest one safe action.')
-  const [automationPrompt, setAutomationPrompt] = useState(
-    'Review new inbox items, draft a short client update, and stop before sending anything external.',
-  )
-  const [chatMessages, setChatMessages] = useState<MainspringChatMessage[]>([])
-  const [lastRun, setLastRun] = useState<LastRunState>()
-  const [runEvents, setRunEvents] = useState<ConsoleGatewayRunEvent[]>([])
+  const [runUiByScope, setRunUiByScope] = useState<Record<string, ScopedRunUiState>>({})
+  const [selectedRunId, setSelectedRunId] = useState<string>()
+  const [selectedRunEvents, setSelectedRunEvents] = useState<ConsoleGatewayRunEvent[]>([])
+  const [runEventsLoading, setRunEventsLoading] = useState(false)
+  const [runEventsError, setRunEventsError] = useState<string>()
   const [toast, setToast] = useState<ToastState>()
   const [busy, setBusy] = useState(false)
   const [clientDialogOpen, setClientDialogOpen] = useState(false)
@@ -269,19 +302,34 @@ export function ConnectedConsoleApp() {
   const refresh = useCallback(async () => {
     const health = await gatewayClient.health()
     setAuth(health.auth)
-    if (!health.auth || health.auth.authMode === 'local-dev' || health.auth.authenticated) {
-      setSnapshot(await gatewayClient.snapshot())
+    if (health.auth?.authMode === 'hosted' && !health.auth.authenticated) {
+      setConnectionState('unauthorized')
+      setConnectionError('Sign in to read the local operator snapshot.')
+      return
     }
+    const nextSnapshot = await gatewayClient.snapshot()
+    setSnapshot(nextSnapshot)
+    setConnectionState('ready')
+    setConnectionError(undefined)
+    setLastUpdatedAt(nextSnapshot.generatedAt || new Date().toISOString())
   }, [gatewayClient])
 
   useEffect(() => {
     let alive = true
+    setConnectionState((current) => current === 'ready' ? 'stale' : 'loading')
     void refresh().catch((error) => {
       if (!alive) return
-      setToast({ kind: 'error', text: error instanceof Error ? error.message : 'Gateway unavailable.' })
+      const message = errorMessage(error)
+      setConnectionState((current) => current === 'ready' || current === 'stale' ? 'stale' : 'offline')
+      setConnectionError(message)
+      setToast({ kind: 'error', text: message })
     })
     const timer = window.setInterval(() => {
-      void refresh().catch(() => undefined)
+      void refresh().catch((error) => {
+        if (!alive) return
+        setConnectionState((current) => current === 'ready' || current === 'stale' ? 'stale' : 'offline')
+        setConnectionError(errorMessage(error))
+      })
     }, 5000)
     return () => {
       alive = false
@@ -315,6 +363,50 @@ export function ConnectedConsoleApp() {
   const selectedProviderProfile =
     snapshot?.providerProfiles.find((profile) => profile.profileId === selectedProviderProfileId)
     ?? findProviderForAgent(snapshot, selectedAgent)
+  const operatorModel = useMemo(
+    () => snapshot ? buildOperatorConsoleViewModel(snapshot) : undefined,
+    [snapshot],
+  )
+  const activeRunScopeKey = selectedClient && selectedAgent
+    ? `${selectedClient.clientId}:${selectedAgent.agentId}`
+    : undefined
+  const activeRunUi = activeRunScopeKey
+    ? runUiByScope[activeRunScopeKey] ?? createScopedRunUiState()
+    : createScopedRunUiState()
+  const selectedRun = operatorModel?.runs.find((run) => run.runId === selectedRunId)
+
+  const updateScopedRunUi = useCallback((
+    scopeKey: string | undefined,
+    update: (current: ScopedRunUiState) => ScopedRunUiState,
+  ) => {
+    if (!scopeKey) return
+    setRunUiByScope((current) => ({
+      ...current,
+      [scopeKey]: update(current[scopeKey] ?? createScopedRunUiState()),
+    }))
+  }, [])
+
+  const loadSelectedRunEvents = useCallback(async (run: OperatorRunRow | undefined) => {
+    if (!run) {
+      setSelectedRunEvents([])
+      setRunEventsError(undefined)
+      return
+    }
+    setRunEventsLoading(true)
+    setRunEventsError(undefined)
+    try {
+      const result = await gatewayClient.runEvents({
+        sessionId: run.sessionId,
+        runId: run.runId,
+      })
+      setSelectedRunEvents(result.events)
+    } catch (error) {
+      setSelectedRunEvents([])
+      setRunEventsError(errorMessage(error))
+    } finally {
+      setRunEventsLoading(false)
+    }
+  }, [gatewayClient])
 
   useEffect(() => {
     if (selectedAgent && selectedAgent.agentId !== selectedAgentId) {
@@ -322,10 +414,103 @@ export function ConnectedConsoleApp() {
     }
   }, [selectedAgent, selectedAgentId])
 
+  useEffect(() => {
+    if (!operatorModel || operatorModel.runs.length === 0) {
+      if (selectedRunId) setSelectedRunId(undefined)
+      return
+    }
+    if (!selectedRunId || !operatorModel.runs.some((run) => run.runId === selectedRunId)) {
+      setSelectedRunId(operatorModel.runs[0]?.runId)
+    }
+  }, [operatorModel, selectedRunId])
+
+  useEffect(() => {
+    if (screen !== 'runs') return
+    void loadSelectedRunEvents(selectedRun)
+  }, [loadSelectedRunEvents, screen, selectedRun?.runId])
+
   async function completeSetup(next: SetupState) {
+    await refresh()
     writeSetupState(next)
     setSetup(next)
-    await refresh()
+    setScreen('overview')
+  }
+
+  function applyGatewayUrl(value: string) {
+    const normalized = value.trim().replace(/\/+$/, '')
+    if (!isAllowedLocalGatewayUrl(normalized)) {
+      setToast({
+        kind: 'error',
+        text: 'Use a loopback gateway URL such as http://127.0.0.1:8787.',
+      })
+      return
+    }
+    if (normalized === gatewayUrl) {
+      setToast({ kind: 'info', text: 'The local gateway URL is already active.' })
+      return
+    }
+    setSnapshot(null)
+    setConnectionState('loading')
+    setConnectionError(undefined)
+    setGatewayUrl(normalized)
+  }
+
+  async function cancelOperatorRun(run: OperatorRunRow) {
+    if (!run.cancellable) {
+      setToast({ kind: 'info', text: 'This run cannot be cancelled through the current gateway route.' })
+      return
+    }
+    setBusy(true)
+    try {
+      await gatewayClient.cancelRun({
+        sessionId: run.sessionId,
+        runId: run.runId,
+        reason: 'Cancelled from the Mainspring console.',
+      })
+      await refresh()
+      await loadSelectedRunEvents(run)
+      setToast({ kind: 'ok', text: `Run ${shortId(run.runId)} cancelled.` })
+    } catch (error) {
+      setToast({ kind: 'error', text: errorMessage(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resolveOperatorApproval(
+    approval: OperatorApprovalRow,
+    decision: 'approved' | 'denied',
+    reason?: string,
+  ) {
+    setBusy(true)
+    try {
+      const input = {
+        approvalId: approval.approvalId,
+        sessionId: approval.sessionId,
+        runId: approval.runId,
+        decision,
+        ...(reason ? { reason } : {}),
+      }
+      if (approval.source === 'runlog') {
+        await gatewayClient.resolveRunLogApproval(input)
+      } else {
+        await gatewayClient.resolveApproval(input)
+      }
+      await refresh()
+      setToast({
+        kind: 'ok',
+        text: `${decision === 'approved' ? 'Approved' : 'Denied'} ${approval.targetKey ?? 'the requested action'}.`,
+      })
+    } catch (error) {
+      setToast({ kind: 'error', text: errorMessage(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function openRun(runId: string) {
+    setSelectedRunId(runId)
+    setScreen('runs')
   }
 
   async function createClient(draft: DraftClient) {
@@ -486,6 +671,11 @@ export function ConnectedConsoleApp() {
       setToast({ kind: 'error', text: 'Add a client and agent first.' })
       return
     }
+    const scopeKey = activeRunScopeKey
+    if (!scopeKey) {
+      setToast({ kind: 'error', text: 'Select a client agent before starting a run.' })
+      return
+    }
     const session = findSession(snapshot, selectedClient.clientId, selectedWorkspace.workspaceId)
     if (!session) {
       setToast({ kind: 'error', text: 'This client has no open gateway session yet. Create a fresh client to get an attached workspace session.' })
@@ -495,11 +685,11 @@ export function ConnectedConsoleApp() {
     const trimmedPrompt = input.prompt.trim()
     if (!trimmedPrompt) return
     if (input.addChatMessage) {
-      setChatMessages((messages) => [
-        ...messages,
-        makeChatMessage('user', trimmedPrompt),
-      ])
-      setChatInput('')
+      updateScopedRunUi(scopeKey, (current) => ({
+        ...current,
+        chatInput: '',
+        chatMessages: [...current.chatMessages, makeChatMessage('user', trimmedPrompt)],
+      }))
     }
     setBusy(true)
     try {
@@ -516,34 +706,48 @@ export function ConnectedConsoleApp() {
         providerId: provider?.providerId,
         modelId: selectedAgent.defaultModelId ?? provider?.defaultModelId,
       })
-      setLastRun({
-        runId: result.run.runId,
-        sessionId: result.run.sessionId,
-        mode: input.mode,
-        prompt: trimmedPrompt,
-      })
-      setRunEvents([])
+      updateScopedRunUi(scopeKey, (current) => ({
+        ...current,
+        lastRun: {
+          runId: result.run.runId,
+          sessionId: result.run.sessionId,
+          mode: input.mode,
+          prompt: trimmedPrompt,
+        },
+        runEvents: [],
+      }))
       void streamRunEvents(result.run, {
         addChatMessage: Boolean(input.addChatMessage),
         runLabel: shortId(result.run.runId),
+        scopeKey,
       })
       window.setTimeout(() => {
         void pollRunEvents(result.run, {
           addChatMessage: false,
           runLabel: shortId(result.run.runId),
+          scopeKey,
         })
       }, 2500)
       if (input.addChatMessage) {
-        setChatMessages((messages) => [
-          ...messages,
-          makeChatMessage('assistant', `Run ${shortId(result.run.runId)} started. Live actions will appear on the rail.`),
-        ])
+        updateScopedRunUi(scopeKey, (current) => ({
+          ...current,
+          chatMessages: [
+            ...current.chatMessages,
+            makeChatMessage('assistant', `Run ${shortId(result.run.runId)} started. Live actions will appear on the rail.`),
+          ],
+        }))
       }
       await refresh()
       setToast({ kind: 'ok', text: `Run ${shortId(result.run.runId)} started.` })
     } catch (error) {
       if (input.addChatMessage) {
-        setChatMessages((messages) => [...messages, makeChatMessage('assistant', errorMessage(error))])
+        updateScopedRunUi(scopeKey, (current) => ({
+          ...current,
+          chatMessages: [
+            ...current.chatMessages,
+            makeChatMessage('assistant', errorMessage(error)),
+          ],
+        }))
       }
       setToast({ kind: 'error', text: errorMessage(error) })
     } finally {
@@ -553,7 +757,7 @@ export function ConnectedConsoleApp() {
 
   async function streamRunEvents(
     run: { sessionId: string; runId: string },
-    options: { addChatMessage: boolean; runLabel: string },
+    options: { addChatMessage: boolean; runLabel: string; scopeKey: string },
   ) {
     const streamAccess = await gatewayClient
       .browserAccessUrl({ kind: 'event-stream', sessionId: run.sessionId, runId: run.runId })
@@ -572,39 +776,86 @@ export function ConnectedConsoleApp() {
     source.addEventListener('run.event', (event) => {
       const parsed = safeJsonParse<ConsoleGatewayRunEvent>(event.data)
       if (!parsed) return
-      setRunEvents((events) => mergeRunEvent(events, parsed))
-      if (String(parsed.type) === 'assistant.delta' && typeof parsed.payload === 'object' && parsed.payload) {
+      updateScopedRunUi(options.scopeKey, (current) => ({
+        ...current,
+        runEvents: mergeRunEvent(current.runEvents, parsed),
+      }))
+      if (
+        (String(parsed.type) === 'assistant.delta' || String(parsed.type) === 'assistant.text.delta')
+        && typeof parsed.payload === 'object'
+        && parsed.payload
+      ) {
         const text = String((parsed.payload as { text?: unknown }).text ?? '')
         if (text && options.addChatMessage) {
-          setChatMessages((messages) => appendAssistantDelta(messages, text))
+          updateScopedRunUi(options.scopeKey, (current) => ({
+            ...current,
+            chatMessages: appendAssistantDelta(current.chatMessages, text),
+          }))
         }
       }
-      if (parsed.type === 'run.completed' || parsed.type === 'run.failed') close()
+      if (
+        parsed.type === 'run.completed'
+        || parsed.type === 'run.failed'
+        || parsed.type === 'run.cancelled'
+      ) {
+        close()
+        void pollRunEvents(run, { ...options, addChatMessage: false })
+        void refresh().catch(() => undefined)
+      }
     })
     source.onerror = () => {
       close()
       void pollRunEvents(run, options)
     }
     window.setTimeout(() => {
-      if (!settled) close()
+      if (!settled) {
+        close()
+        void pollRunEvents(run, { ...options, addChatMessage: false })
+      }
     }, 45_000)
   }
 
   async function pollRunEvents(
     run: { sessionId: string; runId: string },
-    options: { addChatMessage: boolean; runLabel: string },
+    options: { addChatMessage: boolean; runLabel: string; scopeKey: string },
   ) {
     const events = await gatewayClient.runEvents(run).catch(() => ({ events: [] }))
-    setRunEvents(events.events)
+    updateScopedRunUi(options.scopeKey, (current) => ({ ...current, runEvents: events.events }))
     if (options.addChatMessage && events.events.length > 0) {
-      setChatMessages((messages) => [
-        ...messages,
-        makeChatMessage('assistant', `Run ${options.runLabel} produced ${events.events.length} logged event${events.events.length === 1 ? '' : 's'}.`),
-      ])
+      updateScopedRunUi(options.scopeKey, (current) => ({
+        ...current,
+        chatMessages: [
+          ...current.chatMessages,
+          makeChatMessage('assistant', `Run ${options.runLabel} produced ${events.events.length} logged event${events.events.length === 1 ? '' : 's'}.`),
+        ],
+      }))
     }
   }
 
-  if (!setup.complete) {
+  function retryConnection() {
+    setConnectionState(snapshot ? 'stale' : 'loading')
+    setConnectionError(undefined)
+    void refresh().catch((error) => {
+      setConnectionState(snapshot ? 'stale' : 'offline')
+      setConnectionError(errorMessage(error))
+    })
+  }
+
+  if (connectionState === 'loading' && !snapshot) {
+    return <ConsoleConnectionScreen state="loading" onRetry={retryConnection} />
+  }
+
+  if (connectionState === 'offline' && !snapshot) {
+    return (
+      <ConsoleConnectionScreen
+        detail={connectionError}
+        state="offline"
+        onRetry={retryConnection}
+      />
+    )
+  }
+
+  if (!setup.complete || connectionState === 'unauthorized') {
     return (
       <SetupWizard
         auth={auth}
@@ -625,11 +876,14 @@ export function ConnectedConsoleApp() {
 
   return (
     <div className={`simple-console ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
+      <a className="control-skip-link" href="#main-content">Skip to main content</a>
       <Sidebar
-        auth={auth}
         collapsed={sidebarCollapsed}
         clients={clients}
+        connectionState={connectionState}
         gatewayUrl={gatewayUrl}
+        pendingApprovals={operatorModel?.counts.pendingApprovals ?? 0}
+        activeRuns={operatorModel?.counts.activeRuns ?? 0}
         screen={screen}
         selectedClientId={selectedClientId}
         setup={setup}
@@ -642,25 +896,43 @@ export function ConnectedConsoleApp() {
           setClientTab('chat')
         }}
       />
-      <main className="simple-main">
-        {screen === 'clients' ? (
+      <main className="simple-main" id="main-content">
+        <ConnectionNotice
+          detail={connectionError}
+          lastUpdatedAt={lastUpdatedAt}
+          state={connectionState}
+          onRetry={retryConnection}
+        />
+        {screen === 'overview' && operatorModel ? (
+          <OverviewScreen
+            model={operatorModel}
+            onNavigate={setScreen}
+            onOpenRun={openRun}
+          />
+        ) : screen === 'clients' ? (
           <ClientsScreen
             agents={selectedAgents}
-            automationPrompt={automationPrompt}
+            automationPrompt={activeRunUi.automationPrompt}
             busy={busy}
-            chatInput={chatInput}
-            chatMessages={chatMessages}
+            chatInput={activeRunUi.chatInput}
+            chatMessages={activeRunUi.chatMessages}
             client={selectedClient}
             clients={clients}
             clientTab={clientTab}
-            lastRun={lastRun}
+            lastRun={activeRunUi.lastRun}
             provider={selectedProviderProfile}
             providers={snapshot?.providerProfiles ?? []}
-            runEvents={runEvents}
+            runEvents={activeRunUi.runEvents}
             selectedAgent={selectedAgent}
             workspace={selectedWorkspace}
-            onAutomationPrompt={setAutomationPrompt}
-            onChatInput={setChatInput}
+            onAutomationPrompt={(automationPrompt) => updateScopedRunUi(activeRunScopeKey, (current) => ({
+              ...current,
+              automationPrompt,
+            }))}
+            onChatInput={(chatInput) => updateScopedRunUi(activeRunScopeKey, (current) => ({
+              ...current,
+              chatInput,
+            }))}
             onClientTab={setClientTab}
             onCreateClient={() => setClientDialogOpen(true)}
             onEditClient={(draft) => {
@@ -678,14 +950,39 @@ export function ConnectedConsoleApp() {
             onSelectAgent={setSelectedAgentId}
             onStartRun={startRun}
           />
-        ) : (
+        ) : screen === 'runs' && operatorModel ? (
+          <RunsScreen
+            actionBusy={busy}
+            events={selectedRunEvents}
+            eventsError={runEventsError}
+            eventsLoading={runEventsLoading}
+            model={operatorModel}
+            selectedRun={selectedRun}
+            onCancel={(run) => void cancelOperatorRun(run)}
+            onReloadEvents={() => void loadSelectedRunEvents(selectedRun)}
+            onSelectRun={setSelectedRunId}
+          />
+        ) : screen === 'approvals' && operatorModel ? (
+          <ApprovalsScreen
+            actionBusy={busy}
+            model={operatorModel}
+            onResolve={(approval, decision, reason) => {
+              void resolveOperatorApproval(approval, decision, reason)
+            }}
+          />
+        ) : screen === 'usage' && operatorModel ? (
+          <UsageScreen model={operatorModel} />
+        ) : screen === 'settings' ? (
           <SettingsScreen
             auth={auth}
+            connectionError={connectionError}
+            connectionState={connectionState}
             gatewayUrl={gatewayUrl}
+            lastUpdatedAt={lastUpdatedAt}
             providers={snapshot?.providerProfiles ?? []}
             selectedProviderId={selectedProviderProfileId}
             setup={setup}
-            onGatewayUrl={setGatewayUrl}
+            onGatewayUrl={applyGatewayUrl}
             onNewProvider={() => setProviderDialogOpen(true)}
             onProvider={setSelectedProviderProfileId}
             onResetSetup={() => {
@@ -694,7 +991,7 @@ export function ConnectedConsoleApp() {
               setSetup(next)
             }}
           />
-        )}
+        ) : null}
       </main>
       {clientDialogOpen ? (
         <Dialog title="Add new client" onClose={() => setClientDialogOpen(false)}>
@@ -789,6 +1086,10 @@ function SetupWizard({
           {['account', 'providers', 'finish'].map((item, index) => (
             <button
               className={step === item ? 'active' : ''}
+              disabled={
+                (item === 'providers' && step === 'account')
+                || (item === 'finish' && step !== 'finish')
+              }
               key={item}
               type="button"
               onClick={() => setStep(item as typeof step)}
@@ -810,7 +1111,7 @@ function SetupWizard({
             </label>
             <label>
               Username
-              <input value={username} onChange={(event) => setUsername(event.target.value)} />
+              <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />
             </label>
             <label>
               Password
@@ -863,10 +1164,12 @@ function SetupWizard({
 }
 
 function Sidebar({
-  auth,
+  activeRuns,
   collapsed,
   clients,
+  connectionState,
   gatewayUrl,
+  pendingApprovals,
   screen,
   selectedClientId,
   setup,
@@ -875,10 +1178,12 @@ function Sidebar({
   onScreen,
   onSelectClient,
 }: {
-  auth?: HealthAuth
+  activeRuns: number
   collapsed: boolean
   clients: SnapshotClient[]
+  connectionState: ConsoleConnectionState
   gatewayUrl: string
+  pendingApprovals: number
   screen: AppScreen
   selectedClientId?: string
   setup: SetupState
@@ -887,9 +1192,22 @@ function Sidebar({
   onScreen: (screen: AppScreen) => void
   onSelectClient: (clientId: string) => void
 }) {
-  const gatewayConnected = !auth || auth.authMode === 'local-dev' || auth.authenticated
-  const gatewayLabel = gatewayConnected ? 'Connected' : 'Needs sign in'
-  const selectedClient = clients.find((client) => client.clientId === selectedClientId) ?? clients[0]
+  const gatewayConnected = connectionState === 'ready'
+  const gatewayLabel = connectionState === 'ready'
+    ? 'Live snapshot'
+    : connectionState === 'stale'
+      ? 'Snapshot stale'
+      : connectionState === 'unauthorized'
+        ? 'Needs sign in'
+        : 'Offline'
+  const navigation: Array<{ id: AppScreen; label: string; code: string; count?: number }> = [
+    { id: 'overview', label: 'Overview', code: '01' },
+    { id: 'clients', label: 'Clients', code: '02' },
+    { id: 'runs', label: 'Runs', code: '03', count: activeRuns },
+    { id: 'approvals', label: 'Approvals', code: '04', count: pendingApprovals },
+    { id: 'usage', label: 'Usage', code: '05' },
+    { id: 'settings', label: 'Settings', code: '06' },
+  ]
 
   return (
     <aside className="simple-sidebar">
@@ -903,26 +1221,37 @@ function Sidebar({
         </button>
       </div>
       <nav className="sidebar-nav" aria-label="Main">
-        <button className={screen === 'clients' ? 'active' : ''} type="button" onClick={() => onScreen('clients')}>
-          <span className="sidebar-nav-icon clients" aria-hidden="true" />
-          <strong>Clients</strong>
-        </button>
-        <button className={screen === 'settings' ? 'active' : ''} type="button" onClick={() => onScreen('settings')}>
-          <span className="sidebar-nav-icon settings" aria-hidden="true" />
-          <strong>Settings</strong>
-        </button>
+        {navigation.map((item) => (
+          <button
+            aria-current={screen === item.id ? 'page' : undefined}
+            className={screen === item.id ? 'active' : ''}
+            key={item.id}
+            type="button"
+            onClick={() => onScreen(item.id)}
+          >
+            <span className="sidebar-nav-code" aria-hidden="true">{item.code}</span>
+            <strong>{item.label}</strong>
+            {item.count ? <em>{item.count}</em> : null}
+          </button>
+        ))}
       </nav>
       <div className="sidebar-clients">
-        <span className="sidebar-client-label">Client</span>
-        {selectedClient ? (
-          <button
-            className="sidebar-current-client"
-            type="button"
-            onClick={() => onSelectClient(selectedClient.clientId)}
-          >
-            <strong>{selectedClient.name}</strong>
-            <span aria-hidden="true">v</span>
-          </button>
+        <span className="sidebar-client-label">Workspaces</span>
+        {clients.length > 0 ? (
+          <div className="sidebar-client-list">
+            {clients.map((client) => (
+              <button
+                aria-current={client.clientId === selectedClientId ? 'true' : undefined}
+                className={client.clientId === selectedClientId ? 'client-chip active' : 'client-chip'}
+                key={client.clientId}
+                type="button"
+                onClick={() => onSelectClient(client.clientId)}
+              >
+                <span aria-hidden="true">{initials(client.name)}</span>
+                <strong>{client.name}</strong>
+              </button>
+            ))}
+          </div>
         ) : (
           <button className="sidebar-empty" type="button" onClick={onNewClient}>Add new client</button>
         )}
@@ -1023,7 +1352,13 @@ function ClientsScreen({
           <div className="screen-title-row">
             <h1>{client.name}</h1>
             {clientTab === 'automations' ? (
-              <button className="workspace-selector" type="button" aria-label="Current workspace">
+              <button
+                className="workspace-selector"
+                disabled
+                title="Each client currently has one primary workspace."
+                type="button"
+                aria-label="Current workspace"
+              >
                 <span className="workspace-selector-icon" aria-hidden="true" />
                 <span>Default workspace</span>
                 <span aria-hidden="true">v</span>
@@ -1377,7 +1712,6 @@ function AutomationBuilder({
   ])
   const [draggingTool, setDraggingTool] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
-  const [savedAt, setSavedAt] = useState<string | undefined>()
   const selectedTools = Object.entries(tools).filter(([, enabled]) => enabled).map(([key]) => key)
 
   useEffect(() => {
@@ -1417,22 +1751,17 @@ function AutomationBuilder({
     addToolNode(key)
   }
 
-  function saveAutomation() {
-    setSavedAt(new Date().toISOString())
-    setEditing(false)
-  }
-
   return (
     <div className="automation-grid">
       <section className="automation-board">
         <div className="automation-toolbar">
           <div>
-            <button className="simple-text automation-back" type="button">Back to automations</button>
+            <span className="automation-back">Test workflow</span>
             <div className="automation-title-row">
-              <h2>Daily follow-up</h2>
-              <span className="status-pill">Ready</span>
+              <h2>Workflow test</h2>
+              <span className="status-pill">Draft</span>
             </div>
-            <p>Runs every day at 9:00 AM</p>
+            <p>Runs once in the selected client workspace. This draft is not scheduled or persisted.</p>
           </div>
           <div className="automation-actions">
             <button className="simple-secondary automation-action-edit" type="button" onClick={() => setEditing((value) => !value)}>
@@ -1446,10 +1775,15 @@ function AutomationBuilder({
             >
               Run
             </button>
-            <button className="simple-secondary automation-action-save" type="button" onClick={saveAutomation}>
-              Save automation
+            <button
+              className="simple-secondary automation-action-save"
+              disabled
+              title="Durable automation definitions are not available yet."
+              type="button"
+            >
+              Save unavailable
             </button>
-            <button className="simple-secondary automation-action-more" type="button" aria-label="Automation actions">
+            <button className="simple-secondary automation-action-more" disabled type="button" aria-label="More automation actions unavailable">
               <span aria-hidden="true" />
             </button>
           </div>
@@ -1488,9 +1822,9 @@ function AutomationBuilder({
             <div className="canvas-head">
               <strong className="section-kicker">Canvas</strong>
               <div className="zoom-control" aria-label="Canvas zoom">
-                <button type="button">-</button>
+                <button disabled type="button" aria-label="Zoom out unavailable">-</button>
                 <span>100%</span>
-                <button type="button">+</button>
+                <button disabled type="button" aria-label="Zoom in unavailable">+</button>
               </div>
             </div>
             <div
@@ -1558,45 +1892,39 @@ function AccessPanel({
 }) {
   const origin = typeof window === 'undefined' ? 'http://localhost:5173' : window.location.origin
   const dashboardLink = `${origin}/client/${encodeURIComponent(client.clientId)}`
-  const [copied, setCopied] = useState(false)
-
-  async function copyLink() {
-    await navigator.clipboard?.writeText(dashboardLink).catch(() => undefined)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1800)
-  }
 
   return (
     <section className="access-panel">
       <div className="mini-head">
         <div>
-          <h2>Client access</h2>
-          <p>Share a simple authenticated dashboard link for this workspace.</p>
+          <h2>Client access preview</h2>
+          <p>Dedicated client accounts and authenticated dashboard routes are not implemented yet.</p>
         </div>
-        <span className="status-pill">Require sign in</span>
+        <span className="status-pill">Not enabled</span>
       </div>
       <div className="access-link-row">
         <label>
-          Client dashboard link
+          Planned client dashboard route
           <input readOnly value={dashboardLink} />
         </label>
-        <button className="simple-primary" type="button" onClick={() => void copyLink()}>
-          {copied ? 'Copied' : 'Copy link'}
-        </button>
+        <button className="simple-primary" disabled type="button">Copy unavailable</button>
       </div>
       <div className="access-grid">
-        <InfoRow label="Role" value="Client viewer" />
+        <InfoRow label="Role" value="Not provisioned" />
         <InfoRow label="Workspace" value={workspace?.name ?? 'Default workspace'} />
-        <InfoRow label="Invite expires" value="Manual reset" />
+        <InfoRow label="Invite expires" value="Not applicable" />
       </div>
-      <button className="simple-secondary" type="button">Regenerate link</button>
+      <button className="simple-secondary" disabled type="button">Regenerate unavailable</button>
     </section>
   )
 }
 
 function SettingsScreen({
   auth,
+  connectionError,
+  connectionState,
   gatewayUrl,
+  lastUpdatedAt,
   providers,
   selectedProviderId,
   setup,
@@ -1606,7 +1934,10 @@ function SettingsScreen({
   onResetSetup,
 }: {
   auth?: HealthAuth
+  connectionError?: string
+  connectionState: ConsoleConnectionState
   gatewayUrl: string
+  lastUpdatedAt?: string
   providers: SnapshotProvider[]
   selectedProviderId?: string
   setup: SetupState
@@ -1615,6 +1946,12 @@ function SettingsScreen({
   onProvider: (profileId: string) => void
   onResetSetup: () => void
 }) {
+  const [gatewayDraft, setGatewayDraft] = useState(gatewayUrl)
+
+  useEffect(() => {
+    setGatewayDraft(gatewayUrl)
+  }, [gatewayUrl])
+
   return (
     <section className="settings-screen">
       <header className="screen-header">
@@ -1629,10 +1966,23 @@ function SettingsScreen({
           <h2>Gateway</h2>
           <label>
             Local gateway URL
-            <input value={gatewayUrl} onChange={(event) => onGatewayUrl(event.target.value)} />
+            <span className="settings-inline-field">
+              <input value={gatewayDraft} onChange={(event) => setGatewayDraft(event.target.value)} />
+              <button
+                className="simple-secondary"
+                disabled={gatewayDraft.trim().replace(/\/+$/, '') === gatewayUrl}
+                type="button"
+                onClick={() => onGatewayUrl(gatewayDraft)}
+              >
+                Apply
+              </button>
+            </span>
           </label>
+          <InfoRow label="Connection" value={connectionState} />
           <InfoRow label="Auth mode" value={auth?.authMode ?? 'local-dev'} />
           <InfoRow label="Signed in" value={!auth || auth.authenticated || auth.authMode === 'local-dev' ? 'yes' : 'no'} />
+          <InfoRow label="Last snapshot" value={lastUpdatedAt ?? 'Not loaded'} />
+          {connectionError ? <p className="settings-error" role="status">{connectionError}</p> : null}
           <button className="simple-text" type="button" onClick={onResetSetup}>Run setup again</button>
         </section>
         <section className="settings-section">
@@ -2128,7 +2478,13 @@ function Toast({ onDismiss, toast }: { onDismiss: () => void; toast: ToastState 
   }, [onDismiss])
 
   return (
-    <button className={`simple-toast ${toast.kind}`} type="button" onClick={onDismiss}>
+    <button
+      aria-live="polite"
+      className={`simple-toast ${toast.kind}`}
+      role="status"
+      type="button"
+      onClick={onDismiss}
+    >
       {toast.text}
     </button>
   )
@@ -2234,6 +2590,15 @@ function makeChatMessage(role: ChatRole, text: string): MainspringChatMessage {
     role,
     text,
     timestamp: new Date().toISOString(),
+  }
+}
+
+function createScopedRunUiState(): ScopedRunUiState {
+  return {
+    chatInput: DEFAULT_CHAT_INPUT,
+    automationPrompt: DEFAULT_AUTOMATION_PROMPT,
+    chatMessages: [],
+    runEvents: [],
   }
 }
 

@@ -1,0 +1,66 @@
+import { expect, test, type Page } from '@playwright/test'
+
+const gatewayUrl = process.env.MAINSPRING_E2E_GATEWAY_URL ?? 'http://127.0.0.1:8787'
+
+function consoleUrl(path = ''): string {
+  const url = new URL(path || '/', process.env.MAINSPRING_E2E_CONSOLE_URL ?? 'http://127.0.0.1:5173')
+  url.searchParams.set('mainspringGatewayUrl', gatewayUrl)
+  return url.toString()
+}
+
+function consoleUrlWithGateway(url: string): string {
+  const target = new URL('/', process.env.MAINSPRING_E2E_CONSOLE_URL ?? 'http://127.0.0.1:5173')
+  target.searchParams.set('mainspringGatewayUrl', url)
+  return target.toString()
+}
+
+async function finishFirstRun(page: Page) {
+  await page.goto(consoleUrl())
+  await expect(page.getByRole('heading', { name: 'Set up your account' })).toBeVisible()
+  await page.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.getByRole('heading', { name: 'Connect a service' })).toBeVisible()
+  await page.getByRole('button', { name: 'Skip for now' }).click()
+  await expect(page.getByRole('heading', { name: 'Ready for clients' })).toBeVisible()
+  await page.getByRole('button', { name: 'Open dashboard' }).click()
+  await expect(page.getByRole('heading', { name: 'Mainspring control room' })).toBeVisible()
+}
+
+test.describe('operator console', () => {
+  test('connects a first-run workspace and records a durable run to completion', async ({ page }) => {
+    await finishFirstRun(page)
+
+    await page.getByRole('button', { name: 'Clients', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Northline Dental' })).toBeVisible()
+
+    const composer = page.locator('textarea').first()
+    await composer.fill('Reply with a short local status update.')
+    const started = page.waitForResponse((response) =>
+      response.url().endsWith('/runs/start') && response.status() === 202,
+    )
+    await page.getByRole('button', { name: 'Send' }).click()
+    const startedRun = (await (await started).json()).run as { runId: string }
+    await expect(page.getByText(/Run [a-z0-9_-]+ started\./i)).toBeVisible()
+
+    // The worker publishes state asynchronously. Poll the durable gateway projection rather
+    // than sleeping, then reload the renderer to prove the operator surface rebuilds from it.
+    await expect.poll(async () => {
+      const snapshot = await page.request.get(`${gatewayUrl}/snapshot`)
+      const body = await snapshot.json() as { runLog?: { runs?: Array<{ runId: string; status: string }> } }
+      return body.runLog?.runs?.find((run) => run.runId === startedRun.runId)?.status
+    }, { timeout: 15_000 }).toBe('completed')
+
+    await page.reload()
+    await page.getByRole('button', { name: 'Runs', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible()
+    const runRow = page.locator('.control-run-row').first()
+    await expect(runRow.getByText('completed', { exact: true })).toBeVisible({ timeout: 15_000 })
+    await runRow.click()
+    await expect(page.locator('code').getByText(startedRun.runId, { exact: true })).toBeVisible()
+  })
+
+  test('shows a clear offline state when the selected local gateway cannot be reached', async ({ page }) => {
+    await page.goto(consoleUrlWithGateway('http://127.0.0.1:9'))
+    await expect(page.getByRole('heading', { name: 'Local gateway unavailable' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Retry connection' })).toBeVisible()
+  })
+})

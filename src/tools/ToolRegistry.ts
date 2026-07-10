@@ -21,6 +21,7 @@ export interface ToolExecutionInput {
   input?: unknown
   toolCallId?: string
   approvalReceipt?: ApprovalReceipt
+  signal?: AbortSignal
 }
 
 export type ToolExecutionResult =
@@ -44,6 +45,7 @@ export interface RuntimeToolContext {
   workspaceRoot: string
   computerId?: string
   registeredTools: ToolManifest[]
+  signal?: AbortSignal
   readRecentEvents?: (input: { limit?: number }) => unknown[] | Promise<unknown[]>
   emitEvent: (event: MainspringEvent) => void
 }
@@ -176,6 +178,7 @@ export class ToolRegistry {
       workspaceRoot: this.options.workspaceRoot,
       ...(this.options.computerId ? { computerId: this.options.computerId } : {}),
       registeredTools: this.registeredManifests(),
+      ...(input.signal ? { signal: input.signal } : {}),
       readRecentEvents: readRecentEvents
         ? (eventInput) => readRecentEvents({ runId: this.options.runId, limit: eventInput.limit })
         : undefined,

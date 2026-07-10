@@ -1,5 +1,7 @@
 import type { ProviderUsage, RuntimePolicy } from '#protocol'
 import type { ContextCodec } from '../context/ContextCodec.js'
+import type { ContextLensAssembler } from '../context/ContextAssembly.js'
+import type { MemoryStore } from '../memory/MemoryStore.js'
 import type { AgentProvider, QueryInput, RuntimeSecretResolver } from '../providers/types.js'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
 
@@ -70,6 +72,11 @@ export interface RunRecord {
   allowedTools?: string[]
   workerId?: string
   leaseUntil?: string
+  executionGeneration?: number
+  leaseEpoch?: number
+  attemptCount?: number
+  nextAttemptAt?: string
+  failureClassification?: string
   metadata?: Record<string, unknown>
 }
 
@@ -78,6 +85,7 @@ export type RunLogEventType =
   | 'input.received'
   | 'run.queued'
   | 'run.claimed'
+  | 'run.retry.scheduled'
   | 'provider.init'
   | 'policy.decision.recorded'
   | 'assistant.delta'
@@ -89,6 +97,7 @@ export type RunLogEventType =
   | 'approval.requested'
   | 'approval.approved'
   | 'approval.denied'
+  | 'approval.cancelled'
   | 'approval.receipt.used'
   | 'run.awaiting_approval'
   | 'checkpoint.saved'
@@ -101,6 +110,7 @@ export type RunLogEventType =
   | 'child_run.created'
   | 'usage.reported'
   | 'context.encoded'
+  | 'context.assembled'
   | 'runtime.warning'
   | 'runtime.error'
   | 'run.completed'
@@ -188,12 +198,119 @@ export interface ListRunEventsInput {
   runId?: string
   sessionId?: string
   afterSeq?: number
+  beforeSeq?: number
+  order?: 'asc' | 'desc'
+  types?: RunLogEventType[]
   limit?: number
+}
+
+export interface RunLogRunSummary {
+  runId: string
+  status: RunStatus
+  eventCount: number
+  latestSeq: number
+  assistantText: string
+  lastEventType?: RunLogEventType
+  updatedAt: string
+}
+
+export interface RunLogProjectionCatchupResult {
+  projectionName: 'run-summary-v1'
+  processedEvents: number
+  lastSeq: number
+}
+
+export interface ListRunsInput {
+  sessionId?: string
+  agentId?: string
+  status?: RunStatus | RunStatus[]
+  limit?: number
+}
+
+export interface TransitionRunStatusInput {
+  runId: string
+  from: RunStatus[]
+  to: RunStatus
+  patch?: Partial<RunRecord>
 }
 
 export interface ClaimRunInput {
   workerId: string
   leaseMs: number
+}
+
+export type ExecutionOutboxStatus =
+  | 'pending'
+  | 'claimed'
+  | 'retryable'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface ExecutionOutboxRecord {
+  outboxId: string
+  runId: string
+  generation: number
+  kind: 'run.advance'
+  status: ExecutionOutboxStatus
+  idempotencyKey: string
+  payload: Record<string, unknown>
+  attemptCount: number
+  maxAttempts: number
+  nextAttemptAt: string
+  claimedBy?: string
+  claimToken?: string
+  claimExpiresAt?: string
+  lastHeartbeatAt?: string
+  lastErrorClassification?: string
+  lastErrorMessage?: string
+  lastErrorRetryable?: boolean
+  createdAt: string
+  updatedAt: string
+  completedAt?: string
+}
+
+export interface ExecutionClaim {
+  run: RunRecord
+  outbox: ExecutionOutboxRecord
+  workerId: string
+  claimToken: string
+  leaseEpoch: number
+}
+
+export interface ClaimExecutionInput {
+  workerId: string
+  leaseMs: number
+  now: string
+}
+
+export interface ExecutionClaimInput {
+  outboxId: string
+  runId: string
+  workerId: string
+  claimToken: string
+  leaseEpoch: number
+}
+
+export interface ExecutionFailure {
+  message: string
+  classification: string
+  retryable: boolean
+  details?: Record<string, unknown>
+}
+
+export interface PauseRunForApprovalInput {
+  claim: ExecutionClaimInput
+  request: RunLogApprovalRequestSnapshot
+  approvalEventPayload: Record<string, unknown>
+  checkpoint: Omit<RunCheckpoint, 'checkpointId' | 'timestamp' | 'seq'> & {
+    state: Record<string, unknown>
+  }
+}
+
+export interface DecideApprovalLifecycleInput {
+  receipt: RunLogApprovalReceipt
+  eventPayload: Record<string, unknown>
 }
 
 export interface RunLogStore {
@@ -202,12 +319,44 @@ export interface RunLogStore {
   getAgent(agentId: string): AgentSpec | null
   listAgents(): AgentSpec[]
   createRun(intent: RunIntent, agent: AgentSpec): RunRecord
+  createQueuedRun(intent: RunIntent, agent: AgentSpec): RunRecord
   getRun(runId: string): RunRecord | null
+  listRuns(input?: ListRunsInput): RunRecord[]
   updateRunStatus(runId: string, status: RunStatus, patch?: Partial<RunRecord>): RunRecord
+  transitionRunStatus(input: TransitionRunStatusInput): RunRecord | null
   claimNextRun(input: ClaimRunInput): RunRecord | null
+  claimNextExecution(input: ClaimExecutionInput): ExecutionClaim | null
+  heartbeatExecution(input: ExecutionClaimInput & { now: string; leaseMs: number }): boolean
+  acknowledgeExecution(input: ExecutionClaimInput, status?: 'completed' | 'cancelled'): boolean
+  scheduleExecutionRetry(input: {
+    claim: ExecutionClaimInput
+    failure: ExecutionFailure
+    nextAttemptAt: string
+  }): ExecutionOutboxRecord | null
+  completeExecution(input: {
+    claim: ExecutionClaimInput
+    payload?: Record<string, unknown>
+  }): RunRecord | null
+  failExecution(input: {
+    claim: ExecutionClaimInput
+    failure: ExecutionFailure
+    idempotencySuffix?: string
+  }): RunRecord | null
+  cancelRunLifecycle(input: { runId: string; reason: string }): RunRecord
+  pauseRunForApproval(input: PauseRunForApprovalInput): RunRecord | null
+  decideApprovalLifecycle(input: DecideApprovalLifecycleInput): RunLogApprovalReceipt
+  getExecutionOutbox(outboxId: string): ExecutionOutboxRecord | null
+  listExecutionOutbox(input?: { runId?: string; status?: ExecutionOutboxStatus }): ExecutionOutboxRecord[]
   appendEvent<TPayload = unknown>(input: AppendRunEventInput<TPayload>): RunLogEvent<TPayload>
   listEvents(input?: ListRunEventsInput): RunLogEvent[]
+  countEvents(input?: Omit<ListRunEventsInput, 'limit'>): number
+  latestEventSeq(runId: string): number
+  catchUpRunProjection(input?: { limit?: number }): RunLogProjectionCatchupResult
+  getRunProjectionSummary(runId: string): RunLogRunSummary | null
   appendCheckpoint(input: Omit<RunCheckpoint, 'checkpointId' | 'timestamp'>): RunCheckpoint
+  appendCheckpointWithEvent(
+    input: Omit<RunCheckpoint, 'checkpointId' | 'timestamp' | 'seq'>,
+  ): RunCheckpoint
   latestCheckpoint(runId: string): RunCheckpoint | null
   putApprovalRequest(snapshot: RunLogApprovalRequestSnapshot): void
   getApprovalRequest(approvalId: string): RunLogApprovalRequestSnapshot | null
@@ -274,6 +423,10 @@ export interface RunExecutorOptions {
   defaultWorkspaceRoot?: string
   policy?: RuntimePolicy
   contextCodec?: ContextCodec
+  contextAssembler?: ContextLensAssembler
+  contextMemoryStore?: MemoryStore
+  contextMemoryLimit?: number
+  contextHistoryLimit?: number
   approvalReceiptKey?: string
   approvalReceiptKeyMode?: 'local-dev' | 'configured'
   secretResolver?: RuntimeSecretResolver

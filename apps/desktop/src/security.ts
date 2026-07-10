@@ -14,6 +14,24 @@ export function isAllowedDesktopUrl(target: string): boolean {
   }
 }
 
+/**
+ * Loading a development surface is different from allowing renderer
+ * navigation. Development can use an explicit loopback URL, while a packaged
+ * app must remain on its packaged console file.
+ */
+export function isAllowedDesktopNavigation(target: string, trustedSurface: string): boolean {
+  try {
+    const destination = new URL(target)
+    const trusted = new URL(trustedSurface)
+    if (trusted.protocol === 'file:') {
+      return destination.protocol === 'file:' && destination.pathname === trusted.pathname
+    }
+    return destination.origin === trusted.origin
+  } catch {
+    return false
+  }
+}
+
 export function desktopWindowOptions(preloadPath: string): BrowserWindowConstructorOptions {
   return {
     width: 1440,
@@ -34,11 +52,14 @@ export function desktopWindowOptions(preloadPath: string): BrowserWindowConstruc
   }
 }
 
-export function hardenDesktopContents(contents: WebContents): void {
+export function hardenDesktopContents(
+  contents: WebContents,
+  trustedSurface?: string,
+): void {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   contents.on('will-navigate', (event, url) => {
-    if (!isAllowedDesktopUrl(url)) event.preventDefault()
+    if (!trustedSurface || !isAllowedDesktopNavigation(url, trustedSurface)) event.preventDefault()
   })
 
   contents.session.setPermissionRequestHandler((_wc, _permission, callback) => {

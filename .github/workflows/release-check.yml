@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.12.0
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
@@ -35,9 +35,9 @@ jobs:
       - run: pnpm release:workflow:check
       - run: pnpm optional-verifiers:check
       - run: pnpm package:check
-      - run: pnpm pack --dry-run
+      - run: pnpm package:pack:check
       - run: npm pack --dry-run
-      - run: docker compose -f docker/compose.local.yml config
+      - run: node scripts/check-docker-compose-config.mjs
   desktop-windows:
     runs-on: windows-latest
     timeout-minutes: 35
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.12.0
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm run desktop:typecheck
@@ -57,3 +57,16 @@ jobs:
           path: |
             apps/desktop/release/Mainspring Setup 0.1.0.exe
             apps/desktop/release/Mainspring Setup 0.1.0.exe.blockmap
+  desktop-macos:
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+      - run: pnpm run desktop:typecheck
+      - run: pnpm run desktop:build

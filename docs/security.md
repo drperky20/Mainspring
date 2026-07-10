@@ -55,7 +55,7 @@ Mainspring treats agents as untrusted workers.
 - Treat memory, skills, and local templates as behavior mutation. Use provenance scanning and staged review for suspicious or third-party writes.
 - New tool, host, cron, memory, skill, subagent, channel, or browser side-effect surfaces need a row in `docs/security-redteam-matrix.md` and either an executable regression or an explicit limitation.
 - Add leak tests for new browser-facing fields.
-- Keep runtime work inside the mailbox/kernel/tool/policy spine.
+- Keep new runtime work inside the RunLog/provider/tool/policy/approval spine; treat the mailbox kernel as compatibility code during migration.
 
 ## Checks
 

@@ -444,6 +444,7 @@ export function AgentSpec({
         <p className="breadcrumb">{client.name} / {agent.name}</p>
         <h1>{existingAgent ? 'Edit agent' : 'New agent'}</h1>
         <p>Provider auth: {providerState}</p>
+        <p>Workspace access: {safeBasename(client.workspace)} workspace</p>
         <button className="primary-button" type="button" onClick={() => onSave(agent)}>Save agent</button>
         <button className="ghost-button" type="button" onClick={onBack}>Back</button>
       </main>

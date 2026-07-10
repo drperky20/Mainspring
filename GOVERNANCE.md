@@ -11,7 +11,7 @@ Mainspring is currently maintainer-led.
 ## Decision Priorities
 
 1. Keep security and product claims honest.
-2. Preserve the runtime spine and mailbox/event-journal architecture.
+2. Preserve the RunLog, provider, tool, policy, approval, and projection seams; keep the mailbox runtime compatibility-only.
 3. Prefer code and tests over aspirational architecture.
 4. Favor local-first operator workflows over vague platform promises.
 

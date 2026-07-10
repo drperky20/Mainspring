@@ -5,15 +5,37 @@
 ```bash
 pnpm verify
 pnpm release:check
+pnpm test:typecheck
+pnpm console:e2e
 ```
 
-`verify` runs doctor, typecheck, tests, build, security checks, docs checks, and console checks.
+`verify` runs the repository doctor explicitly through `pnpm run doctor`, then source
+typecheck, tests, build, security checks, docs checks, and console checks. The explicit
+`run` matters because `pnpm doctor` by itself names a pnpm built-in command.
 
-`release:check` adds gateway systems, gateway help, examples, desktop systems, package dry-runs, and Docker Compose config validation.
+`release:check` adds gateway systems, gateway help, examples, desktop systems, package
+checks, pnpm tarball validation, an npm package dry-run, and Docker Compose config validation.
+`package:pack:check` invokes pnpm's supported `--pack-destination` mode in an OS temp
+directory, requires one non-empty tarball, and removes the temp directory before it
+reports success.
+
+`test:typecheck` is a separate strict TypeScript lane for production-critical RunLog,
+worker, ContextLens, desktop, and browser-to-gateway test modules. It deliberately does
+not claim that every historical fixture is strict-clean: the older broad
+`LocalGateway.test.ts` and `createLocalGatewayServer.test.ts` fixtures still contain
+strict-null and outdated discriminant errors, so they remain outside this focused lane
+until that fixture debt is repaired.
+
+`console:e2e` builds the runtime, creates a unique operating-system temporary state
+root, starts an EchoProvider-backed gateway and Vite console on reserved loopback
+ports, then runs the Chromium operator workflow. It strips provider credentials from
+the gateway child environment and removes all generated sessions, workspaces, SQLite
+files, traces, and screenshots when it exits. Install the browser once with
+`pnpm exec playwright install chromium` if the local Playwright browser cache is empty.
 It also runs `agentic:check`, which exercises examples plus denied approvals, provider errors, cancellation, replay, budgets, cron, marketplace, deployment, and execution backend verifiers through the built package.
 Desktop systems include `desktop:packaging:check`, which keeps Electron packaging Windows-only and rejects Linux desktop package targets while preserving source/dev and Docker usage.
 Gateway systems include `cells:check`, which verifies backend capability truth, unsafe host labeling, cell lease lifecycle, capacity blocking, expiry, and exact fail-closed status when no isolated-capable backend is available.
-It runs `package:check` before package dry-runs so exported npm subpaths, the runtime binary, npm ignore hygiene, package metadata placeholders, package-visible Markdown placeholder tokens, and every package-visible Markdown link are checked against `dist` and the package file allowlist.
+It runs `package:check` before package validation so exported npm subpaths, the runtime binary, npm ignore hygiene, package metadata placeholders, package-visible Markdown placeholder tokens, and every package-visible Markdown link are checked against `dist` and the package file allowlist.
 It runs `docs:check` during `verify` so the rewritten docs index stays aligned with package-visible docs, the goal digest remains repo-local, and removed legacy docs do not return to the public docs surface.
 It runs `release:workflow:check` so GitHub workflows keep read-only contents permissions, frozen installs, job timeouts, concurrency cancellation, pull request / `main` push / manual release-check triggers, and expected release/package commands.
 It runs `optional-verifiers:check` so optional verifier prerequisite diagnostics stay machine-readable without requiring live external services during `release:check`.
@@ -27,12 +49,14 @@ It runs `optional-verifiers:check` so optional verifier prerequisite diagnostics
 ## Focused Checks
 
 ```bash
+pnpm run doctor
 pnpm gateway:systems:check
 pnpm examples:check
 pnpm examples:smoke
 pnpm agentic:check
 pnpm docs:check
 pnpm package:check
+pnpm package:pack:check
 pnpm desktop:packaging:check
 pnpm desktop:systems:check
 pnpm security:sensitive-patterns
@@ -40,6 +64,8 @@ pnpm cells:check
 pnpm cells:check:integration
 pnpm optional-verifiers:check
 pnpm openrouter:e2e
+pnpm test:typecheck
+pnpm console:e2e
 ```
 
 ## Gateway Checks

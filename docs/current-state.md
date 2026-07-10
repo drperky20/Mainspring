@@ -1,6 +1,6 @@
 # Current State
 
-Last rewritten: 2026-07-02.
+Last rewritten: 2026-07-09.
 
 This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-local long milestone ledger and is excluded from npm package artifacts.
 
@@ -18,7 +18,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `src/compat` for migration exports.
 - RunLog-native SDK host:
   - `src/sdk/RunLogMainspring.ts` exports `createRunLogMainspring`.
-  - New SDK code can create `RunIntent` records, drain through `RunLogKernel`, inspect `RunLogProjection`, and approve/deny pending RunLog approval requests.
+  - New SDK code can create and list durable `RunIntent` records, run them through the durable `RunLogWorker` or explicit test-only drain helpers, inspect complete or tailed `RunLogProjection` views, cancel active runs, and approve/deny pending RunLog approval requests.
   - `src/sdk/RunLogMainspring.test.ts` proves provider-only runs and approved tool resume through the public handle.
   - `pnpm example:coding-agent` now uses `createRunLogMainspring` for a read-then-approved-write coding workflow.
   - `pnpm example:personal-assistant` now uses `createRunLogMainspring` for a read-only `file.read` workspace tool run.
@@ -26,27 +26,37 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `pnpm example:agency-client-agent` now uses `createRunLogMainspring` for a read-then-approved-write client deliverable workflow.
   - `pnpm example:local-first-agent` now uses `createRunLogMainspring` for approval-gated `memory.write`, provenance-scanned persistence, and `memory.read`.
   - `pnpm openrouter:e2e` now uses `createRunLogMainspring` for optional live OpenRouter verification when `OPENROUTER_API_KEY` and network access are available.
+- Durable execution and projection spine:
+  - SQLite lifecycle commands commit run status, lifecycle events, and execution-outbox records together.
+  - `RunLogWorker` claims work with fenced leases, heartbeats, bounded retry backoff, cancellation propagation, and restart recovery.
+  - Run summaries use a persisted projection cursor and bounded event tails; projection catch-up is idempotent and restart-safe.
+  - `context.assembled` telemetry records sanitized inclusion, compression, rehydration, and drop decisions before provider dispatch.
 - Explicit RunLog gateway/API lane:
   - `CreateLocalMainspringGatewayOptions.runLog` accepts a `RunLogMainspring` host.
-  - When that host is configured, the default HTTP `POST /runs/start` route creates a RunLog-backed run through `RunIntent` and returns the compact compatibility run dispatch DTO.
+  - When that host is configured, the default HTTP `POST /runs/start` route validates app-state identifiers, atomically queues a RunLog-backed `RunIntent`, and returns a current compact compatibility dispatch DTO without waiting for provider or tool execution.
   - `/runlog/runs/start` creates `RunIntent` records and returns sanitized `RunLogProjection` responses.
   - `/runlog/runs/:runId/events` tails the same projection.
   - `/runlog/approvals/:approvalId/resolve` approves or denies through scoped RunLog receipts and returns the updated projection.
   - `pnpm gateway:dev` now constructs a local RunLog host by default, backed by `.mainspring/runlog/runlog.sqlite` and `.mainspring/runlog/workspaces`.
+  - Local gateway server startup owns the RunLog worker lifecycle. Its sanitized snapshot exposes worker state, queued-run count, and durable outbox counts; shutdown stops the worker before the dev host closes its store.
   - RunLog `RunIntent` / `RunRecord` now carry opaque provider credential refs such as `env:...` or `managed:...`; provider calls receive only parsed refs plus an in-process host secret resolver.
 - Console-facing RunLog projection:
-  - `LocalMainspringGateway.snapshot()` can include an optional sanitized RunLog read model for runs known to gateway app-state metadata.
+  - `LocalMainspringGateway.snapshot()` can include an optional sanitized RunLog read model discovered from the durable RunLog store, including runs created outside gateway app-state metadata.
+  - RunLog `usage.reported` events are synchronized into the gateway usage ledger so console totals, pricing, and budget transitions use canonical runtime facts.
   - `gatewaySnapshotToConsoleState()` projects RunLog runs, pending approvals, tool calls, checkpoint summaries, policy decision summaries, and error summaries without exposing raw private event fields.
   - The React console data-source summary and dashboard projection count RunLog active runs and pending approvals beside legacy compatibility runs.
   - The selected-client console detail panel now shows RunLog run summaries with checkpoint, policy decision, error, tool-call, and artifact counts from sanitized DTO fields.
 - Live SaaS-style console:
   - `apps/console/src/ConnectedConsoleApp.tsx` is the default app surface and connects to the local gateway over the public browser-safe gateway client.
   - The first-run UI is a setup wizard for account basics and provider profile setup.
-  - The first-level UI is organized around Clients and Settings only.
+  - The first-level UI is organized around Overview, Clients, Runs, Approvals, Usage, and Settings, with explicit loading, stale, offline, unauthorized, empty, and error states.
+  - The run detail view exposes the sanitized event timeline, tool calls, checkpoints, policy decisions, errors, and native RunLog or compatibility-run cancellation.
+  - Chat and run-control state is scoped by client and agent so switching workspaces does not leak UI state between operators' contexts.
   - Each client gets a default workspace and first agent; chat, agent editing, and automation testing are scoped inside the selected client.
   - The console exposes OpenRouter and OpenAI provider profiles as live backend-backed service connections; Codex OAuth, direct Anthropic, and other providers are visible as connector or catalog paths until backend adapters exist.
   - Dedicated per-client dashboard links, per-client accounts, and tenant authorization are not implemented.
 - Package subpaths now expose `mainspring/core`, `mainspring/adapters`, `mainspring/adapters/sqlite`, `mainspring/adapters/local-blob`, `mainspring/capabilities`, `mainspring/hosts/runlog`, and `mainspring/compat`.
+- Repository verification invokes the project doctor explicitly through `pnpm run doctor`. The release gate uses `pnpm package:pack:check` to create and validate a pnpm tarball in a temporary directory that is removed before success is reported; npm's package dry-run remains a separate check.
 - `docs/migration-runlog.md` records the legacy mailbox/`RuntimeKernel` retirement map and `pnpm runlog:migration:check` keeps that map tied to existing source files, package exports, and release checks.
 - Focused tests prove provider-only runs, tool calls, approval pauses, approval/denial decisions, SQLite-backed approval resume, SQLite restart recovery, cron-created runs, lazy workspace materialization, and 1000 idle agents stored as data.
 - RunLog approval resume now has scoped signed receipts:
@@ -94,21 +104,23 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
-- Some existing docs/scripts still describe older mailbox-first architecture and should be consolidated around RunLog Fabric.
+- Contributor, governance, operations, and security guidance now describe RunLog Fabric as canonical while keeping the mailbox/`RuntimeKernel` path compatibility-only.
 
 ## Not Implemented Yet
 
 - Full replacement of `RuntimeKernel` and per-session mailbox execution with RunLog execution.
 - Broader provider-account auth beyond env/local managed refs, such as OAuth provider auth or hosted KMS.
 - AI SDK streaming transport endpoint for the console chat surface; the UI package dependency exists, but gateway chat dispatch still goes through `/runs/start`.
+- A strict root-test TypeScript lane. Vitest executes the root tests successfully, but existing fixtures still rely on intentionally partial objects and legacy contract shapes that do not pass a standalone strict `tsc` project; migrate those fixtures before adding `typecheck:tests` to `verify`.
 - Postgres, Redis/BullMQ, S3/R2/MinIO, Docker, VPS, Kubernetes, and managed-cloud adapters.
 - Browser lease adapter with Playwright trace/artifact capture.
-- Memory retrieval adapter connected to RunLog context assembly.
+- Browser/page multimodal context and provider-specific content-part adapters.
+- Complete per-tool/per-provider/usage projections beyond the current persisted run-summary cursor.
 - Remote skill marketplace trust, signed catalog distribution, and third-party reputation.
 - General checkpoint replay/retry controls beyond the implemented approval-resume continuation.
 - Child-run/subagent helper APIs beyond the parent-run data model.
 - Hosted or remote provenance review trust beyond the local staged review queue.
-- Not implemented: hosted multi-tenant auth, real billing, remote marketplace trust, VM isolation, or secure desktop credential vault.
+- Not implemented: hosted multi-tenant auth, real billing, remote marketplace trust, VM isolation, secure desktop credential vault, or packaged updater publishing.
 
 ## Runtime Seams To Preserve During Migration
 

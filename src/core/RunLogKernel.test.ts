@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { SqliteRunLogStore } from '../adapters/sqlite/SqliteRunLogStore.js'
 import { createRunLogCronGrant } from '../capabilities/cron/RunLogCron.js'
 import { LocalWorkspaceAdapter } from '../capabilities/workspace/LocalWorkspaceAdapter.js'
+import { ContextLensAssembler } from '../context/ContextAssembly.js'
+import type { MemoryRecord, MemoryStore } from '../memory/MemoryStore.js'
 import type { QueryInput } from '../providers/types.js'
 import type { AgentProvider, AgentQuery } from '../providers/types.js'
 import { MockProvider } from '../providers/MockProvider.js'
@@ -43,6 +45,23 @@ function echoTool(options: { approvalRequired?: boolean } = {}): RuntimeTool {
   }
 }
 
+function countedTool(executions: { count: number }): RuntimeTool {
+  return {
+    manifest: builtinManifest({
+      key: 'tool.counted',
+      name: 'Counted Tool',
+      description: 'Counts executions for RunLog iteration-limit tests.',
+      permissions: { filesystem: 'read' },
+      approval: {},
+      toolType: 'file',
+    }),
+    execute: ({ input }) => {
+      executions.count += 1
+      return { ok: true, input, executions: executions.count }
+    },
+  }
+}
+
 function approvalTool(executions: { count: number }, options: { approvalRequired?: boolean } = {}): RuntimeTool {
   return {
     manifest: builtinManifest({
@@ -58,6 +77,36 @@ function approvalTool(executions: { count: number }, options: { approvalRequired
       return { ok: true, input, executions: executions.count }
     },
   }
+}
+
+function blockingSideEffectTool(options: { approvalRequired?: boolean } = {}) {
+  let markStarted!: () => void
+  let releaseExecution!: () => void
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve
+  })
+  const released = new Promise<void>((resolve) => {
+    releaseExecution = resolve
+  })
+  const state: { executions: number; signal?: AbortSignal } = { executions: 0 }
+  const tool: RuntimeTool = {
+    manifest: builtinManifest({
+      key: 'tool.blocking-side-effect',
+      name: 'Blocking Side Effect Tool',
+      description: 'Waits so RunLog cancellation races can be tested.',
+      permissions: { filesystem: options.approvalRequired ? 'workspace-write' : 'read' },
+      approval: options.approvalRequired ? { required: true } : {},
+      toolType: 'file',
+    }),
+    execute: async ({ signal }) => {
+      state.signal = signal
+      markStarted()
+      await released
+      state.executions += 1
+      return { sideEffectCommitted: true }
+    },
+  }
+  return { tool, started, release: releaseExecution, state }
 }
 
 function guardedShellTool(executions: { count: number }): RuntimeTool {
@@ -114,6 +163,79 @@ class ToolRecordingProvider implements AgentProvider {
       abort() {},
       events: (async function* () {
         yield { type: 'result' as const, text: 'tools recorded' }
+      })(),
+    }
+  }
+}
+
+class QueryRecordingProvider implements AgentProvider {
+  readonly queries: QueryInput[] = []
+
+  query(input: QueryInput): AgentQuery {
+    this.queries.push(input)
+    return {
+      push() {},
+      end() {},
+      abort() {},
+      events: (async function* () {
+        yield { type: 'init' as const, providerSessionId: 'context_assembly_provider', modelId: input.model }
+        yield { type: 'result' as const, text: 'assembled context accepted' }
+      })(),
+    }
+  }
+}
+
+function memoryStore(entries: MemoryRecord[]): MemoryStore {
+  return {
+    write: () => {
+      throw new Error('The test memory store is read-only.')
+    },
+    list: () => entries,
+  }
+}
+
+class BlockingProvider implements AgentProvider {
+  readonly started: Promise<void>
+  abortCount = 0
+  private markStarted!: () => void
+  private releaseBlockedQuery!: () => void
+  private readonly blockedQuery: Promise<void>
+
+  constructor(private readonly throwOnAbort = false) {
+    this.started = new Promise<void>((resolve) => {
+      this.markStarted = resolve
+    })
+    this.blockedQuery = new Promise<void>((resolve) => {
+      this.releaseBlockedQuery = resolve
+    })
+  }
+
+  release(): void {
+    this.releaseBlockedQuery()
+  }
+
+  query(input: QueryInput): AgentQuery {
+    let aborted = false
+    const provider = this
+    return {
+      push() {},
+      end() {},
+      abort() {
+        if (!aborted) provider.abortCount += 1
+        aborted = true
+        provider.release()
+        if (provider.throwOnAbort) throw new Error('provider abort failed')
+      },
+      events: (async function* () {
+        yield {
+          type: 'init' as const,
+          provider: 'blocking',
+          providerSessionId: input.sessionId ?? 'blocking_session',
+          modelId: input.model,
+        }
+        provider.markStarted()
+        await provider.blockedQuery
+        if (!aborted) yield { type: 'result' as const, text: 'too late' }
       })(),
     }
   }
@@ -203,6 +325,187 @@ describe('RunLogKernel', () => {
     )
   })
 
+  it('records non-retryable provider errors as terminal failures and clears the worker lease', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const kernel = new RunLogKernel({
+      store,
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'error',
+              message: 'Provider is unavailable.',
+              retryable: false,
+              classification: 'upstream_unavailable',
+            },
+          },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_provider_failure',
+      instructions: 'Fail durably.',
+      capabilities: ['provider'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_provider_failure', input: 'fail' })
+
+    const [summary] = await kernel.drainUntilIdle()
+    const persisted = store.getRun(run.runId)
+    const projection = projectRunLogRun({ store, runId: run.runId })
+
+    expect(summary?.status).toBe('failed')
+    expect(persisted).toMatchObject({ status: 'failed' })
+    expect(persisted?.workerId).toBeUndefined()
+    expect(persisted?.leaseUntil).toBeUndefined()
+    expect(projection.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(['runtime.error', 'run.failed']),
+    )
+    expect(projection.events.map((event) => event.type)).not.toContain('run.completed')
+    expect(projection.errors).toMatchObject([
+      { type: 'runtime.error', message: 'Provider is unavailable.' },
+      { type: 'run.failed', message: 'Provider is unavailable.' },
+    ])
+  })
+
+  it('projects and counts complete run histories beyond one thousand events', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const kernel = new RunLogKernel({
+      store,
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([{ type: 'event', event: { type: 'result', text: 'history complete' } }]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_long_history',
+      instructions: 'Project long histories.',
+      capabilities: ['provider'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_long_history', input: 'project all events' })
+    for (let index = 0; index < 1_005; index += 1) {
+      store.appendEvent({
+        runId: run.runId,
+        type: 'runtime.warning',
+        payload: { message: `warning ${index}` },
+      })
+    }
+    const eventsBefore = store.countEvents({ runId: run.runId })
+
+    const [summary] = await kernel.drainUntilIdle()
+    const eventCount = store.countEvents({ runId: run.runId })
+    const projection = projectRunLogRun({ store, runId: run.runId })
+    const limitedProjection = projectRunLogRun({ store, runId: run.runId, limit: 10 })
+
+    expect(summary?.eventsAppended).toBe(eventCount - eventsBefore)
+    expect(projection.eventCount).toBe(eventCount)
+    expect(projection.events).toHaveLength(eventCount)
+    expect(projection.latestSeq).toBe(store.latestEventSeq(run.runId))
+    expect(projection.assistantText).toBe('history complete')
+    expect(limitedProjection.events).toHaveLength(10)
+    expect(limitedProjection.eventCount).toBe(eventCount)
+    expect(limitedProjection.latestSeq).toBe(projection.latestSeq)
+    expect(limitedProjection.assistantText).toBe('history complete')
+    expect(limitedProjection.events.map((event) => event.type)).toContain('run.completed')
+    expect(limitedProjection.events.at(-1)?.type).toBe('workspace.lease.released')
+  })
+
+  it('cancels an active provider query without allowing a later terminal overwrite', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const provider = new BlockingProvider(true)
+    const kernel = new RunLogKernel({
+      store,
+      providerRouter: new SingleProviderRouter(provider),
+    })
+    kernel.putAgent({
+      agentId: 'agent_cancel',
+      instructions: 'Remain cancellable.',
+      capabilities: ['provider'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_cancel', input: 'wait' })
+    const draining = kernel.drainOnce()
+    await provider.started
+
+    const cancelled = kernel.cancelRun({ runId: run.runId, reason: 'Operator stopped the run.' })
+    expect(provider.abortCount).toBe(1)
+    provider.release()
+    const summary = await draining
+    const persisted = store.getRun(run.runId)
+    const projection = projectRunLogRun({ store, runId: run.runId })
+
+    expect(summary?.status).toBe('cancelled')
+    expect(cancelled.status).toBe('cancelled')
+    expect(persisted).toMatchObject({ status: 'cancelled' })
+    expect(persisted?.workerId).toBeUndefined()
+    expect(persisted?.leaseUntil).toBeUndefined()
+    expect(projection.events.filter((event) => event.type === 'run.cancelled')).toHaveLength(1)
+    expect(projection.events.map((event) => event.type)).not.toContain('run.completed')
+    expect(projection.events.map((event) => event.type)).not.toContain('run.failed')
+    expect(
+      projection.events.some(
+        (event) =>
+          event.type === 'runtime.warning' &&
+          (event.payload as Record<string, unknown>).phase === 'provider.abort',
+      ),
+    ).toBe(true)
+    expect(kernel.cancelRun({ runId: run.runId }).status).toBe('cancelled')
+    expect(projection.errors).toHaveLength(0)
+  })
+
+  it('records a tool outcome when cancellation races a side effect', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const blocking = blockingSideEffectTool()
+    const kernel = new RunLogKernel({
+      store,
+      tools: [blocking.tool],
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: blocking.tool.manifest.key,
+              toolCallId: 'call_cancel_race',
+              input: { value: 1 },
+            },
+          },
+          { type: 'await_push', produce: { type: 'result', text: 'should not continue' } },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_cancel_tool',
+      instructions: 'Run the blocking tool.',
+      tools: [blocking.tool.manifest.key],
+      capabilities: ['provider', 'tools'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_cancel_tool', input: 'Start the tool.' })
+    const draining = kernel.drainOnce()
+    await blocking.started
+
+    kernel.cancelRun({ runId: run.runId, reason: 'Stop during the tool.' })
+    expect(blocking.state.signal?.aborted).toBe(true)
+    blocking.release()
+    const summary = await draining
+    const projection = projectRunLogRun({ store, runId: run.runId })
+    const cancelledEvent = projection.events.find((event) => event.type === 'run.cancelled')
+    const completedToolEvent = projection.events.find(
+      (event) => event.type === 'tool.call.completed',
+    )
+
+    expect(summary?.status).toBe('cancelled')
+    expect(blocking.state.executions).toBe(1)
+    expect(completedToolEvent?.seq).toBeGreaterThan(cancelledEvent?.seq ?? 0)
+    expect(completedToolEvent?.payload).toMatchObject({
+      toolCallId: 'call_cancel_race',
+      output: { sideEffectCommitted: true },
+    })
+    expect(projection.events.map((event) => event.type)).not.toContain('run.completed')
+  })
+
   it('passes credential refs and in-process secret resolution to provider queries without event leakage', async () => {
     const root = tempRoot()
     const store = storeAt(root)
@@ -237,6 +540,108 @@ describe('RunLogKernel', () => {
     expect(persisted?.credentialRef).toBe('managed:profile_1')
     expect(serializedEvents).not.toContain(secretValue)
     expect(projectRunLogRun({ store, runId: run.runId }).assistantText).toBe('credential resolved')
+  })
+
+  it('assembles bounded memory context into the actual provider request and records sanitized decisions', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const provider = new QueryRecordingProvider()
+    const secret = 'sk-runlog-context-secret-123456789'
+    const memories: MemoryRecord[] = [
+      {
+        entryId: 'safe-memory',
+        workspaceRoot: root,
+        scope: 'workspace',
+        text: 'Customer preference: concise release notes with explicit rollback steps.',
+        tags: ['release'],
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        entryId: 'large-memory',
+        workspaceRoot: root,
+        scope: 'workspace',
+        text: `Historical release detail ${'retained detail '.repeat(4_000)} final marker.`,
+        tags: ['history'],
+        createdAt: '2026-01-02T00:00:00.000Z',
+      },
+      {
+        entryId: 'secret-memory',
+        workspaceRoot: root,
+        scope: 'workspace',
+        text: secret,
+        tags: ['secret'],
+        createdAt: '2026-01-03T00:00:00.000Z',
+      },
+    ]
+    const kernel = new RunLogKernel({
+      store,
+      providerRouter: new SingleProviderRouter(provider),
+      contextAssembler: new ContextLensAssembler({
+        defaultContextWindowTokens: 1_024,
+        defaultReservedOutputTokens: 512,
+      }),
+      contextMemoryStore: memoryStore(memories),
+    })
+    kernel.putAgent({
+      agentId: 'agent_context_assembly',
+      instructions: 'Write operator-ready release notes.',
+      capabilities: ['provider', 'memory'],
+    })
+    const run = kernel.startRun({
+      agentId: 'agent_context_assembly',
+      input: 'Prepare a release note.',
+      workspaceRoot: root,
+    })
+
+    const [summary] = await kernel.drainUntilIdle()
+    const providerInput = provider.queries[0]
+    const contextMessage = providerInput?.messages?.[0]
+    const assembled = store.listEvents({ runId: run.runId, types: ['context.assembled'] })[0]
+    const serializedTelemetry = JSON.stringify(assembled?.payload)
+
+    expect(summary?.status).toBe('completed')
+    expect(providerInput?.systemPrompt).toBe('Write operator-ready release notes.')
+    expect(providerInput?.prompt).toBe('Prepare a release note.')
+    expect(contextMessage).toMatchObject({ role: 'user' })
+    expect(contextMessage?.role === 'user' ? contextMessage.content : '').toContain('Customer preference')
+    expect(contextMessage?.role === 'user' ? contextMessage.content : '').not.toContain(secret)
+    expect(assembled?.visibility).toBe('artifact-only')
+    expect(serializedTelemetry).not.toContain(secret)
+    expect(serializedTelemetry).toContain('base:agent-instructions')
+    expect(serializedTelemetry).toContain('base:current-input')
+    expect(serializedTelemetry).toContain('memory:large-memory')
+    expect(serializedTelemetry).toMatch(/included_summary|rehydrate_stub|budget/)
+  })
+
+  it('fails a RunLog run non-retryably when required provider context cannot fit', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const provider = new QueryRecordingProvider()
+    const kernel = new RunLogKernel({
+      store,
+      providerRouter: new SingleProviderRouter(provider),
+      contextAssembler: new ContextLensAssembler({
+        defaultContextWindowTokens: 1_024,
+        defaultReservedOutputTokens: 512,
+      }),
+    })
+    kernel.putAgent({
+      agentId: 'agent_context_overflow',
+      instructions: 'required instruction '.repeat(1_000),
+      capabilities: ['provider'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_context_overflow', input: 'run' })
+
+    const [summary] = await kernel.drainUntilIdle()
+    const errors = store.listEvents({ runId: run.runId, types: ['runtime.error', 'run.failed'] })
+
+    expect(summary?.status).toBe('failed')
+    expect(provider.queries).toHaveLength(0)
+    expect(errors.find((event) => event.type === 'runtime.error')?.payload).toMatchObject({
+      classification: 'context_budget_exceeded',
+      retryable: false,
+      code: 'context_required_material_exceeds_budget',
+    })
   })
 
   it('executes provider-requested tools through ToolRegistry and checkpoints the boundary', async () => {
@@ -288,7 +693,70 @@ describe('RunLogKernel', () => {
       },
     ])
     expect(projection.assistantText).toBe('tool-result-seen:true')
-    expect(store.latestCheckpoint(run.runId)?.kind).toBe('tool')
+    const completedToolEvent = projection.events.find(
+      (event) => event.type === 'tool.call.completed',
+    )
+    expect(store.latestCheckpoint(run.runId)).toMatchObject({
+      kind: 'tool',
+      seq: completedToolEvent?.seq,
+    })
+  })
+
+  it('enforces the tool iteration limit before an excess tool can execute', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const executions = { count: 0 }
+    const kernel = new RunLogKernel({
+      store,
+      tools: [countedTool(executions)],
+      maxToolIterations: 1,
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: 'tool.counted',
+              toolCallId: 'call_allowed',
+              input: { iteration: 1 },
+            },
+          },
+          {
+            type: 'await_push',
+            produce: {
+              type: 'tool_call',
+              name: 'tool.counted',
+              toolCallId: 'call_excess',
+              input: { iteration: 2 },
+            },
+          },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_tool_limit',
+      instructions: 'Stop at the tool limit.',
+      tools: ['tool.counted'],
+      capabilities: ['provider', 'tools'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_tool_limit', input: 'loop tools' })
+
+    const [summary] = await kernel.drainUntilIdle()
+    const projection = projectRunLogRun({ store, runId: run.runId })
+    const requested = projection.events.filter((event) => event.type === 'tool.call.requested')
+    const runtimeErrors = projection.events.filter((event) => event.type === 'runtime.error')
+
+    expect(summary?.status).toBe('failed')
+    expect(executions.count).toBe(1)
+    expect(requested).toHaveLength(1)
+    expect(requested[0]?.payload).toMatchObject({ toolCallId: 'call_allowed' })
+    expect(runtimeErrors).toHaveLength(1)
+    expect(runtimeErrors[0]?.payload).toMatchObject({
+      classification: 'tool_iteration_limit',
+      maxToolIterations: 1,
+    })
+    expect(projection.events.filter((event) => event.type === 'run.failed')).toHaveLength(1)
+    expect(projection.events.map((event) => event.type)).not.toContain('run.completed')
   })
 
   it('pauses durably when a tool requires approval', async () => {
@@ -335,6 +803,55 @@ describe('RunLogKernel', () => {
       },
     ])
     expect(projection.events.map((event) => event.type)).toContain('run.awaiting_approval')
+  })
+
+  it('closes pending approvals when an awaiting run is cancelled', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const kernel = new RunLogKernel({
+      store,
+      tools: [echoTool({ approvalRequired: true })],
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: 'tool.echo',
+              toolCallId: 'call_cancelled_approval',
+              input: { sourceMutation: true },
+            },
+          },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_cancel_approval',
+      instructions: 'Wait for an operator.',
+      tools: ['tool.echo'],
+      approvalPolicy: 'balanced',
+      capabilities: ['provider', 'tools'],
+    })
+    const run = kernel.startRun({ agentId: 'agent_cancel_approval', input: 'Request approval.' })
+    await kernel.drainUntilIdle()
+    const approvalId = approvalIdFor(store, run.runId)
+
+    kernel.cancelRun({ runId: run.runId, reason: 'The operator abandoned this run.' })
+    store.appendEvent({
+      runId: run.runId,
+      type: 'approval.requested',
+      payload: {
+        approvalId: 'approval_late_after_cancel',
+        toolCallId: 'call_late_after_cancel',
+      },
+    })
+    const projection = projectRunLogRun({ store, runId: run.runId })
+
+    expect(projection.status).toBe('cancelled')
+    expect(projection.pendingApprovals).toHaveLength(0)
+    expect(projection.events.find((event) => event.type === 'approval.cancelled')?.payload)
+      .toMatchObject({ approvalId, toolCallId: 'call_cancelled_approval' })
+    expect(() => kernel.approveRunLogApproval({ approvalId })).toThrow(/cannot be decided/)
   })
 
   it('records hard-block decisions before a guarded tool can execute', async () => {
@@ -432,6 +949,7 @@ describe('RunLogKernel', () => {
     const secondKernel = new RunLogKernel({
       store: secondStore,
       tools: [approvalTool(executions, { approvalRequired: true })],
+      contextAssembler: new ContextLensAssembler(),
       providerRouter: new SingleProviderRouter(
         new MockProvider((input) => {
           continuationInput = input
@@ -461,12 +979,12 @@ describe('RunLogKernel', () => {
     expect(executions.count).toBe(1)
     expect(projection.assistantText).toBe('continued:true')
     expect(continuationInput?.prompt).toBe('')
-    expect(continuationInput?.messages?.map((message) => message.role)).toEqual([
+    expect(continuationInput?.messages?.slice(-3).map((message) => message.role)).toEqual([
       'user',
       'assistant',
       'tool',
     ])
-    expect(continuationInput?.messages?.[1]).toMatchObject({
+    expect(continuationInput?.messages?.at(-2)).toMatchObject({
       role: 'assistant',
       toolCalls: [
         {
@@ -486,6 +1004,62 @@ describe('RunLogKernel', () => {
     expect(secondStore.markApprovalReceiptUsed(receipt.receiptId, run.runId)).toBe(false)
     expect(() => secondKernel.approveRunLogApproval({ approvalId })).toThrow(/cannot be decided/)
     expect(executions.count).toBe(1)
+  })
+
+  it('records an approved tool outcome when cancellation races its side effect', async () => {
+    const root = tempRoot()
+    const store = storeAt(root)
+    const blocking = blockingSideEffectTool({ approvalRequired: true })
+    const kernel = new RunLogKernel({
+      store,
+      tools: [blocking.tool],
+      providerRouter: new SingleProviderRouter(
+        new MockProvider([
+          {
+            type: 'event',
+            event: {
+              type: 'tool_call',
+              name: blocking.tool.manifest.key,
+              toolCallId: 'call_approved_cancel_race',
+              input: { value: 2 },
+            },
+          },
+        ]),
+      ),
+    })
+    kernel.putAgent({
+      agentId: 'agent_approved_cancel_tool',
+      instructions: 'Resume the approved tool.',
+      tools: [blocking.tool.manifest.key],
+      approvalPolicy: 'balanced',
+      capabilities: ['provider', 'tools'],
+    })
+    const run = kernel.startRun({
+      agentId: 'agent_approved_cancel_tool',
+      input: 'Request and run the tool.',
+    })
+    await kernel.drainUntilIdle()
+    const approvalId = approvalIdFor(store, run.runId)
+    kernel.approveRunLogApproval({ approvalId, actor: 'test-operator' })
+
+    const draining = kernel.drainOnce()
+    await blocking.started
+    kernel.cancelRun({ runId: run.runId, reason: 'Stop the approved side effect.' })
+    expect(blocking.state.signal?.aborted).toBe(true)
+    blocking.release()
+    const summary = await draining
+    const projection = projectRunLogRun({ store, runId: run.runId })
+
+    expect(summary?.status).toBe('cancelled')
+    expect(blocking.state.executions).toBe(1)
+    expect(
+      projection.events.find(
+        (event) =>
+          event.type === 'tool.call.completed'
+          && (event.payload as Record<string, unknown>).toolCallId === 'call_approved_cancel_race',
+      )?.payload,
+    ).toMatchObject({ source: 'approved-resume', output: { sideEffectCommitted: true } })
+    expect(projection.events.map((event) => event.type)).not.toContain('run.completed')
   })
 
   it('denies a paused RunLog approval durably without executing the tool', async () => {

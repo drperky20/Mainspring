@@ -1,9 +1,11 @@
 import type { RunLogEvent, RunLogStore, RunRecord, RunStatus } from '../../core/types.js'
 import type { DecisionRecord } from '../../policy/DecisionRecord.js'
+import { RunLogProjector } from './RunLogProjector.js'
 
 export interface RunLogRunProjection {
   run: RunRecord
   events: RunLogEvent[]
+  eventCount: number
   status: RunStatus
   assistantText: string
   checkpoints: Array<{
@@ -49,6 +51,41 @@ function payloadRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
+const RUN_EVENT_PAGE_SIZE = 1_000
+
+function listAllRunEvents(store: RunLogStore, runId: string): RunLogEvent[] {
+  const events: RunLogEvent[] = []
+  let afterSeq = 0
+  while (true) {
+    const page = store.listEvents({ runId, afterSeq, limit: RUN_EVENT_PAGE_SIZE })
+    if (page.length === 0) break
+    events.push(...page)
+    const nextSeq = page.at(-1)?.seq ?? afterSeq
+    if (nextSeq <= afterSeq) {
+      throw new Error(`RunLog event pagination did not advance for run ${runId}.`)
+    }
+    afterSeq = nextSeq
+    if (page.length < RUN_EVENT_PAGE_SIZE) break
+  }
+  return events
+}
+
+function visibleEvents(events: RunLogEvent[], limit?: number): RunLogEvent[] {
+  if (limit === undefined) return events
+  const normalized = Math.floor(limit)
+  if (!Number.isFinite(normalized) || normalized <= 0) return []
+  return events.slice(-normalized)
+}
+
+function boundedRunEventTail(store: RunLogStore, runId: string, latestSeq: number, limit: number): RunLogEvent[] {
+  return store.listEvents({
+    runId,
+    beforeSeq: latestSeq + 1,
+    order: 'desc',
+    limit,
+  }).reverse()
+}
+
 export function projectRunLogRun(input: {
   store: RunLogStore
   runId: string
@@ -56,8 +93,14 @@ export function projectRunLogRun(input: {
 }): RunLogRunProjection {
   const run = input.store.getRun(input.runId)
   if (!run) throw new Error(`Unknown run: ${input.runId}`)
-  const events = input.store.listEvents({ runId: input.runId, limit: input.limit ?? 1_000 })
-  let assistantText = ''
+  const projector = new RunLogProjector(input.store)
+  projector.catchUpUntilIdle()
+  const summary = projector.summary(input.runId)
+  const allEvents = input.limit === undefined
+    ? listAllRunEvents(input.store, input.runId)
+    : boundedRunEventTail(input.store, input.runId, summary?.latestSeq ?? input.store.latestEventSeq(input.runId), input.limit)
+  const events = visibleEvents(allEvents, input.limit)
+  let assistantText = summary?.assistantText ?? ''
   const pendingApprovals: RunLogRunProjection['pendingApprovals'] = []
   const approvalDecisions: RunLogRunProjection['approvalDecisions'] = []
   const resolvedApprovals = new Set<string>()
@@ -69,12 +112,12 @@ export function projectRunLogRun(input: {
   const contextEncodings: unknown[] = []
   const errors: RunLogRunProjection['errors'] = []
 
-  for (const event of events) {
+  for (const event of allEvents) {
     const payload = payloadRecord(event.payload)
-    if (event.type === 'assistant.delta') {
+    if (!summary && event.type === 'assistant.delta') {
       assistantText += typeof payload.text === 'string' ? payload.text : ''
     }
-    if (event.type === 'assistant.result' && typeof payload.text === 'string') {
+    if (!summary && event.type === 'assistant.result' && typeof payload.text === 'string') {
       assistantText = payload.text
     }
     if (event.type === 'approval.requested') {
@@ -84,15 +127,21 @@ export function projectRunLogRun(input: {
         payload: event.payload,
       })
     }
-    if (event.type === 'approval.approved' || event.type === 'approval.denied') {
+    if (
+      event.type === 'approval.approved'
+      || event.type === 'approval.denied'
+      || event.type === 'approval.cancelled'
+    ) {
       const approvalId = typeof payload.approvalId === 'string' ? payload.approvalId : undefined
       if (approvalId) resolvedApprovals.add(approvalId)
-      approvalDecisions.push({
-        approvalId,
-        receiptId: typeof payload.receiptId === 'string' ? payload.receiptId : undefined,
-        decision: event.type === 'approval.approved' ? 'approved' : 'denied',
-        payload: event.payload,
-      })
+      if (event.type !== 'approval.cancelled') {
+        approvalDecisions.push({
+          approvalId,
+          receiptId: typeof payload.receiptId === 'string' ? payload.receiptId : undefined,
+          decision: event.type === 'approval.approved' ? 'approved' : 'denied',
+          payload: event.payload,
+        })
+      }
     }
     if (event.type.startsWith('tool.call.')) {
       const status = event.type.slice('tool.call.'.length)
@@ -134,11 +183,14 @@ export function projectRunLogRun(input: {
   return {
     run,
     events,
-    status: run.status,
+    eventCount: summary?.eventCount ?? input.store.countEvents({ runId: input.runId }),
+    status: summary?.status ?? run.status,
     assistantText,
-    pendingApprovals: pendingApprovals.filter(
-      (approval) => !approval.approvalId || !resolvedApprovals.has(approval.approvalId),
-    ),
+    pendingApprovals: run.status === 'awaiting_approval'
+      ? pendingApprovals.filter(
+          (approval) => !approval.approvalId || !resolvedApprovals.has(approval.approvalId),
+        )
+      : [],
     approvalDecisions,
     toolCalls,
     checkpoints,
@@ -147,6 +199,6 @@ export function projectRunLogRun(input: {
     usage,
     contextEncodings,
     errors,
-    latestSeq: events.at(-1)?.seq ?? 0,
+    latestSeq: summary?.latestSeq ?? input.store.latestEventSeq(input.runId),
   }
 }

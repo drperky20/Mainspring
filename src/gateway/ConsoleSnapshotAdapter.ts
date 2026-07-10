@@ -175,6 +175,8 @@ export interface ConsoleGatewayRunLogRun {
 
 export interface ConsoleGatewayRunLogSnapshot {
   configured: boolean
+  /** Omitted by older gateway snapshots during rolling local upgrades. */
+  worker?: NonNullable<LocalGatewaySnapshot['runLog']>['worker']
   runs: ConsoleGatewayRunLogRun[]
 }
 
@@ -836,6 +838,7 @@ function consoleRunLogSnapshot(
 ): ConsoleGatewayRunLogSnapshot {
   return {
     configured: snapshot.configured,
+    worker: snapshot.worker,
     runs: snapshot.runs.map(consoleRunLogRun),
   }
 }

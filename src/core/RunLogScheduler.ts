@@ -1,9 +1,10 @@
-import type { RunLogStore, RunRecord } from './types.js'
+import type { ExecutionClaim, RunLogStore, RunRecord } from './types.js'
 
 export interface RunLogSchedulerOptions {
   store: RunLogStore
   workerId?: string
   leaseMs?: number
+  now?: () => Date
 }
 
 export class RunLogScheduler {
@@ -19,6 +20,14 @@ export class RunLogScheduler {
     return this.options.store.claimNextRun({
       workerId: this.workerId,
       leaseMs: this.leaseMs,
+    })
+  }
+
+  claimNextExecution(): ExecutionClaim | null {
+    return this.options.store.claimNextExecution({
+      workerId: this.workerId,
+      leaseMs: this.leaseMs,
+      now: (this.options.now?.() ?? new Date()).toISOString(),
     })
   }
 }

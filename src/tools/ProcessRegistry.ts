@@ -24,6 +24,7 @@ export const MAX_COMMAND_LENGTH = 8_000
 export const DEFAULT_DOCKER_CELL_IMAGE = 'node:22-alpine'
 
 const SAFE_ENV_KEYS = new Set([
+  'APPDATA',
   'CI',
   'COMSPEC',
   'ComSpec',
@@ -169,7 +170,8 @@ function boundedPositiveInt(value: unknown, fallback: number, max: number): numb
 function ensureContainedCwd(workspaceRoot: string, cwd?: string): string {
   const root = fs.realpathSync.native(workspaceRoot)
   const resolved = cwd ? path.resolve(root, cwd) : root
-  const relative = path.relative(root, resolved)
+  const containedCandidate = fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved
+  const relative = path.relative(root, containedCandidate)
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error('Terminal working directory must stay inside the workspace root.')
   }
@@ -187,6 +189,20 @@ function ensureContainedCwd(workspaceRoot: string, cwd?: string): string {
 function relativeCwd(workspaceRoot: string, cwd: string): string {
   const relative = path.relative(workspaceRoot, cwd)
   return relative && !relative.startsWith('..') ? relative.replace(/\\/g, '/') : 'workspace'
+}
+
+function containedExistingRelativePath(
+  rootPath: string,
+  candidatePath: string,
+  errorMessage: string,
+): string {
+  const root = fs.realpathSync.native(rootPath)
+  const candidate = fs.realpathSync.native(candidatePath)
+  const relative = path.relative(root, candidate)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(errorMessage)
+  }
+  return relative.replace(/\\/g, '/')
 }
 
 function executionCellKey(workspaceRoot: string, backend: ProcessExecutionBackend): string {
@@ -392,8 +408,12 @@ export function processSpawnSpecForBackend(input: {
   }
   if (input.backend.key === 'docker') {
     const workspaceRoot = fs.realpathSync.native(input.workspaceRoot)
-    const relative = path.relative(workspaceRoot, input.cwd).replace(/\\/g, '/')
-    const containerCwd = relative && !relative.startsWith('..') ? `/workspace/${relative}` : '/workspace'
+    const relative = containedExistingRelativePath(
+      workspaceRoot,
+      input.cwd,
+      'Docker process cwd must stay inside the workspace root.',
+    )
+    const containerCwd = relative ? `/workspace/${relative}` : '/workspace'
     const image = process.env.MAINSPRING_DOCKER_CELL_IMAGE || DEFAULT_DOCKER_CELL_IMAGE
     return [
       'docker',

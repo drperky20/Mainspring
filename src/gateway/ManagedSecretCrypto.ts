@@ -164,6 +164,7 @@ function writeManagedSecretKey(
       ? `${DPAPI_KEY_PREFIX}${input.dpapi.protect(base64Key)}`
       : `${BASE64_KEY_PREFIX}${base64Key}`
   fs.writeFileSync(keyPath, serialized, { encoding: 'utf8', mode: 0o600 })
+  fs.chmodSync(keyPath, 0o600)
 }
 
 function readManagedSecretKey(
@@ -291,6 +292,7 @@ function writeCredentialManagerPointer(keyPath: string, credentialName: string):
     encoding: 'utf8',
     mode: 0o600,
   })
+  fs.chmodSync(keyPath, 0o600)
 }
 
 function defaultCredentialName(keyPath: string): string {

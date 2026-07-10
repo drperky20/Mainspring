@@ -472,6 +472,17 @@ export interface LocalGatewayClient {
     decision: 'approved' | 'denied'
     reason?: string
   }): Promise<{ approvalId: string; status: 'approved' | 'denied' }>
+  resolveRunLogApproval(input: {
+    approvalId: string
+    sessionId: string
+    runId: string
+    decision: 'approved' | 'denied'
+    reason?: string
+  }): Promise<{
+    run: { runId: string; sessionId: string; status: string }
+    status: string
+    pendingApprovals: unknown[]
+  }>
 }
 
 export function createLocalGatewayClient(
@@ -729,6 +740,17 @@ export function createLocalGatewayClient(
       ),
     resolveApproval: (input) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/approvals/${encodeURIComponent(input.approvalId)}/resolve`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          sessionId: input.sessionId,
+          runId: input.runId,
+          decision: input.decision,
+          ...(input.reason ? { reason: input.reason } : {}),
+        }),
+      }),
+    resolveRunLogApproval: (input) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/runlog/approvals/${encodeURIComponent(input.approvalId)}/resolve`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...authHeaders() },
         body: JSON.stringify({

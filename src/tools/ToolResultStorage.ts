@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createMainspringRuntimeId, sanitizeRuntimeResponse } from '#protocol'
+import { assertPathContained } from '#protocol/node'
 import { classifyToolResult } from './ToolResultClassifier.js'
 
 export const DEFAULT_INLINE_TOOL_RESULT_MAX_BYTES = 8 * 1024
@@ -39,15 +40,20 @@ export class ToolResultStorage {
     }
 
     const resultId = createMainspringRuntimeId('tool_result')
-    const relativePath = path
-      .join(
+    const workspaceRoot = fs.realpathSync.native(input.workspaceRoot)
+    const absolutePath = assertPathContained(
+      workspaceRoot,
+      path.join(
+        workspaceRoot,
         this.options.resultsDirectory ?? '.mainspring',
         'tool-results',
         input.runId,
         `${resultId}.json`,
-      )
+      ),
+    )
+    const relativePath = path
+      .relative(workspaceRoot, absolutePath)
       .replace(/\\/g, '/')
-    const absolutePath = path.join(input.workspaceRoot, relativePath)
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true })
     fs.writeFileSync(absolutePath, JSON.stringify(sanitized, null, 2))
 

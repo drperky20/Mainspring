@@ -112,6 +112,36 @@ describe('Dashboard', () => {
 })
 
 describe('selected client and agent labels', () => {
+  it('renders workspace basenames for Windows and POSIX client paths', () => {
+    const baseClient = {
+      id: 'client_1',
+      name: 'Northline Dental',
+      contact: 'ops@example.com',
+      billingLabel: 'Northline',
+    }
+    const posixMarkup = renderToStaticMarkup(
+      <AgentSpec
+        client={{ ...baseClient, workspace: '/Users/austin/Mainspring/workspaces/northline' }}
+        providerState="ready"
+        onSave={() => undefined}
+        onBack={() => undefined}
+      />,
+    )
+    const windowsMarkup = renderToStaticMarkup(
+      <AgentSpec
+        client={{ ...baseClient, workspace: 'E:\\Mainspring\\workspaces\\northline-win' }}
+        providerState="ready"
+        onSave={() => undefined}
+        onBack={() => undefined}
+      />,
+    )
+
+    expect(posixMarkup).toContain('northline workspace')
+    expect(posixMarkup).not.toContain('/Users/austin')
+    expect(windowsMarkup).toContain('northline-win workspace')
+    expect(windowsMarkup).not.toContain('E:\\Mainspring')
+  })
+
   it('renders budget tool policy summaries from gateway evaluation truth', () => {
     const markup = renderToStaticMarkup(
       <BudgetToolPolicySummary

@@ -100,10 +100,7 @@ export function redactBrowserUnsafeGatewayText(value: string, replacement = '[re
     .replace(browserUnsafeMarkerAssignmentPattern(), replacement)
     .replace(/(^|[^a-zA-Z])([a-zA-Z]:[\\/][^\s'"`]+)/g, `$1${replacement}`)
     .replace(/\\\\[^\s'"`]+/g, replacement)
-    .replace(
-      /(^|[\s'"`=])\/(?:Users|home|tmp|var|etc|srv|mnt|runtime|sessions|workspaces|artifacts)\S*/g,
-      `$1${replacement}`,
-    )
+    .replace(/(^|[\s'"`=])\/(?!\/)[^\s'"`<>]+/g, `$1${replacement}`)
 }
 
 export function containsBrowserUnsafeGatewayText(value: string): boolean {

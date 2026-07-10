@@ -1510,4 +1510,44 @@ describe('createLocalGatewayClient', () => {
       'Gateway response for /snapshot contained browser-unsafe data.',
     )
   })
+
+  it('resolves RunLog approvals through the canonical public route', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe(
+        'http://127.0.0.1:8787/runlog/approvals/approval_runlog_1/resolve',
+      )
+      expect(init?.method).toBe('POST')
+      expect(init?.headers).toMatchObject({
+        'content-type': 'application/json',
+        authorization: 'Bearer hosted_token_1',
+      })
+      expect(JSON.parse(String(init?.body))).toEqual({
+        sessionId: 'session_1',
+        runId: 'runlog_1',
+        decision: 'approved',
+        reason: 'Reviewed workspace write scope.',
+      })
+      return new Response(
+        JSON.stringify({
+          run: { runId: 'runlog_1', sessionId: 'session_1', status: 'completed' },
+          status: 'completed',
+          pendingApprovals: [],
+        }),
+        { status: 200 },
+      )
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+    client.setSessionToken('hosted_token_1')
+
+    await expect(client.resolveRunLogApproval({
+      approvalId: 'approval_runlog_1',
+      sessionId: 'session_1',
+      runId: 'runlog_1',
+      decision: 'approved',
+      reason: 'Reviewed workspace write scope.',
+    })).resolves.toMatchObject({
+      run: { runId: 'runlog_1', status: 'completed' },
+      pendingApprovals: [],
+    })
+  })
 })

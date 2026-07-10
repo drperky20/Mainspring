@@ -61,4 +61,26 @@ describe('ToolResultStorage', () => {
       text,
     })
   })
+
+  it('rejects spill directories that escape the workspace root', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-tool-result-contained-'))
+    tempRoots.push(parent)
+    const root = path.join(parent, 'workspace')
+    fs.mkdirSync(root)
+    const storage = new ToolResultStorage({
+      inlineMaxBytes: 128,
+      resultsDirectory: '../outside-results',
+    })
+
+    expect(() =>
+      storage.prepare({
+        runId: 'run_escape',
+        workspaceRoot: root,
+        toolName: 'file.read',
+        output: { path: 'notes/large.txt', text: 'x'.repeat(1024) },
+      }),
+    ).toThrow('Path escapes root')
+
+    expect(fs.existsSync(path.join(parent, 'outside-results'))).toBe(false)
+  })
 })

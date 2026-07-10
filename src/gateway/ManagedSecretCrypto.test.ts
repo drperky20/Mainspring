@@ -86,6 +86,25 @@ describe('ManagedSecretCrypto', () => {
     expect(fs.readFileSync(keyPath, 'utf8').trim().startsWith('dpapi:')).toBe(true)
   })
 
+  it.skipIf(process.platform === 'win32')(
+    'normalizes existing managed-secret key file permissions after rewriting',
+    () => {
+      const root = makeTempRoot('managed-secret-crypto-mode-')
+      const keyPath = path.join(root, 'gateway.managed-key')
+      const rawKey = Buffer.alloc(32, 11).toString('base64')
+      fs.writeFileSync(keyPath, rawKey, { encoding: 'utf8', mode: 0o644 })
+      fs.chmodSync(keyPath, 0o644)
+
+      loadOrCreateManagedSecretKey({
+        keyPath,
+        platform: 'win32',
+        dpapi: mockDpapi(),
+      })
+
+      expect(fs.statSync(keyPath).mode & 0o777).toBe(0o600)
+    },
+  )
+
   it('falls back to explicit local base64 key files on non-Windows hosts', () => {
     const root = makeTempRoot('managed-secret-crypto-linux-')
     const keyPath = path.join(root, 'gateway.managed-key')

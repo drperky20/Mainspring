@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim AS deps
+FROM node:22-bookworm-slim AS deps
 
 WORKDIR /app
 ENV PNPM_HOME=/pnpm
@@ -20,7 +20,7 @@ COPY scripts scripts
 RUN pnpm run build \
   && pnpm prune --prod
 
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 ENV NODE_ENV=production

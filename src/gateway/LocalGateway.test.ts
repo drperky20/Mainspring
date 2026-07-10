@@ -2031,6 +2031,111 @@ describe('LocalMainspringGateway', () => {
     }
   }, 30_000)
 
+  it('discovers durable RunLog runs and projects their usage into the gateway ledger', async () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-runlog-usage-ledger-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider((input) => [
+        {
+          type: 'event',
+          event: {
+            type: 'init',
+            provider: 'openrouter',
+            providerSessionId: 'provider_runlog_usage',
+            modelId: input.model ?? 'openrouter/free',
+            modelFamily: 'test-family',
+            providerTransport: 'openrouter-chat-completions',
+          },
+        },
+        {
+          type: 'event',
+          event: {
+            type: 'usage',
+            providerSessionId: 'provider_runlog_usage',
+            usage: {
+              provider: 'openrouter',
+              modelId: 'openrouter/free',
+              modelFamily: 'test-family',
+              providerTransport: 'openrouter-chat-completions',
+              inputTokens: 8,
+              outputTokens: 5,
+              totalTokens: 13,
+              cacheReadTokens: 2,
+            },
+          },
+        },
+        { type: 'event', event: { type: 'result', text: 'RunLog usage captured.' } },
+      ]),
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, runLog, appState })
+
+    await mainspring.start()
+    try {
+      const session = mainspring.sessions.create({
+        sessionId: 'gateway-runlog-usage-session',
+        workspace: { root: workspaceRoot },
+      })
+      const handle = runLog.runs.start({
+        sessionId: session.record.sessionId,
+        input: 'Capture canonical usage.',
+        providerId: 'openrouter',
+        modelId: 'openrouter/free',
+      })
+      await handle.drainUntilIdle()
+
+      expect(appState.runs.get(handle.record.runId)).toBeNull()
+      const snapshot = gateway.snapshot()
+
+      expect(snapshot.runLog?.runs).toEqual([
+        expect.objectContaining({
+          runId: handle.record.runId,
+          status: 'completed',
+          assistantText: 'RunLog usage captured.',
+        }),
+      ])
+      expect(snapshot.appState.usageLedger).toEqual([
+        expect.objectContaining({
+          runId: handle.record.runId,
+          sessionId: session.record.sessionId,
+          providerId: 'openrouter',
+          modelId: 'openrouter/free',
+          inputTokens: 8,
+          outputTokens: 5,
+          totalTokens: 13,
+          estimatedCostUsd: 0,
+          metadata: expect.objectContaining({
+            runtime: 'runlog',
+            pricingStatus: 'free',
+            modelFamily: 'test-family',
+            providerTransport: 'openrouter-chat-completions',
+            providerSessionId: 'provider_runlog_usage',
+            cacheReadTokens: 2,
+          }),
+        }),
+      ])
+      expect(snapshot.usageStatus.total.summary).toMatchObject({
+        entries: 1,
+        totalTokens: 13,
+        estimatedCostUsd: 0,
+      })
+    } finally {
+      runLog.close()
+      appState.close()
+      await mainspring.stop()
+    }
+  }, 30_000)
+
   it('prices gateway usage-ledger rows from a configured local catalog', async () => {
     const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
       'mainspring-gateway-priced-usage-ledger-',
@@ -2298,6 +2403,17 @@ describe('LocalMainspringGateway', () => {
       )
       mailbox.writeEvent(
         {
+          type: 'tool.result',
+          runId: run.runId,
+          toolCallId: 'call_escape',
+          name: 'file.read',
+          status: 'completed',
+          output: { artifactId: '../../../outside-tool-result' },
+        },
+        session.record.sessionId,
+      )
+      mailbox.writeEvent(
+        {
           type: 'tool.update',
           runId: run.runId,
           toolCallId: 'call_2',
@@ -2452,6 +2568,11 @@ describe('LocalMainspringGateway', () => {
           }),
         ]),
       )
+      expect(appState.artifacts.get('../../../outside-tool-result')).toBeNull()
+      expect(appState.artifacts.get('artifact_tool_result')).toMatchObject({
+        artifactId: 'artifact_tool_result',
+        path: expect.stringContaining('artifact_tool_result'),
+      })
     } finally {
       appState.close()
     }
@@ -2704,6 +2825,15 @@ describe('LocalMainspringGateway', () => {
         },
         session.record.sessionId,
       )
+      mailbox.writeEvent(
+        {
+          type: 'artifact.created',
+          runId: run.runId,
+          artifactId: '..\\outside-report',
+          kind: 'file',
+        },
+        session.record.sessionId,
+      )
 
       const snapshot = gateway.snapshot()
       expect(gateway.events.list({ sessionId: session.record.sessionId, runId: run.runId })).toEqual(
@@ -2745,6 +2875,7 @@ describe('LocalMainspringGateway', () => {
           }),
         ]),
       )
+      expect(appState.artifacts.get('..\\outside-report')).toBeNull()
     } finally {
       appState.close()
     }

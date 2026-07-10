@@ -172,13 +172,21 @@ export class LocalGatewayHttpServer {
   }
 
   async start(): Promise<{ host: string; port: number; url: string }> {
-    await new Promise<void>((resolve, reject) => {
-      this.server.once('error', reject)
-      this.server.listen(this.port, this.host, () => {
-        this.server.off('error', reject)
-        resolve()
+    const runLog = this.options.gateway.runLog
+    const startsRunLogWorker = runLog?.available?.() === true
+    if (startsRunLogWorker) runLog!.startWorker()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.server.once('error', reject)
+        this.server.listen(this.port, this.host, () => {
+          this.server.off('error', reject)
+          resolve()
+        })
       })
-    })
+    } catch (error) {
+      if (startsRunLogWorker) await runLog!.stopWorker()
+      throw error
+    }
     const address = this.server.address()
     if (!address || typeof address === 'string') {
       throw new Error('Gateway server failed to bind to a TCP address.')
@@ -191,10 +199,18 @@ export class LocalGatewayHttpServer {
   }
 
   async stop(): Promise<void> {
-    if (!this.server.listening) return
-    await new Promise<void>((resolve, reject) => {
-      this.server.close((error) => (error ? reject(error) : resolve()))
-    })
+    try {
+      if (this.server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          this.server.close((error) => (error ? reject(error) : resolve()))
+        })
+      }
+    } finally {
+      const runLog = this.options.gateway.runLog
+      if (runLog?.available?.() === true) {
+        await runLog.stopWorker()
+      }
+    }
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -738,7 +754,14 @@ export class LocalGatewayHttpServer {
           typeof payload.reason === 'string' && payload.reason.trim()
             ? payload.reason.trim()
             : undefined
-        this.options.gateway.runs.cancel(sessionId, runId, reason)
+        const runLogRun = this.options.gateway.runLog.available()
+          ? this.options.gateway.runLog.runs.list({ sessionId }).find((run) => run.runId === runId)
+          : undefined
+        if (runLogRun) {
+          this.options.gateway.runLog.runs.cancel(runId, reason)
+        } else {
+          this.options.gateway.runs.cancel(sessionId, runId, reason)
+        }
         this.writeJson(response, 202, sanitizeGatewayResponse({ runId, sessionId, cancelled: true }))
         return
       }
@@ -994,9 +1017,6 @@ export class LocalGatewayHttpServer {
   }
 
   private async startRun(input: StartRunRequest) {
-    if (this.shouldStartProfileRunFromAppState(input.providerProfileId)) {
-      return this.options.gateway.runs.startFromAppState(input)
-    }
     if (this.options.gateway.runLog?.available()) {
       const result = await this.options.gateway.runLog.runs.start(input)
       return result.run
@@ -1005,13 +1025,6 @@ export class LocalGatewayHttpServer {
       return this.options.gateway.runs.startFromAppState(input)
     }
     return this.options.gateway.runs.start(input)
-  }
-
-  private shouldStartProfileRunFromAppState(providerProfileId: string | undefined): boolean {
-    if (!providerProfileId) return false
-    const profile = this.options.gateway.appState?.providerProfiles.get(providerProfileId)
-    if (!profile) return true
-    return profile.providerId !== 'default'
   }
 
   private createClient(input: CreateClientRequest) {
@@ -1228,9 +1241,9 @@ export class LocalGatewayHttpServer {
   }
 
   private lookupSessionIdForRun(runId: string): string | undefined {
-    return gatewaySnapshotToConsoleState(this.options.gateway.snapshot()).runs.find(
-      (run) => run.runId === runId,
-    )?.sessionId
+    const snapshot = gatewaySnapshotToConsoleState(this.options.gateway.snapshot())
+    return snapshot.runs.find((run) => run.runId === runId)?.sessionId
+      ?? snapshot.runLog?.runs.find((run) => run.runId === runId)?.sessionId
   }
 
   private async readJson(request: IncomingMessage): Promise<unknown> {

@@ -15,7 +15,7 @@ RunLogKernel.startRun
 -> ToolRegistry if tool_call
 -> RuntimePolicyGuard / approval pause if required
 -> checkpoint.saved
--> run.completed / run.failed / run.awaiting_approval
+-> run.completed / run.failed / run.cancelled / run.awaiting_approval
 ```
 
 Due RunLog cron rows enter the same event log before execution:
@@ -30,8 +30,8 @@ SqliteRunLogStore.enqueueDueCronRuns
 
 ## Implemented Pieces
 
-- `src/core/RunLogKernel.ts` starts and drains runs.
-- `src/core/RunLogExecutor.ts` records provider events, routes tool calls, appends checkpoints, and pauses on approval.
+- `src/core/RunLogKernel.ts` starts, drains, lists, and durably cancels runs.
+- `src/core/RunLogExecutor.ts` records provider events, routes tool calls, enforces tool-iteration limits, appends checkpoints, aborts active provider queries, and pauses on approval.
 - `src/core/RunLogScheduler.ts` claims queued runs with DB leases.
 - `src/adapters/sqlite/SqliteRunLogStore.ts` persists agents, runs, events, checkpoints, leases, and cron rows.
 - `src/capabilities/cron/RunLogCron.ts` creates scoped headless grants and cron enqueue decisions.
@@ -53,7 +53,7 @@ RunLog events are append-only. Important event families:
 
 ## Approvals
 
-Approvals are durable runtime state, not UI booleans. A tool that requires approval causes the run to enter `awaiting_approval`; future work should resume from the checkpoint with an approval receipt rather than replaying side effects.
+Approvals are durable runtime state, not UI booleans. A tool that requires approval causes the run to enter `awaiting_approval`. Approval decisions use scoped, signed, one-time receipts; an approved run validates the persisted tool, policy, workspace, provider, and manifest snapshot before resuming from the approval checkpoint. Cancelling the run durably closes its pending approval instead of leaving unresolvable operator work.
 
 ## Cron And Headless Runs
 
@@ -62,6 +62,10 @@ RunLog cron rows are headless operators. Side-effecting schedules deny by defaul
 ## Recovery
 
 SQLite stores queued/running state and checkpoints. If an object/process restarts before a run is claimed, the next `RunLogKernel` instance can claim and execute it. Expired running leases are claimable by later workers.
+
+Run status transitions are conditional store operations so completion, failure, and cancellation cannot silently overwrite a competing terminal state. Provider failures append both a diagnostic runtime event and terminal `run.failed`; cancellation appends `run.cancelled`, releases the lease, and aborts an in-process provider query when one exists.
+
+Run projections page through the append-only log instead of truncating state at an arbitrary event count. Hosts may request a bounded tail for display while status, event counts, checkpoints, policy decisions, and other derived state are computed from the complete run history.
 
 ## Legacy Projection
 

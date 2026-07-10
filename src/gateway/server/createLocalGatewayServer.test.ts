@@ -11,6 +11,7 @@ import {
 } from '../../provenance/ProvenanceReview.js'
 import { createMainspring } from '../../sdk/Mainspring.js'
 import { createRunLogMainspring } from '../../sdk/RunLogMainspring.js'
+import { MainspringMailbox } from '../../mailbox/SqliteMailbox.js'
 import { executionBackendCapabilities } from '../../tools/ExecutionBackend.js'
 import { builtinManifest, type RuntimeTool } from '../../tools/ToolRegistry.js'
 import {
@@ -134,6 +135,43 @@ class ManagedSecretRecordingProvider implements AgentProvider {
           providerTransport: 'managed-secret-http-check',
         }
         yield { type: 'result' as const, text: 'managed secret resolved through HTTP' }
+      })(),
+    }
+  }
+}
+
+class DeferredProvider implements AgentProvider {
+  private releaseResult!: () => void
+  private markStarted!: () => void
+  private readonly resultGate = new Promise<void>((resolve) => {
+    this.releaseResult = resolve
+  })
+  readonly started = new Promise<void>((resolve) => {
+    this.markStarted = resolve
+  })
+
+  release(): void {
+    this.releaseResult()
+  }
+
+  query(input: QueryInput): AgentQuery {
+    const started = this.markStarted
+    const resultGate = this.resultGate
+    return {
+      push() {},
+      end() {},
+      abort() {},
+      events: (async function* () {
+        yield {
+          type: 'init' as const,
+          provider: input.providerId,
+          providerSessionId: 'provider_deferred_gateway_worker',
+          modelId: input.model,
+          providerTransport: 'deferred-test',
+        }
+        started()
+        await resultGate
+        yield { type: 'result' as const, text: 'deferred RunLog result' }
       })(),
     }
   }
@@ -481,6 +519,201 @@ describe('LocalGatewayHttpServer', () => {
       await mainspring.stop()
     }
   }, 60_000)
+
+  it('routes an OpenRouter provider profile through RunLog instead of the mailbox runtime', async () => {
+    const root = makeTempRoot('mainspring-gateway-openrouter-profile-runlog-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const provider = new ManagedSecretRecordingProvider()
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'legacy mailbox' } }]),
+    })
+    const client = appState.clients.create({ name: 'OpenRouter RunLog Client' })
+    const workspace = appState.workspaces.create({
+      clientId: client.clientId,
+      workspaceId: 'workspace_openrouter_runlog',
+      name: 'OpenRouter RunLog Workspace',
+      root: workspaceRoot,
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'session_openrouter_runlog',
+      workspace: { root: workspaceRoot },
+      metadata: { clientId: client.clientId, workspaceId: workspace.workspaceId },
+    })
+    const agent = appState.agents.create({
+      agentId: 'agent_openrouter_runlog',
+      workspaceId: workspace.workspaceId,
+      name: 'OpenRouter RunLog Agent',
+    })
+    const profile = appState.providerProfiles.create({
+      profileId: 'profile_openrouter_runlog',
+      providerId: 'openrouter',
+      label: 'OpenRouter',
+      secretRef: 'managed:openrouter-runlog',
+      defaultModelId: 'openrouter/test-model',
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      providers: { openrouter: provider },
+      defaultProviderId: 'openrouter',
+      agent: {
+        agentId: 'agent_default_openrouter_runlog',
+        instructions: 'Use the RunLog provider.',
+        capabilities: ['provider'],
+      },
+      approvalReceiptKey: 'openrouter-profile-runlog-test-key',
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    try {
+      const started = await server.start()
+      const response = await fetch(`${started.url}/runs/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.record.sessionId,
+          workspaceId: workspace.workspaceId,
+          agentId: agent.agentId,
+          providerProfileId: profile.profileId,
+          input: 'Route this OpenRouter profile through RunLog.',
+          mode: 'chat',
+          allowedTools: [],
+        }),
+      })
+      const body = await response.json()
+
+      expect(response.status).toBe(202)
+      expect(body).toMatchObject({
+        run: {
+          sessionId: session.record.sessionId,
+          status: 'queued',
+        },
+      })
+      const runId = body.run.runId as string
+      const completedRun = await waitFor(
+        () => {
+          const candidate = runLog.store.getRun(runId)
+          return candidate?.status === 'completed' ? candidate : null
+        },
+        'OpenRouter RunLog worker completion',
+      )
+      expect(completedRun).toMatchObject({
+        runId,
+        sessionId: session.record.sessionId,
+        agentId: agent.agentId,
+        providerId: 'openrouter',
+        status: 'completed',
+      })
+      expect(MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(10)).toEqual([])
+      expect(gateway.runs.list(session.record.sessionId)).toEqual([])
+    } finally {
+      await server.stop()
+      runLog.close()
+      appState.close()
+    }
+  })
+
+  it('rejects unknown and cross-workspace RunLog starts before they enter the execution queue', async () => {
+    const root = makeTempRoot('mainspring-gateway-runlog-ingress-authorization-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider(),
+    })
+    const client = appState.clients.create({ name: 'Ingress Authorization Client' })
+    const workspaceOne = appState.workspaces.create({
+      clientId: client.clientId,
+      workspaceId: 'workspace_ingress_one',
+      name: 'Ingress Workspace One',
+      root: workspaceRoot,
+    })
+    const workspaceTwo = appState.workspaces.create({
+      clientId: client.clientId,
+      workspaceId: 'workspace_ingress_two',
+      name: 'Ingress Workspace Two',
+      root: path.join(root, 'workspace-two'),
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'session_ingress_authorization',
+      workspace: { root: workspaceRoot },
+      metadata: { clientId: client.clientId, workspaceId: workspaceOne.workspaceId },
+    })
+    const agentOne = appState.agents.create({
+      agentId: 'agent_ingress_one',
+      workspaceId: workspaceOne.workspaceId,
+      name: 'Ingress Agent One',
+    })
+    const agentTwo = appState.agents.create({
+      agentId: 'agent_ingress_two',
+      workspaceId: workspaceTwo.workspaceId,
+      name: 'Ingress Agent Two',
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider(),
+      agent: { agentId: 'agent_default_ingress', instructions: 'Do not run invalid requests.' },
+      approvalReceiptKey: 'runlog-ingress-authorization-test-key',
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    try {
+      const started = await server.start()
+      const request = async (overrides: Record<string, unknown>) => {
+        const response = await fetch(`${started.url}/runs/start`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: session.record.sessionId,
+            workspaceId: workspaceOne.workspaceId,
+            agentId: agentOne.agentId,
+            input: 'This request must be rejected before it runs.',
+            mode: 'chat',
+            allowedTools: [],
+            ...overrides,
+          }),
+        })
+        return { response, body: await response.json() }
+      }
+
+      const unknownAgent = await request({ agentId: 'agent_missing' })
+      expect(unknownAgent.response.status).toBe(400)
+      expect(unknownAgent.body).toEqual({ error: 'Unknown gateway agent: agent_missing' })
+
+      const sessionWorkspaceMismatch = await request({
+        workspaceId: workspaceTwo.workspaceId,
+        agentId: undefined,
+      })
+      expect(sessionWorkspaceMismatch.response.status).toBe(400)
+      expect(sessionWorkspaceMismatch.body.error).toContain(
+        `Session ${session.record.sessionId} belongs to workspace ${workspaceOne.workspaceId}`,
+      )
+
+      const agentWorkspaceMismatch = await request({ agentId: agentTwo.agentId })
+      expect(agentWorkspaceMismatch.response.status).toBe(400)
+      expect(agentWorkspaceMismatch.body.error).toContain(
+        `Agent ${agentTwo.agentId} belongs to workspace ${workspaceTwo.workspaceId}`,
+      )
+
+      expect(runLog.runs.list()).toEqual([])
+      expect(MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(10)).toEqual([])
+    } finally {
+      await server.stop()
+      runLog.close()
+      appState.close()
+    }
+  })
 
   it('protects hosted routes with bootstrapped auth and revocable sessions', async () => {
     const root = makeTempRoot('mainspring-gateway-server-hosted-auth-')
@@ -2200,18 +2433,26 @@ describe('LocalGatewayHttpServer', () => {
         run: {
           sessionId: session.record.sessionId,
           agentId: 'agent_gateway_runlog',
-          status: 'awaiting_approval',
+          status: 'queued',
         },
-        status: 'awaiting_approval',
+        status: 'queued',
       })
-      expect(startedRun.pendingApprovals).toHaveLength(1)
       expect(executions.count).toBe(0)
 
       const runId = startedRun.run.runId as string
-      const approvalId = startedRun.pendingApprovals[0].approvalId as string
-      const events = await fetch(`${started.url}/runlog/runs/${encodeURIComponent(runId)}/events`).then(
-        (response) => response.json(),
+      const awaitingApproval = await waitFor(
+        async () => {
+          const projection = await fetch(
+            `${started.url}/runlog/runs/${encodeURIComponent(runId)}/events`,
+          ).then((response) => response.json())
+          return projection.status === 'awaiting_approval' && projection.pendingApprovals.length === 1
+            ? projection
+            : null
+        },
+        'RunLog approval request',
       )
+      const approvalId = awaitingApproval.pendingApprovals[0].approvalId as string
+      const events = awaitingApproval
       expect(events.events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ type: 'run.created' }),
@@ -2238,12 +2479,123 @@ describe('LocalGatewayHttpServer', () => {
         run: {
           runId,
           sessionId: session.record.sessionId,
-          status: 'completed',
+          status: 'queued',
         },
-        assistantText: 'gateway-approved:true',
       })
       expect(resolved.pendingApprovals).toHaveLength(0)
+      const completed = await waitFor(
+        async () => {
+          const projection = await fetch(
+            `${started.url}/runlog/runs/${encodeURIComponent(runId)}/events`,
+          ).then((response) => response.json())
+          return projection.status === 'completed' ? projection : null
+        },
+        'approved RunLog worker completion',
+      )
+      expect(completed.assistantText).toBe('gateway-approved:true')
       expect(executions.count).toBe(1)
+    } finally {
+      await server.stop()
+      runLog.close()
+    }
+  })
+
+  it('routes the generic cancel endpoint to a durable RunLog run', async () => {
+    const root = makeTempRoot('mainspring-gateway-runlog-cancel-route-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider([{ type: 'event', event: { type: 'result', text: 'legacy idle' } }]),
+      pollIntervalMs: 10,
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'session_runlog_cancel_gateway',
+      workspace: { root: workspaceRoot },
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([
+        {
+          type: 'event',
+          event: {
+            type: 'tool_call',
+            name: 'tool.reviewed',
+            toolCallId: 'call_cancel_runlog',
+            input: { waitForOperator: true },
+          },
+        },
+      ]),
+      tools: [approvalTool({ count: 0 })],
+      agent: {
+        agentId: 'agent_runlog_cancel_gateway',
+        instructions: 'Wait for approval before changing workspace state.',
+        tools: ['tool.reviewed'],
+        approvalPolicy: 'balanced',
+        capabilities: ['provider', 'tools'],
+      },
+      approvalReceiptKey: 'gateway-runlog-cancel-route-key',
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    const started = await server.start()
+    try {
+      const startedRun = await fetch(`${started.url}/runlog/runs/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.record.sessionId,
+          input: 'Request an approval and then stop.',
+          mode: 'chat',
+          allowedTools: ['tool.reviewed'],
+        }),
+      }).then((response) => response.json())
+      const runId = startedRun.run.runId as string
+      expect(startedRun.run.status).toBe('queued')
+      await waitFor(
+        async () => {
+          const projection = await fetch(
+            `${started.url}/runlog/runs/${encodeURIComponent(runId)}/events`,
+          ).then((response) => response.json())
+          return projection.status === 'awaiting_approval' ? projection : null
+        },
+        'RunLog cancellation approval request',
+      )
+
+      const cancelled = await fetch(`${started.url}/runs/${encodeURIComponent(runId)}/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.record.sessionId,
+          reason: 'operator stopped the run',
+        }),
+      })
+      expect(cancelled.status).toBe(202)
+      await expect(cancelled.json()).resolves.toMatchObject({
+        runId,
+        sessionId: session.record.sessionId,
+        cancelled: true,
+      })
+
+      const projection = await fetch(
+        `${started.url}/runlog/runs/${encodeURIComponent(runId)}/events`,
+      ).then((response) => response.json())
+      expect(projection).toMatchObject({
+        run: { runId, status: 'cancelled' },
+        status: 'cancelled',
+        pendingApprovals: [],
+      })
+      expect(projection.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'approval.cancelled' }),
+          expect.objectContaining({
+            type: 'run.cancelled',
+            payload: expect.objectContaining({ reason: 'operator stopped the run' }),
+          }),
+        ]),
+      )
     } finally {
       await server.stop()
       runLog.close()
@@ -2296,15 +2648,21 @@ describe('LocalGatewayHttpServer', () => {
       expect(startedRun).toMatchObject({
         run: {
           sessionId: session.record.sessionId,
-          status: 'completed',
+          status: 'queued',
         },
       })
       const runId = startedRun.run.runId as string
       expect(runId).toMatch(/^run_/)
       expect(JSON.stringify(startedRun)).not.toContain('Use the default route with RunLog.')
 
-      const projection = await fetch(`${started.url}/runlog/runs/${encodeURIComponent(runId)}/events`).then(
-        (response) => response.json(),
+      const projection = await waitFor(
+        async () => {
+          const candidate = await fetch(
+            `${started.url}/runlog/runs/${encodeURIComponent(runId)}/events`,
+          ).then((response) => response.json())
+          return candidate.status === 'completed' ? candidate : null
+        },
+        'default RunLog worker completion',
       )
       expect(projection).toMatchObject({
         run: {
@@ -2330,6 +2688,72 @@ describe('LocalGatewayHttpServer', () => {
       await server.stop()
       runLog.close()
       appState.close()
+    }
+  })
+
+  it('returns queued promptly, exposes worker health, and stops the worker before gateway teardown', async () => {
+    const root = makeTempRoot('mainspring-gateway-enqueue-only-worker-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider(),
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'session_enqueue_only_worker',
+      workspace: { root: workspaceRoot },
+    })
+    const provider = new DeferredProvider()
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider,
+      agent: {
+        agentId: 'agent_enqueue_only_worker',
+        instructions: 'Wait for the deferred provider result.',
+        capabilities: ['provider'],
+      },
+      approvalReceiptKey: 'enqueue-only-worker-test-key',
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    const started = await server.start()
+    try {
+      const response = await fetch(`${started.url}/runs/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.record.sessionId,
+          input: 'This request must return before the provider completes.',
+          mode: 'chat',
+          allowedTools: [],
+        }),
+      })
+      const body = await response.json()
+      const runId = body.run.runId as string
+
+      expect(response.status).toBe(202)
+      expect(body.run.status).toBe('queued')
+      await provider.started
+      const runningSnapshot = await fetch(`${started.url}/snapshot`).then((candidate) => candidate.json())
+      expect(runningSnapshot.runLog.worker).toMatchObject({
+        state: 'running',
+        outbox: expect.objectContaining({ claimed: 1 }),
+      })
+
+      provider.release()
+      await waitFor(
+        () => {
+          const candidate = runLog.store.getRun(runId)
+          return candidate?.status === 'completed' ? candidate : null
+        },
+        'deferred worker completion',
+      )
+    } finally {
+      await server.stop()
+      expect(gateway.snapshot().runLog?.worker.state).toBe('stopped')
+      runLog.close()
     }
   })
 
@@ -2428,8 +2852,13 @@ describe('LocalGatewayHttpServer', () => {
         method: 'POST',
       }).then((response) => response.json())
       expect(runNow.run.status).toBe('queued')
-      await runLog.drainUntilIdle()
-      expect(runLog.store.getRun(runNow.run.runId)?.status).toBe('completed')
+      await waitFor(
+        () => {
+          const candidate = runLog.store.getRun(runNow.run.runId)
+          return candidate?.status === 'completed' ? candidate : null
+        },
+        'RunLog cron worker completion',
+      )
       expect(appState.cronSchedules.get(schedule.scheduleId)?.metadata).toMatchObject({
         cronGrant: expect.objectContaining({
           grantId: created.cronGrant.grant.grantId,

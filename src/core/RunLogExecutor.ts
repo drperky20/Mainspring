@@ -1,7 +1,11 @@
 import path from 'node:path'
-import { RuntimeSecretRefSchema, type RuntimePolicy } from '#protocol'
+import { RuntimeSecretRefSchema, sanitizeRuntimeResponse, type RuntimePolicy } from '#protocol'
+import {
+  ContextBudgetExceededError,
+  type ContextCandidate,
+} from '../context/ContextAssembly.js'
 import type { ContextBlock } from '../context/types.js'
-import type { ProviderEvent, ProviderMessage, QueryInput } from '../providers/types.js'
+import type { AgentQuery, ProviderEvent, ProviderMessage, QueryInput } from '../providers/types.js'
 import { RuntimePolicyGuard } from '../policy/PolicyGuard.js'
 import type { DecisionRecord } from '../policy/DecisionRecord.js'
 import { ToolRegistry, type RuntimeTool } from '../tools/ToolRegistry.js'
@@ -12,6 +16,8 @@ import {
 } from './RunLogApprovalReceipt.js'
 import type {
   AgentSpec,
+  ExecutionClaim,
+  ExecutionClaimInput,
   RunCheckpoint,
   RunExecutionSummary,
   RunExecutorOptions,
@@ -23,6 +29,18 @@ import type {
   WorkspaceAdapter,
   WorkspaceLease,
 } from './types.js'
+
+export class RunLogExecutionError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    readonly classification: string,
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message)
+    this.name = 'RunLogExecutionError'
+  }
+}
 
 function effectiveAllowedTools(
   agent: AgentSpec,
@@ -117,6 +135,16 @@ function providerContinuationMessages(input: {
   ]
 }
 
+function sanitizeContextText(value: unknown): string {
+  const sanitized = sanitizeRuntimeResponse(value)
+  if (typeof sanitized === 'string') return sanitized
+  try {
+    return JSON.stringify(sanitized)
+  } catch {
+    return '[unserializable runtime context]'
+  }
+}
+
 function publicApprovalRequestSnapshot(
   snapshot: RunLogApprovalRequestSnapshot,
 ): Omit<RunLogApprovalRequestSnapshot, 'toolInput'> {
@@ -128,75 +156,129 @@ export class RunLogExecutor {
   private readonly store: RunLogStore
   private readonly tools: RuntimeTool[]
   private readonly workspace?: WorkspaceAdapter
+  private readonly maxToolIterations: number
+  private readonly activeQueries = new Map<string, AgentQuery>()
+  private readonly activeToolControllers = new Map<string, AbortController>()
+  private readonly activeClaims = new Map<string, ExecutionClaim>()
 
   constructor(private readonly options: RunExecutorOptions) {
     this.store = options.store
     this.tools = options.tools ?? []
     this.workspace = options.workspace
+    this.maxToolIterations = options.maxToolIterations ?? 16
+    if (!Number.isInteger(this.maxToolIterations) || this.maxToolIterations < 0) {
+      throw new Error('RunLog maxToolIterations must be a non-negative integer.')
+    }
   }
 
-  async execute(run: RunRecord): Promise<RunExecutionSummary> {
+  cancel(runId: string): boolean {
+    const query = this.activeQueries.get(runId)
+    const toolController = this.activeToolControllers.get(runId)
+    if (query) this.abortQuery(runId, query)
+    if (toolController) toolController.abort()
+    return Boolean(query || toolController)
+  }
+
+  private abortQuery(runId: string, query: AgentQuery): void {
+    try {
+      query.abort()
+    } catch (error) {
+      this.store.appendEvent({
+        runId,
+        type: 'runtime.warning',
+        payload: {
+          message: 'Provider query abort threw after the run entered a terminal state.',
+          phase: 'provider.abort',
+          error: error instanceof Error ? error.message : String(error),
+        },
+      })
+    }
+  }
+
+  async execute(run: RunRecord, claim?: ExecutionClaim): Promise<RunExecutionSummary> {
+    if (claim) this.activeClaims.set(run.runId, claim)
     const agent = this.store.getAgent(run.agentId)
     if (!agent) throw new Error(`Unknown agent for run ${run.runId}: ${run.agentId}`)
-    let eventsBefore = this.store.listEvents({ runId: run.runId }).length
+    const eventsBefore = this.store.countEvents({ runId: run.runId })
     let checkpointsAppended = 0
     let workspaceLease: WorkspaceLease | null = null
     let finalStatus = run.status
 
     try {
-      this.store.updateRunStatus(run.runId, 'running')
-      this.store.appendEvent({
-        runId: run.runId,
-        type: 'run.claimed',
-        payload: { workerId: run.workerId, leaseUntil: run.leaseUntil },
-        idempotencyKey: `run.claimed:${run.runId}:${run.workerId ?? 'unknown'}`,
-      })
-
-      workspaceLease = await this.leaseWorkspace(run, agent)
-      const allowedTools = effectiveAllowedTools(agent, run, this.options.policy)
-      const selectedTools = toolSchemaSubset(this.tools, allowedTools)
-      const policy = defaultPolicy(agent, run, this.options.policy)
-      const approvedReceipt = this.store.getApprovedUnusedReceipt(run.runId)
-
-      if (approvedReceipt) {
-        checkpointsAppended += await this.resumeApprovedTool({
-          run,
-          agent,
-          receipt: approvedReceipt,
-          workspaceLease,
-          selectedTools,
-          policy,
-        })
-        finalStatus = this.store.getRun(run.runId)?.status ?? 'failed'
+      const current = this.store.getRun(run.runId)
+      if (!current) throw new Error(`Unknown run: ${run.runId}`)
+      if (current.status !== 'running') {
+        finalStatus = current.status
       } else {
-        const result = await this.runProviderQuery({
-          run,
-          agent,
-          workspaceRoot: workspaceLease.root,
-          selectedTools,
-          policy,
-          queryInput: providerQueryInput({
-            run,
-            agent,
-            workspaceRoot: workspaceLease.root,
-            tools: selectedTools,
-            secretResolver: this.options.secretResolver,
-          }),
-        })
-        checkpointsAppended += result.checkpointsAppended
-        finalStatus = result.status
+        workspaceLease = await this.leaseWorkspace(run, agent)
+        if (this.store.getRun(run.runId)?.status === 'cancelled') {
+          finalStatus = 'cancelled'
+        } else {
+          const allowedTools = effectiveAllowedTools(agent, run, this.options.policy)
+          const selectedTools = toolSchemaSubset(this.tools, allowedTools)
+          const policy = defaultPolicy(agent, run, this.options.policy)
+          const approvedReceipt = this.store.getApprovedUnusedReceipt(run.runId)
+
+          if (approvedReceipt) {
+            checkpointsAppended += await this.resumeApprovedTool({
+              run,
+              agent,
+              receipt: approvedReceipt,
+              workspaceLease,
+              selectedTools,
+              policy,
+            })
+            finalStatus = this.store.getRun(run.runId)?.status ?? 'failed'
+          } else {
+            const result = await this.runProviderQuery({
+              run,
+              agent,
+              workspaceRoot: workspaceLease.root,
+              selectedTools,
+              policy,
+              queryInput: providerQueryInput({
+                run,
+                agent,
+                workspaceRoot: workspaceLease.root,
+                tools: selectedTools,
+                secretResolver: this.options.secretResolver,
+              }),
+            })
+            checkpointsAppended += result.checkpointsAppended
+            finalStatus = result.status
+          }
+        }
       }
     } catch (error) {
-      finalStatus = 'failed'
-      const message = error instanceof Error ? error.message : String(error)
-      this.store.updateRunStatus(run.runId, 'failed')
-      this.store.appendEvent({
-        runId: run.runId,
-        type: 'runtime.error',
-        payload: { message, retryable: false },
-      })
-      this.store.appendEvent({ runId: run.runId, type: 'run.failed', payload: { message } })
+      if (error instanceof RunLogExecutionError && error.retryable) throw error
+      const current = this.store.getRun(run.runId)
+      if (current?.status === 'cancelled' || current?.status === 'failed') {
+        finalStatus = current.status
+      } else {
+        const message = error instanceof Error ? error.message : String(error)
+        const contextBudgetDetails = error instanceof ContextBudgetExceededError
+          ? {
+              code: error.code,
+              ...(error.candidateId ? { candidateId: error.candidateId } : {}),
+              availableTokens: error.availableTokens,
+              requiredTokens: error.requiredTokens,
+            }
+          : undefined
+        const failed = this.failRun({
+          runId: run.runId,
+          message,
+          retryable: false,
+          classification: error instanceof ContextBudgetExceededError
+            ? 'context_budget_exceeded'
+            : 'runtime_execution_failed',
+          ...(contextBudgetDetails ? { details: contextBudgetDetails } : {}),
+        })
+        finalStatus = failed ? 'failed' : (this.store.getRun(run.runId)?.status ?? 'failed')
+      }
     } finally {
+      if (claim && this.activeClaims.get(run.runId) === claim) {
+        this.activeClaims.delete(run.runId)
+      }
       if (workspaceLease) {
         await workspaceLease.release()
         this.store.appendEvent({
@@ -210,12 +292,82 @@ export class RunLogExecutor {
       }
     }
 
-    const eventsAfter = this.store.listEvents({ runId: run.runId }).length
+    const eventsAfter = this.store.countEvents({ runId: run.runId })
     return {
       runId: run.runId,
       status: finalStatus,
       eventsAppended: eventsAfter - eventsBefore,
       checkpointsAppended,
+    }
+  }
+
+  private failRun(input: {
+    runId: string
+    message: string
+    retryable: boolean
+    classification: string
+    details?: Record<string, unknown>
+    idempotencySuffix?: string
+  }): RunLogEvent | null {
+    const claim = this.activeClaims.get(input.runId)
+    if (claim) {
+      const failed = this.store.failExecution({
+        claim: this.claimInput(claim),
+        failure: {
+          message: input.message,
+          retryable: input.retryable,
+          classification: input.classification,
+          ...(input.details ? { details: input.details } : {}),
+        },
+        idempotencySuffix: input.idempotencySuffix,
+      })
+      if (!failed) return null
+      return this.store.listEvents({
+        runId: input.runId,
+        types: ['runtime.error'],
+        limit: 10_000,
+      }).at(-1) ?? null
+    }
+    const failed = this.store.transitionRunStatus({
+      runId: input.runId,
+      from: ['queued', 'running', 'awaiting_approval'],
+      to: 'failed',
+      patch: { workerId: undefined, leaseUntil: undefined },
+    })
+    if (!failed) return null
+    const runtimeError = this.store.appendEvent({
+      runId: input.runId,
+      type: 'runtime.error',
+      payload: {
+        message: input.message,
+        retryable: input.retryable,
+        classification: input.classification,
+        ...(input.details ?? {}),
+      },
+      ...(input.idempotencySuffix
+        ? { idempotencyKey: `runtime.error:${input.runId}:${input.idempotencySuffix}` }
+        : {}),
+    })
+    this.store.appendEvent({
+      runId: input.runId,
+      type: 'run.failed',
+      payload: {
+        message: input.message,
+        classification: input.classification,
+        ...(input.details ?? {}),
+      },
+      idempotencyKey: `run.failed:${input.runId}:${input.idempotencySuffix ?? 'executor'}`,
+    })
+    return runtimeError
+  }
+
+  private claimInput(claim: ExecutionClaim): ExecutionClaimInput {
+    return {
+      outboxId: claim.outbox.outboxId,
+      runId: claim.run.runId,
+      workerId: claim.workerId,
+      claimToken: claim.claimToken,
+      leaseEpoch: claim.leaseEpoch,
     }
   }
 
@@ -252,7 +404,7 @@ export class RunLogExecutor {
     kind: RunCheckpoint['kind'],
     state: Record<string, unknown>,
   ): number {
-    const latestSeq = this.store.listEvents({ runId, limit: 1 }).at(-1)?.seq ?? 0
+    const latestSeq = this.store.latestEventSeq(runId)
     this.store.appendCheckpoint({ runId, seq: latestSeq, kind, state })
     this.store.appendEvent({
       runId,
@@ -304,6 +456,120 @@ export class RunLogExecutor {
     }
   }
 
+  private async assembleProviderQuery(input: {
+    run: RunRecord
+    agent: AgentSpec
+    workspaceRoot: string
+    queryInput: QueryInput
+  }): Promise<{ queryInput: QueryInput; assemblyId?: string }> {
+    const assembler = this.options.contextAssembler
+    if (!assembler) return { queryInput: input.queryInput }
+    const assembly = await assembler.assemble({
+      query: input.queryInput,
+      candidates: this.contextCandidates(input),
+    })
+    this.store.appendEvent({
+      runId: input.run.runId,
+      type: 'context.assembled',
+      payload: assembly.telemetry,
+      visibility: 'artifact-only',
+      idempotencyKey: `context.assembled:${input.run.runId}:${assembly.assemblyId}`,
+    })
+    return { queryInput: assembly.queryInput, assemblyId: assembly.assemblyId }
+  }
+
+  /**
+   * Context sources are intentionally bounded at the executor boundary. The
+   * assembler decides what reaches the model; this method only exposes durable
+   * candidates and sanitizes tool output before it can become context.
+   */
+  private contextCandidates(input: {
+    run: RunRecord
+    agent: AgentSpec
+    workspaceRoot: string
+    queryInput: QueryInput
+  }): ContextCandidate[] {
+    const candidates: ContextCandidate[] = []
+    const historyLimit = this.contextHistoryLimit()
+    const events = this.store.listEvents({ runId: input.run.runId, limit: historyLimit })
+    for (const event of events) {
+      const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+        ? event.payload as Record<string, unknown>
+        : {}
+      if (event.type === 'assistant.result' && typeof payload.text === 'string' && payload.text.trim()) {
+        candidates.push({
+          candidateId: `run:${input.run.runId}:assistant:${event.eventId}`,
+          source: 'working_memory',
+          content: sanitizeContextText(payload.text),
+          label: 'recent assistant result',
+          priority: 75,
+          recency: event.seq,
+          relevance: 50,
+          compressionEligible: true,
+          sensitivity: 'sensitive',
+          provenance: { runId: input.run.runId, eventId: event.eventId },
+        })
+      }
+      if (
+        event.type === 'tool.call.completed'
+        && typeof payload.name === 'string'
+        && payload.output !== undefined
+      ) {
+        candidates.push({
+          candidateId: `run:${input.run.runId}:tool:${event.eventId}`,
+          source: 'tool_result',
+          content: sanitizeContextText({ name: payload.name, output: payload.output }),
+          label: `recent tool result: ${payload.name}`,
+          priority: 70,
+          recency: event.seq,
+          relevance: 45,
+          compressionEligible: true,
+          sensitivity: 'sensitive',
+          provenance: { runId: input.run.runId, eventId: event.eventId },
+        })
+      }
+    }
+
+    const memoryStore = this.options.contextMemoryStore
+    const canReadMemory = input.agent.capabilities?.includes('memory') || Boolean(input.agent.memoryScope)
+    if (!memoryStore || !canReadMemory) return candidates
+    const memories = memoryStore.list({
+      workspaceRoot: input.workspaceRoot,
+      sessionId: input.run.sessionId,
+      scope: input.agent.memoryScope === 'session' ? 'session' : 'all',
+      query: input.run.input,
+      limit: this.contextMemoryLimit(),
+    })
+    for (const memory of memories) {
+      candidates.push({
+        candidateId: `memory:${memory.entryId}`,
+        source: memory.scope === 'session' ? 'working_memory' : 'long_term_memory',
+        content: memory.text,
+        label: memory.tags.length > 0 ? `memory: ${memory.tags.join(', ')}` : 'workspace memory',
+        priority: memory.scope === 'session' ? 68 : 60,
+        recency: Date.parse(memory.createdAt) || 0,
+        relevance: 60,
+        compressionEligible: true,
+        sensitivity: 'workspace',
+        provenance: {
+          sourceId: memory.entryId,
+          workspaceId: input.run.workspaceId,
+        },
+      })
+    }
+    return candidates
+  }
+
+  private contextHistoryLimit(): number {
+    const limit = Math.floor(this.options.contextHistoryLimit ?? 32)
+    return Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 128) : 32
+  }
+
+  private contextMemoryLimit(): number {
+    const limit = Math.floor(this.options.contextMemoryLimit ?? 8)
+    return Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 32) : 8
+  }
+
   private async runProviderQuery(input: {
     run: RunRecord
     agent: AgentSpec
@@ -314,12 +580,16 @@ export class RunLogExecutor {
   }): Promise<{ status: RunRecord['status']; checkpointsAppended: number }> {
     let checkpointsAppended = 0
     const provider = this.options.providerRouter.resolve({ run: input.run, agent: input.agent })
-    this.appendContextEncodingEvents({
-      run: input.run,
-      agent: input.agent,
-      queryInput: input.queryInput,
-    })
-    const query = provider.query(input.queryInput)
+    const context = await this.assembleProviderQuery(input)
+    if (!this.options.contextAssembler) {
+      this.appendContextEncodingEvents({
+        run: input.run,
+        agent: input.agent,
+        queryInput: context.queryInput,
+      })
+    }
+    const query = provider.query(context.queryInput)
+    this.activeQueries.set(input.run.runId, query)
     const toolRegistry = this.createToolRegistry({
       run: input.run,
       workspaceRoot: input.workspaceRoot,
@@ -327,38 +597,95 @@ export class RunLogExecutor {
       tools: input.selectedTools,
     })
 
-    for await (const event of query.events) {
-      await this.recordProviderEvent({
-        run: input.run,
-        agent: input.agent,
-        event,
-        query,
-        toolRegistry,
-        selectedTools: input.selectedTools,
-        workspaceRoot: input.workspaceRoot,
-        policy: input.policy,
-      })
-      if (event.type === 'tool_call') {
-        checkpointsAppended += this.checkpoint(input.run.runId, 'tool', {
-          toolName: event.name,
-          toolCallId: event.toolCallId,
+    try {
+      for await (const event of query.events) {
+        const statusBeforeEvent = this.store.getRun(input.run.runId)?.status
+        if (statusBeforeEvent === 'cancelled') {
+          return { status: 'cancelled', checkpointsAppended }
+        }
+        if (event.type === 'tool_call') {
+          const priorToolIterations = this.store.countEvents({
+            runId: input.run.runId,
+            types: ['tool.call.requested'],
+          })
+          if (priorToolIterations >= this.maxToolIterations) {
+            const message = `RunLog tool iteration limit exceeded (${this.maxToolIterations}).`
+            this.failRun({
+              runId: input.run.runId,
+              message,
+              retryable: false,
+              classification: 'tool_iteration_limit',
+              details: { maxToolIterations: this.maxToolIterations },
+              idempotencySuffix: 'tool-iteration-limit',
+            })
+            this.abortQuery(input.run.runId, query)
+            return {
+              status: this.store.getRun(input.run.runId)?.status ?? 'failed',
+              checkpointsAppended,
+            }
+          }
+        }
+        await this.recordProviderEvent({
+          run: input.run,
+          agent: input.agent,
+          event,
+          query,
+          toolRegistry,
+          selectedTools: input.selectedTools,
+          workspaceRoot: input.workspaceRoot,
+          policy: input.policy,
+          contextAssemblyId: context.assemblyId,
         })
+        if (event.type === 'tool_call') {
+          checkpointsAppended += this.checkpoint(input.run.runId, 'tool', {
+            toolName: event.name,
+            toolCallId: event.toolCallId,
+          })
+        }
+        if (event.type === 'usage') {
+          checkpointsAppended += this.checkpoint(input.run.runId, 'provider', { usage: event.usage })
+        }
+        const latest = this.store.getRun(input.run.runId)
+        if (
+          latest?.status === 'awaiting_approval' ||
+          latest?.status === 'failed' ||
+          latest?.status === 'cancelled'
+        ) {
+          return { status: latest.status, checkpointsAppended }
+        }
       }
-      if (event.type === 'usage') {
-        checkpointsAppended += this.checkpoint(input.run.runId, 'provider', { usage: event.usage })
-      }
-      const latest = this.store.getRun(input.run.runId)
-      if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') {
-        return { status: latest.status, checkpointsAppended }
+    } finally {
+      if (this.activeQueries.get(input.run.runId) === query) {
+        this.activeQueries.delete(input.run.runId)
       }
     }
 
     const latest = this.store.getRun(input.run.runId)
-    if (latest?.status === 'awaiting_approval' || latest?.status === 'failed') {
+    if (
+      latest?.status === 'awaiting_approval' ||
+      latest?.status === 'failed' ||
+      latest?.status === 'cancelled'
+    ) {
       return { status: latest.status, checkpointsAppended }
     }
-    this.store.updateRunStatus(input.run.runId, 'completed')
-    this.store.appendEvent({ runId: input.run.runId, type: 'run.completed', payload: {} })
+    const claim = this.activeClaims.get(input.run.runId)
+    const completed = claim
+      ? this.store.completeExecution({ claim: this.claimInput(claim), payload: {} })
+      : this.store.transitionRunStatus({
+          runId: input.run.runId,
+          from: ['running'],
+          to: 'completed',
+          patch: { workerId: undefined, leaseUntil: undefined },
+        })
+    if (!completed) {
+      return {
+        status: this.store.getRun(input.run.runId)?.status ?? 'failed',
+        checkpointsAppended,
+      }
+    }
+    if (!claim) {
+      this.store.appendEvent({ runId: input.run.runId, type: 'run.completed', payload: {} })
+    }
     return { status: 'completed', checkpointsAppended }
   }
 
@@ -366,11 +693,12 @@ export class RunLogExecutor {
     run: RunRecord
     agent: AgentSpec
     event: ProviderEvent
-    query: { push(message: string): void }
+    query: AgentQuery
     toolRegistry: ToolRegistry
     selectedTools: RuntimeTool[]
     workspaceRoot: string
     policy: RuntimePolicy
+    contextAssemblyId?: string
   }): Promise<RunLogEvent | null> {
     const { run, event, query, toolRegistry } = input
     switch (event.type) {
@@ -384,6 +712,7 @@ export class RunLogExecutor {
             modelFamily: event.modelFamily,
             providerTransport: event.providerTransport,
             providerSessionId: event.providerSessionId,
+            ...(input.contextAssemblyId ? { contextAssemblyId: input.contextAssemblyId } : {}),
           },
         })
       case 'delta':
@@ -402,7 +731,11 @@ export class RunLogExecutor {
         return this.store.appendEvent({
           runId: run.runId,
           type: 'usage.reported',
-          payload: { usage: event.usage, providerSessionId: event.providerSessionId },
+          payload: {
+            usage: event.usage,
+            providerSessionId: event.providerSessionId,
+            ...(input.contextAssemblyId ? { contextAssemblyId: input.contextAssemblyId } : {}),
+          },
         })
       case 'progress':
         return this.store.appendEvent({
@@ -411,16 +744,23 @@ export class RunLogExecutor {
           payload: { message: event.message, phase: 'provider.progress' },
         })
       case 'error':
-        this.store.updateRunStatus(run.runId, 'failed')
-        return this.store.appendEvent({
+        if (event.retryable && this.activeClaims.has(run.runId)) {
+          this.abortQuery(run.runId, query)
+          throw new RunLogExecutionError(
+            event.message,
+            true,
+            event.classification ?? 'provider_error',
+          )
+        }
+        const failure = this.failRun({
           runId: run.runId,
-          type: 'runtime.error',
-          payload: {
-            message: event.message,
-            retryable: event.retryable,
-            classification: event.classification,
-          },
+          message: event.message,
+          retryable: event.retryable,
+          classification: event.classification ?? 'provider_error',
+          idempotencySuffix: 'provider-error',
         })
+        this.abortQuery(run.runId, query)
+        return failure
       case 'tool_result':
         return this.store.appendEvent({
           runId: run.runId,
@@ -452,14 +792,14 @@ export class RunLogExecutor {
     run: RunRecord
     agent: AgentSpec
     event: Extract<ProviderEvent, { type: 'tool_call' }>
-    query: { push(message: string): void }
+    query: AgentQuery
     toolRegistry: ToolRegistry
     selectedTools: RuntimeTool[]
     workspaceRoot: string
     policy: RuntimePolicy
   }): Promise<RunLogEvent> {
     const toolCallId = input.event.toolCallId ?? `${input.event.name}_${Date.now()}`
-    this.store.appendEvent({
+    const requestedEvent = this.store.appendEvent({
       runId: input.run.runId,
       type: 'tool.call.requested',
       payload: {
@@ -468,12 +808,36 @@ export class RunLogExecutor {
         input: input.event.input,
       },
     })
-    const result = await input.toolRegistry.execute({
-      key: input.event.name,
-      input: input.event.input,
-      toolCallId,
-    })
+    const toolController = new AbortController()
+    this.activeToolControllers.set(input.run.runId, toolController)
+    let result: Awaited<ReturnType<ToolRegistry['execute']>>
+    try {
+      result = await input.toolRegistry.execute({
+        key: input.event.name,
+        input: input.event.input,
+        toolCallId,
+        signal: toolController.signal,
+      })
+    } catch (error) {
+      this.store.appendEvent({
+        runId: input.run.runId,
+        type: 'tool.call.failed',
+        payload: {
+          toolCallId,
+          name: input.event.name,
+          message: error instanceof Error ? error.message : String(error),
+          cancelled: this.store.getRun(input.run.runId)?.status === 'cancelled',
+        },
+      })
+      throw error
+    } finally {
+      if (this.activeToolControllers.get(input.run.runId) === toolController) {
+        this.activeToolControllers.delete(input.run.runId)
+      }
+    }
+    const cancelled = this.store.getRun(input.run.runId)?.status === 'cancelled'
     if (result.status === 'approval_required') {
+      if (cancelled) return requestedEvent
       const tool = input.selectedTools.find((candidate) => candidate.manifest.key === input.event.name)
       if (!tool) throw new Error(`Approval requested for unregistered tool: ${input.event.name}`)
       const snapshot = createRunLogApprovalRequestSnapshot({
@@ -486,21 +850,60 @@ export class RunLogExecutor {
         cwd: input.workspaceRoot,
         policy: input.policy,
       })
+      const approvalEventPayload = {
+        approvalId: result.approval.id,
+        toolCallId,
+        targetKey: result.approval.targetKey,
+        reasons: result.approval.reasons,
+        permissionCategories: result.approval.permissionCategories,
+        decisionId: result.decisionRecord.decisionId,
+        request: publicApprovalRequestSnapshot(snapshot),
+      }
+      const claim = this.activeClaims.get(input.run.runId)
+      if (claim) {
+        const awaitingApproval = this.store.pauseRunForApproval({
+          claim: this.claimInput(claim),
+          request: snapshot,
+          approvalEventPayload,
+          checkpoint: {
+            runId: input.run.runId,
+            kind: 'approval',
+            state: {
+              approvalId: result.approval.id,
+              toolCallId,
+              targetKey: result.approval.targetKey,
+              decisionId: result.decisionRecord.decisionId,
+            },
+          },
+        })
+        if (!awaitingApproval) return requestedEvent
+        return this.store.listEvents({ runId: input.run.runId, limit: 10_000 }).at(-1) ?? requestedEvent
+      }
+      const awaitingApproval = this.store.transitionRunStatus({
+        runId: input.run.runId,
+        from: ['running'],
+        to: 'awaiting_approval',
+        patch: { workerId: undefined, leaseUntil: undefined },
+      })
+      if (!awaitingApproval) return requestedEvent
       this.store.putApprovalRequest(snapshot)
-      this.store.updateRunStatus(input.run.runId, 'awaiting_approval')
       this.store.appendEvent({
         runId: input.run.runId,
         type: 'approval.requested',
-        payload: {
-          approvalId: result.approval.id,
-          toolCallId,
-          targetKey: result.approval.targetKey,
-          reasons: result.approval.reasons,
-          permissionCategories: result.approval.permissionCategories,
-          decisionId: result.decisionRecord.decisionId,
-          request: publicApprovalRequestSnapshot(snapshot),
-        },
+        payload: approvalEventPayload,
       })
+      if (this.store.getRun(input.run.runId)?.status === 'cancelled') {
+        return this.store.appendEvent({
+          runId: input.run.runId,
+          type: 'approval.cancelled',
+          payload: {
+            approvalId: result.approval.id,
+            toolCallId,
+            reason: 'Run was cancelled while the approval request was being persisted.',
+          },
+          idempotencyKey: `approval.cancelled:${result.approval.id}`,
+        })
+      }
       this.checkpoint(input.run.runId, 'approval', {
         approvalId: result.approval.id,
         toolCallId,
@@ -522,15 +925,16 @@ export class RunLogExecutor {
         decisionId: result.decisionRecord.decisionId,
         hardBlocked: result.decisionRecord.hardBlocked,
       }
-      input.query.push(JSON.stringify({ toolCallId, status: 'policy_blocked', payload }))
+      if (!cancelled) {
+        input.query.push(JSON.stringify({ toolCallId, status: 'policy_blocked', payload }))
+      }
       return this.store.appendEvent({
         runId: input.run.runId,
         type: 'tool.call.blocked',
         payload,
       })
     }
-    input.query.push(JSON.stringify({ toolCallId, status: 'completed', output: result.output }))
-    return this.store.appendEvent({
+    const completedEvent = this.store.appendEvent({
       runId: input.run.runId,
       type: 'tool.call.completed',
       payload: {
@@ -540,6 +944,10 @@ export class RunLogExecutor {
         decisionId: result.decisionRecord.decisionId,
       },
     })
+    if (!cancelled) {
+      input.query.push(JSON.stringify({ toolCallId, status: 'completed', output: result.output }))
+    }
+    return completedEvent
   }
 
   private createToolRegistry(input: {
@@ -608,12 +1016,35 @@ export class RunLogExecutor {
       policy: input.policy,
       tools: input.selectedTools,
     })
-    const result = await toolRegistry.execute({
-      key: request.toolName,
-      input: request.toolInput,
-      toolCallId: request.toolCallId,
-      approvalReceipt: legacyApprovalReceiptFromRunLog(input.receipt, currentRequest),
-    })
+    const toolController = new AbortController()
+    this.activeToolControllers.set(input.run.runId, toolController)
+    let result: Awaited<ReturnType<ToolRegistry['execute']>>
+    try {
+      result = await toolRegistry.execute({
+        key: request.toolName,
+        input: request.toolInput,
+        toolCallId: request.toolCallId,
+        approvalReceipt: legacyApprovalReceiptFromRunLog(input.receipt, currentRequest),
+        signal: toolController.signal,
+      })
+    } catch (error) {
+      this.store.appendEvent({
+        runId: input.run.runId,
+        type: 'tool.call.failed',
+        payload: {
+          toolCallId: request.toolCallId,
+          name: request.toolName,
+          source: 'approved-resume',
+          message: error instanceof Error ? error.message : String(error),
+          cancelled: this.store.getRun(input.run.runId)?.status === 'cancelled',
+        },
+      })
+      throw error
+    } finally {
+      if (this.activeToolControllers.get(input.run.runId) === toolController) {
+        this.activeToolControllers.delete(input.run.runId)
+      }
+    }
     if (result.status === 'completed') {
       this.store.appendEvent({
         runId: input.run.runId,
@@ -626,6 +1057,7 @@ export class RunLogExecutor {
           decisionId: result.decisionRecord.decisionId,
         },
       })
+      if (this.store.getRun(input.run.runId)?.status === 'cancelled') return 0
       const checkpoints = this.checkpoint(input.run.runId, 'tool', {
         toolName: request.toolName,
         toolCallId: request.toolCallId,
@@ -654,7 +1086,6 @@ export class RunLogExecutor {
       return checkpoints + continuation.checkpointsAppended
     }
     if (result.status === 'policy_blocked') {
-      this.store.updateRunStatus(input.run.runId, 'failed')
       this.store.appendEvent({
         runId: input.run.runId,
         type: 'tool.call.blocked',
@@ -667,18 +1098,21 @@ export class RunLogExecutor {
           hardBlocked: result.decisionRecord.hardBlocked,
         },
       })
-      this.store.appendEvent({
+      this.failRun({
         runId: input.run.runId,
-        type: 'run.failed',
-        payload: { message: 'Approved tool was blocked by policy during resume.' },
+        message: 'Approved tool was blocked by policy during resume.',
+        retryable: false,
+        classification: 'approved_tool_policy_blocked',
+        idempotencySuffix: 'approved-tool-policy-blocked',
       })
       return 0
     }
-    this.store.updateRunStatus(input.run.runId, 'failed')
-    this.store.appendEvent({
+    this.failRun({
       runId: input.run.runId,
-      type: 'run.failed',
-      payload: { message: 'Approved tool requested a second approval during resume.' },
+      message: 'Approved tool requested a second approval during resume.',
+      retryable: false,
+      classification: 'approval_reentry_blocked',
+      idempotencySuffix: 'approval-reentry-blocked',
     })
     return 0
   }

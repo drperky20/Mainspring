@@ -18,10 +18,26 @@ export {
 } from './ModelSpecCompiler.js'
 export type { CompileContextModelSpecInput } from './ModelSpecCompiler.js'
 export {
+  FilesystemRecoverableContextStore,
   InMemoryRecoverableContextStore,
   contextByteLength,
   hashContextBytes,
 } from './RecoverableContextStore.js'
+export { ContextLensAssembler, ContextBudgetExceededError } from './ContextAssembly.js'
+export type {
+  AssembleContextInput,
+  ContextAssembly,
+  ContextCandidate,
+  ContextCandidateSource,
+  ContextDecision,
+  ContextDecisionAction,
+  ContextDecisionReason,
+  ContextDecisionTelemetry,
+  ContextLensAssemblerOptions,
+  ContextSensitivity,
+  ContextSource,
+  ContextSourceInput,
+} from './ContextAssembly.js'
 export { extractPrecisionFacts, factsheetText, rankPrecisionFacts } from './PrecisionFacts.js'
 export { createContextRehydrateTool } from './ContextRehydrateTool.js'
 export type {

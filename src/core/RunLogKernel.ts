@@ -1,5 +1,5 @@
 import { RunLogExecutor } from './RunLogExecutor.js'
-import { RunLogScheduler } from './RunLogScheduler.js'
+import { RunLogWorker } from './RunLogWorker.js'
 import { createRunLogApprovalReceipt } from './RunLogApprovalReceipt.js'
 import type {
   AgentSpec,
@@ -15,6 +15,12 @@ export interface RunLogKernelOptions extends Omit<RunExecutorOptions, 'store'> {
   store: RunLogStore
   workerId?: string
   leaseMs?: number
+  now?: () => Date
+  random?: () => number
+  pollIntervalMs?: number
+  heartbeatIntervalMs?: number
+  retryBaseMs?: number
+  retryCapMs?: number
 }
 
 export interface DecideRunLogApprovalInput {
@@ -24,18 +30,30 @@ export interface DecideRunLogApprovalInput {
   expiresInMs?: number
 }
 
+export interface CancelRunLogRunInput {
+  runId: string
+  reason?: string
+}
+
 export class RunLogKernel {
-  private readonly scheduler: RunLogScheduler
   private readonly executor: RunLogExecutor
+  private readonly worker: RunLogWorker
 
   constructor(private readonly options: RunLogKernelOptions) {
     this.options.store.initialize()
-    this.scheduler = new RunLogScheduler({
+    this.executor = new RunLogExecutor(options)
+    this.worker = new RunLogWorker({
       store: options.store,
+      executor: this.executor,
       workerId: options.workerId,
       leaseMs: options.leaseMs,
+      now: options.now,
+      random: options.random,
+      pollIntervalMs: options.pollIntervalMs,
+      heartbeatIntervalMs: options.heartbeatIntervalMs,
+      retryBaseMs: options.retryBaseMs,
+      retryCapMs: options.retryCapMs,
     })
-    this.executor = new RunLogExecutor(options)
   }
 
   putAgent(spec: AgentSpec): void {
@@ -45,33 +63,7 @@ export class RunLogKernel {
   startRun(intent: RunIntent): RunRecord {
     const agent = this.options.store.getAgent(intent.agentId)
     if (!agent) throw new Error(`Unknown agent: ${intent.agentId}`)
-    const run = this.options.store.createRun(intent, agent)
-    this.options.store.appendEvent({
-      runId: run.runId,
-      type: 'run.created',
-      payload: {
-        agentId: run.agentId,
-        sessionId: run.sessionId,
-        parentRunId: run.parentRunId,
-      },
-      idempotencyKey: `run.created:${run.runId}`,
-    })
-    this.options.store.appendEvent({
-      runId: run.runId,
-      type: 'input.received',
-      payload: {
-        input: intent.input,
-        requestedCapabilities: intent.requestedCapabilities ?? [],
-      },
-      idempotencyKey: `input.received:${run.runId}`,
-    })
-    this.options.store.appendEvent({
-      runId: run.runId,
-      type: 'run.queued',
-      payload: {},
-      idempotencyKey: `run.queued:${run.runId}`,
-    })
-    return run
+    return this.options.store.createQueuedRun(intent, agent)
   }
 
   approveRunLogApproval(input: DecideRunLogApprovalInput): RunLogApprovalReceipt {
@@ -87,28 +79,15 @@ export class RunLogKernel {
       key: this.options.approvalReceiptKey,
       keyMode: this.options.approvalReceiptKeyMode,
     })
-    this.options.store.putApprovalReceipt(receipt)
-    this.options.store.appendEvent({
-      runId: request.runId,
-      type: 'approval.approved',
-      payload: {
+    this.options.store.decideApprovalLifecycle({
+      receipt,
+      eventPayload: {
         approvalId: request.approvalId,
         receiptId: receipt.receiptId,
         toolCallId: request.toolCallId,
         actor: receipt.actor,
         expiresAt: receipt.expiresAt,
       },
-      idempotencyKey: receipt.idempotencyKey,
-    })
-    this.options.store.updateRunStatus(request.runId, 'queued', {
-      workerId: undefined,
-      leaseUntil: undefined,
-    })
-    this.options.store.appendEvent({
-      runId: request.runId,
-      type: 'run.queued',
-      payload: { resumedFromApproval: request.approvalId },
-      idempotencyKey: `run.queued:${request.runId}:approval:${request.approvalId}`,
     })
     return receipt
   }
@@ -126,29 +105,31 @@ export class RunLogKernel {
       key: this.options.approvalReceiptKey,
       keyMode: this.options.approvalReceiptKeyMode,
     })
-    this.options.store.putApprovalReceipt(receipt)
-    this.options.store.appendEvent({
-      runId: request.runId,
-      type: 'approval.denied',
-      payload: {
+    this.options.store.decideApprovalLifecycle({
+      receipt,
+      eventPayload: {
         approvalId: request.approvalId,
         receiptId: receipt.receiptId,
         toolCallId: request.toolCallId,
         actor: receipt.actor,
       },
-      idempotencyKey: receipt.idempotencyKey,
-    })
-    this.options.store.updateRunStatus(request.runId, 'failed', {
-      workerId: undefined,
-      leaseUntil: undefined,
-    })
-    this.options.store.appendEvent({
-      runId: request.runId,
-      type: 'run.failed',
-      payload: { message: 'RunLog approval denied.', approvalId: request.approvalId },
-      idempotencyKey: `run.failed:${request.runId}:approval-denied:${request.approvalId}`,
     })
     return receipt
+  }
+
+  cancelRun(input: CancelRunLogRunInput): RunRecord {
+    const existing = this.options.store.getRun(input.runId)
+    if (!existing) throw new Error(`Unknown run: ${input.runId}`)
+    if (existing.status === 'completed' || existing.status === 'failed' || existing.status === 'cancelled') {
+      return existing
+    }
+
+    const cancelled = this.options.store.cancelRunLifecycle({
+      runId: input.runId,
+      reason: input.reason ?? 'Cancelled by operator.',
+    })
+    this.executor.cancel(input.runId)
+    return cancelled
   }
 
   private assertApprovalDecisionAllowed(runId: string, approvalId: string): void {
@@ -162,9 +143,7 @@ export class RunLogKernel {
   }
 
   async drainOnce(): Promise<RunExecutionSummary | null> {
-    const run = this.scheduler.claimNext()
-    if (!run) return null
-    return await this.executor.execute(run)
+    return await this.worker.runOnce()
   }
 
   async drainUntilIdle(maxRuns = 100): Promise<RunExecutionSummary[]> {
@@ -175,5 +154,13 @@ export class RunLogKernel {
       summaries.push(summary)
     }
     return summaries
+  }
+
+  startWorker(): void {
+    this.worker.start()
+  }
+
+  async stopWorker(): Promise<void> {
+    await this.worker.stop()
   }
 }

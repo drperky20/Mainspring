@@ -169,4 +169,42 @@ describe('RunLogMainspring SDK host', () => {
     )
     expect(executions.count).toBe(0)
   })
+
+  it('lists durable runs after restart and cancels them through SDK surfaces', () => {
+    const root = tempRoot()
+    const agent = {
+      agentId: 'agent_discovery',
+      instructions: 'Remain discoverable after restart.',
+      capabilities: ['provider'] as const,
+    }
+    const app = runtime({ rootPath: root, provider: new MockProvider([]), agent })
+    const first = app.runs.start({ input: 'first', sessionId: 'session_discovery' })
+    const second = app.runs.start({ input: 'second', sessionId: 'session_discovery' })
+
+    expect(app.runs.list({ sessionId: 'session_discovery' }).map((run) => run.runId)).toEqual([
+      second.record.runId,
+      first.record.runId,
+    ])
+    expect(first.cancel('No longer needed.')).toMatchObject({ status: 'cancelled' })
+    expect(app.runs.list({ status: 'cancelled' }).map((run) => run.runId)).toEqual([
+      first.record.runId,
+    ])
+    expect(app.runs.list({ status: ['queued', 'cancelled'], limit: 1 })).toHaveLength(1)
+    app.close()
+
+    const reopened = runtime({ rootPath: root, provider: new MockProvider([]), agent })
+    expect(
+      reopened.runs.list({ sessionId: 'session_discovery' }).map((run) => ({
+        runId: run.runId,
+        status: run.status,
+      })),
+    ).toEqual([
+      { runId: second.record.runId, status: 'queued' },
+      { runId: first.record.runId, status: 'cancelled' },
+    ])
+    expect(reopened.runs.cancel(second.record.runId, 'Stopped after restart.').status).toBe(
+      'cancelled',
+    )
+    expect(reopened.runs.list({ status: 'cancelled' })).toHaveLength(2)
+  })
 })

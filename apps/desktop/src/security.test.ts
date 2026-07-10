@@ -3,6 +3,7 @@ import {
   desktopContentSecurityPolicy,
   desktopWindowOptions,
   hardenDesktopContents,
+  isAllowedDesktopNavigation,
   isAllowedDesktopUrl,
 } from './security.js'
 
@@ -14,6 +15,22 @@ describe('isAllowedDesktopUrl', () => {
     expect(isAllowedDesktopUrl('https://example.com')).toBe(false)
     expect(isAllowedDesktopUrl('javascript:alert(1)')).toBe(false)
     expect(isAllowedDesktopUrl('not a url')).toBe(false)
+  })
+})
+
+describe('isAllowedDesktopNavigation', () => {
+  it('keeps packaged windows on the exact packaged console file', () => {
+    const consoleUrl = 'file:///Applications/Mainspring/console/index.html'
+    expect(isAllowedDesktopNavigation(consoleUrl, consoleUrl)).toBe(true)
+    expect(isAllowedDesktopNavigation(`${consoleUrl}#runs`, consoleUrl)).toBe(true)
+    expect(isAllowedDesktopNavigation('file:///etc/passwd', consoleUrl)).toBe(false)
+  })
+
+  it('allows a development surface origin without allowing remote navigation', () => {
+    const developmentUrl = 'http://127.0.0.1:5173'
+    expect(isAllowedDesktopNavigation('http://127.0.0.1:5173/runs', developmentUrl)).toBe(true)
+    expect(isAllowedDesktopNavigation('http://localhost:5173', developmentUrl)).toBe(false)
+    expect(isAllowedDesktopNavigation('https://example.com', developmentUrl)).toBe(false)
   })
 })
 
@@ -63,7 +80,7 @@ describe('hardenDesktopContents', () => {
       },
     }
 
-    hardenDesktopContents(webContents as never)
+    hardenDesktopContents(webContents as never, 'http://127.0.0.1:5173')
 
     expect(setWindowOpenHandler).toHaveBeenCalledOnce()
     expect(setWindowOpenHandler).toHaveBeenCalledWith(expect.any(Function))

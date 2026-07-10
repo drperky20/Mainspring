@@ -234,13 +234,18 @@ export function resolveExecutionBackend(
 }
 
 export function toWslPath(inputPath: string): string {
-  const resolved = path.resolve(inputPath)
-  const drive = path.parse(resolved).root.slice(0, 1).toLowerCase()
+  const looksLikeWindowsPath = /^[a-zA-Z]:[\\/]/.test(inputPath)
+  const resolved =
+    looksLikeWindowsPath || process.platform === 'win32'
+      ? path.win32.resolve(inputPath)
+      : path.resolve(inputPath)
+  const parsed = path.win32.parse(resolved)
+  const drive = parsed.root.slice(0, 1).toLowerCase()
   if (!/^[a-z]$/.test(drive)) {
     throw new Error(`Cannot map path into WSL: ${resolved}`)
   }
-  const relative = resolved.slice(2).replace(/\\/g, '/')
-  return `/mnt/${drive}${relative}`
+  const relative = resolved.slice(parsed.root.length).replace(/\\/g, '/')
+  return `/mnt/${drive}${relative ? `/${relative}` : ''}`
 }
 
 export function shellSingleQuote(value: string): string {

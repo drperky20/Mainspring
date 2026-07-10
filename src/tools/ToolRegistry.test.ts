@@ -921,6 +921,9 @@ describe('ToolRegistry', () => {
 
   it('keeps file reads and writes contained to the workspace root', async () => {
     const { root, registry } = makeWorkspace()
+    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-tool-outside-write-'))
+    tempRoots.push(outsideRoot)
+    const outsideEscapePath = path.join(outsideRoot, 'escape.txt')
     fs.mkdirSync(path.join(root, 'notes'), { recursive: true })
     fs.writeFileSync(path.join(root, 'notes', 'input.txt'), 'inside')
     fs.writeFileSync(path.join(root, 'notes', 'binary.bin'), Buffer.from([0, 159, 146, 150]))
@@ -931,9 +934,9 @@ describe('ToolRegistry', () => {
     await expect(
       registry.execute({
         key: 'file.write',
-        input: { path: '/tmp/escape.txt', data: 'outside' },
+        input: { path: outsideEscapePath, data: 'outside' },
         approvalReceipt: approvalFor('file.write', {
-          path: '/tmp/escape.txt',
+          path: outsideEscapePath,
           data: 'outside',
         }),
       }),
@@ -1156,7 +1159,7 @@ describe('ToolRegistry', () => {
     expect(fs.existsSync(path.join(root, 'notes', 'trash'))).toBe(false)
     expect(fs.existsSync(path.join(root, 'notes', 'deeper', 'folder'))).toBe(true)
     expect(fs.readFileSync(path.join(root, 'notes', 'input.txt'), 'utf8')).toBe('PATCHED')
-    expect(fs.existsSync('/tmp/escape.txt')).toBe(false)
+    expect(fs.existsSync(outsideEscapePath)).toBe(false)
   })
 
   it('routes approved file mutations through the selected execution backend', async () => {

@@ -238,6 +238,33 @@ describe('ExecutionBackend', () => {
     ).toThrow('inside the workspace root')
   })
 
+  it('accepts host process cwd paths that resolve inside the workspace through a symlink alias', async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-process-cwd-alias-'))
+    const workspaceRoot = path.join(parent, 'workspace')
+    const aliasRoot = path.join(parent, 'workspace-alias')
+    const nestedCwd = path.join(workspaceRoot, 'packages', 'agent')
+    fs.mkdirSync(nestedCwd, { recursive: true })
+    fs.symlinkSync(workspaceRoot, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir')
+    const registry = new ProcessRegistry()
+
+    const started = registry.start({
+      runId: 'run_cwd_alias',
+      workspaceRoot,
+      cwd: path.join(aliasRoot, 'packages', 'agent'),
+      command: 'node -e "process.stdout.write(\'CWD_ALIAS_OK\')"',
+      backend: 'host',
+      maxOutputBytes: 1024,
+      timeoutMs: 5_000,
+    })
+    const result = await registry.waitForExit('run_cwd_alias', started.sessionId, workspaceRoot)
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      cwd: 'packages/agent',
+      stdout: 'CWD_ALIAS_OK',
+    })
+  })
+
   it('builds Docker process specs with an explicit workspace mount and no network', () => {
     const workspaceRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), 'mainspring-docker-spec-workspace-'),
@@ -283,6 +310,62 @@ describe('ExecutionBackend', () => {
       shell: false,
       windowsHide: true,
     })
+  })
+
+  it('passes through APPDATA while redacting secret-like keys', () => {
+    const previousAppData = process.env.APPDATA
+    const previousOpenAiKey = process.env.OPENAI_API_KEY
+    process.env.APPDATA = 'C:\\Users\\Agent\\AppData\\Roaming'
+    process.env.OPENAI_API_KEY = 'should-not-leak'
+
+    try {
+      const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-host-env-workspace-'))
+      const [, , options] = processSpawnSpecForBackend({
+        backend: {
+          key: 'host',
+          label: 'Host shell',
+          unsafe: true,
+          capabilities: executionBackendCapabilities('host'),
+        },
+        command: 'node -e "process.stdout.write(\'ENV_OK\')"',
+        cwd: workspaceRoot,
+        workspaceRoot,
+      })
+
+      expect(options.env).toMatchObject({
+        APPDATA: 'C:\\Users\\Agent\\AppData\\Roaming',
+        NO_COLOR: '1',
+      })
+      expect(options.env?.OPENAI_API_KEY).toBeUndefined()
+    } finally {
+      if (previousAppData === undefined) delete process.env.APPDATA
+      else process.env.APPDATA = previousAppData
+      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = previousOpenAiKey
+    }
+  })
+
+  it('rejects Docker process specs whose cwd resolves outside the workspace', () => {
+    const workspaceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'mainspring-docker-spec-contained-workspace-'),
+    )
+    const outsideRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'mainspring-docker-spec-contained-outside-'),
+    )
+
+    expect(() =>
+      processSpawnSpecForBackend({
+        backend: {
+          key: 'docker',
+          label: 'Docker Linux container',
+          unsafe: false,
+          capabilities: executionBackendCapabilities('docker'),
+        },
+        command: 'printf SHOULD_NOT_RUN',
+        cwd: outsideRoot,
+        workspaceRoot,
+      }),
+    ).toThrow('Docker process cwd must stay inside the workspace root.')
   })
 
   it('formats compact backend summary lines', () => {

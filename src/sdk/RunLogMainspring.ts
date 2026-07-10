@@ -8,6 +8,7 @@ import {
   StaticProviderRouter,
   type AgentSpec,
   type DecideRunLogApprovalInput,
+  type ListRunsInput,
   type ProviderRouter,
   type RunExecutionSummary,
   type RunIntent,
@@ -63,7 +64,7 @@ export class RunLogMainspringRunHandle {
   }
 
   events(limit?: number): RunLogEvent[] {
-    return this.runtime.store.listEvents({ runId: this.record.runId, limit: limit ?? 1_000 })
+    return this.projection(limit).events
   }
 
   status(): RunRecord['status'] {
@@ -77,6 +78,10 @@ export class RunLogMainspringRunHandle {
 
   async drainUntilIdle(maxRuns?: number): Promise<RunExecutionSummary[]> {
     return await this.runtime.drainUntilIdle(maxRuns)
+  }
+
+  cancel(reason?: string): RunRecord {
+    return this.runtime.runs.cancel(this.record.runId, reason)
   }
 
   approve(input: Omit<DecideRunLogApprovalInput, 'approvalId'> & { approvalId?: string } = {}): RunLogApprovalReceipt {
@@ -158,6 +163,9 @@ export class RunLogMainspring {
       return new RunLogMainspringRunHandle(this, run)
     },
     project: (runId: string, limit?: number): RunLogRunProjection => this.project(runId, limit),
+    list: (input?: ListRunsInput): RunRecord[] => this.store.listRuns(input),
+    cancel: (runId: string, reason?: string): RunRecord =>
+      this.kernel.cancelRun({ runId, reason }),
     drainOnce: async (): Promise<RunExecutionSummary | null> => await this.kernel.drainOnce(),
     drainUntilIdle: async (maxRuns?: number): Promise<RunExecutionSummary[]> =>
       await this.kernel.drainUntilIdle(maxRuns),
@@ -180,6 +188,14 @@ export class RunLogMainspring {
 
   async drainUntilIdle(maxRuns?: number): Promise<RunExecutionSummary[]> {
     return await this.kernel.drainUntilIdle(maxRuns)
+  }
+
+  startWorker(): void {
+    this.kernel.startWorker()
+  }
+
+  async stopWorker(): Promise<void> {
+    await this.kernel.stopWorker()
   }
 
   close(): void {

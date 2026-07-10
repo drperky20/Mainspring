@@ -108,11 +108,19 @@ export function installLocalMarketplaceTemplate(input: {
     ? path.resolve(input.workspaceBaseRoot)
     : undefined
   if (workspaceBaseRoot) {
-    assertContained(workspaceBaseRoot, workspaceRoot, 'Marketplace workspace root escapes the gateway workspace base.')
     const existing = nearestExistingPath(workspaceRoot)
+    const canonicalBaseRoot = fs.realpathSync.native(workspaceBaseRoot)
+    const canonicalWorkspaceRoot = existing
+      ? path.join(fs.realpathSync.native(existing), path.relative(existing, workspaceRoot))
+      : workspaceRoot
+    assertContained(
+      canonicalBaseRoot,
+      canonicalWorkspaceRoot,
+      'Marketplace workspace root escapes the gateway workspace base.',
+    )
     if (existing) {
       assertContained(
-        fs.realpathSync.native(workspaceBaseRoot),
+        canonicalBaseRoot,
         fs.realpathSync.native(existing),
         'Marketplace workspace root escapes the gateway workspace base.',
       )

@@ -36,7 +36,7 @@ The older legacy mailbox and `RuntimeKernel` path still exists as compatibility 
 - Legacy per-session SQLite mailbox and `RuntimeKernel` compatibility path while SDK/gateway migration continues.
 - Built-in file, shell, terminal, browser-adapter, web, memory, skill, and diagnostics tools.
 - Local gateway development host with RunLog-backed run creation, app-state SQLite for clients, workspaces, agents, provider profiles, budgets, usage, cron, marketplace templates, deployments, and audit rows.
-- Vite console for the live local gateway: setup wizard, client/workspace creation, agent editing, connected provider profiles, client-scoped chat testing, and visual automation test runs.
+- Vite operator console for the live local gateway: setup, overview metrics, client/workspace and agent management, durable run inspection and cancellation, approval review, usage and budget views, provider settings, client-scoped chat testing, and visual automation test runs.
 - Experimental Electron shell for the console, with verified Windows packaging.
 - Runnable example agents and a trusted local template catalog.
 - Docker runtime image and local release verification scripts.

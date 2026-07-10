@@ -73,6 +73,17 @@ describe('browser gateway safety helpers', () => {
     expect(redacted).not.toContain('/srv/mainspring')
   })
 
+  it('redacts macOS and generic POSIX absolute paths in browser-facing text', () => {
+    const text =
+      'failed at /private/var/folders/runtime/session.log and /opt/mainspring/bin/runtime'
+
+    const redacted = redactBrowserUnsafeGatewayText(text)
+
+    expect(redacted).not.toContain('/private/var/folders')
+    expect(redacted).not.toContain('/opt/mainspring')
+    expect(containsBrowserUnsafeGatewayText(text)).toBe(true)
+  })
+
   it('detects browser-unsafe gateway text without duplicating regexes in callers', () => {
     expect(containsBrowserUnsafeGatewayText('relative trace path reports/next-step.txt')).toBe(
       false,
