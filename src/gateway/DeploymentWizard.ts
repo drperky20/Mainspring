@@ -3,11 +3,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { z } from 'zod'
+import { redactRuntimeSensitiveText } from '#protocol'
 import type {
   LocalGatewayAppStateStore,
   LocalGatewayDeploymentRunRecord,
   LocalGatewayDeploymentTargetRecord,
 } from './AppStateStore.js'
+import { kubernetesDeploymentDriver } from './KubernetesDeploymentDriver.js'
 
 export type LocalGatewayDeploymentOperation = 'deploy' | 'rollback' | 'destroy'
 
@@ -153,6 +155,7 @@ export function createDefaultDeploymentDriverRegistry(
     .register(vpsSshDeploymentDriver)
     .register(localDeploymentDriver)
     .register(containerDeploymentDriver)
+    .register(kubernetesDeploymentDriver)
   for (const driver of extraDrivers) registry.register(driver)
   return registry
 }
@@ -351,7 +354,9 @@ export function executeLocalGatewayDeployment(input: {
       },
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Deployment execution failed.'
+    const message = redactRuntimeSensitiveText(
+      error instanceof Error ? error.message : 'Deployment execution failed.',
+    )
     deploymentRun = input.appState.deploymentRuns.upsert({
       deploymentRunId,
       targetId: target.targetId,

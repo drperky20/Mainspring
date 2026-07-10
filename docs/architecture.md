@@ -62,7 +62,7 @@ Scale adapters can replace pieces independently:
 - SQLite -> Postgres for multi-host leases
 - local blobs -> S3/R2/MinIO
 - DB lease queue -> Redis/BullMQ only when measured bottlenecks justify it
-- local process/workspace -> Docker, VPS, Kubernetes, or managed workers
+- local process/workspace -> Docker, VPS, or the guarded Kubernetes gateway deployment driver; managed workers remain future infrastructure
 
 ## Runtime Rules
 

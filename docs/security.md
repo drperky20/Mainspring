@@ -27,6 +27,7 @@ Mainspring treats agents as untrusted workers.
 - console-side local gateway URL validation that rejects embedded `user:password@host` credentials
 - console-side response tripwires that reject browser-unsafe secret/path fields, common provider key environment markers, and common Windows drive-letter, UNC, and Unix host absolute paths in successful JSON responses
 - Docker runtime packaging guardrails
+- Kubernetes gateway deployment manifests with single-replica SQLite, non-root execution, dropped capabilities, read-only root filesystem, disabled service-account token mounting, health probes, resource limits, existing Secret/PVC references, and guarded destroy
 - unapprovable hard blocks for catastrophic shell, credential-disclosure, Git remote/hook mutation, approval-disabling, and network-to-shell patterns
 - RunLog cron/headless grant decisions before due runs are queued or failed
 - local-agent security regression corpus for shell, filesystem, browser/fetch, memory, skill, bridge, and cron policy boundaries
@@ -50,6 +51,7 @@ Mainspring treats agents as untrusted workers.
 - Local budget enforcement is not payment billing.
 - RunLog cron grants are scheduling authority checks, not process containment.
 - Signed template catalogs establish integrity from a configured key pin; they do not establish publisher reputation, key revocation, or content quality.
+- Generated Kubernetes workload controls are not proof of cluster admission policy, storage durability, backup, ingress safety, or production readiness.
 
 ## Required Practice
 

@@ -144,6 +144,7 @@ const expectedExports = {
 const expectedFiles = [
   'dist',
   'docker',
+  'deploy',
   'docs/README.md',
   'docs/index.md',
   'docs/getting-started.md',

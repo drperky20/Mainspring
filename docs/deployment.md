@@ -46,10 +46,13 @@ Bundled drivers:
 - `vps` target kind with `vps-ssh` execution mode: packages the repo, uploads over SSH/SCP, installs on the remote host, and restarts systemd after explicit confirmation.
 - `local` target kind with `local-filesystem` execution mode: writes local release artifacts and a current-release marker under the configured deployment root.
 - `container` target kind with `docker-container` execution mode: builds a Docker image and replaces a named local container through the local Docker Engine.
+- `kubernetes` target kind with `kubectl-server-side-apply` execution mode: builds/pushes a release-specific image tag, validates an existing namespace/Secret/PVC and required Secret key names without reading values, applies a generated single-replica hardened gateway manifest, waits for rollout, supports Deployment-history rollback, and preserves data/secrets on guarded destroy.
 
 Custom deployment kinds are safe strings and fail closed unless a driver is registered. Driver config validation, support metadata, plan, execute, rollback, and destroy all come from the registered driver.
 
 The VPS driver does not copy provider secrets. Remote env files must be managed separately.
+
+The Kubernetes driver is documented in [`deploy/kubernetes/README.md`](../deploy/kubernetes/README.md). Its passing generated-manifest and injected-runner checks do not certify any real cluster, storage class, ingress controller, registry, backup, or disaster-recovery system.
 
 Check:
 

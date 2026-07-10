@@ -286,6 +286,13 @@ export class LocalGatewayHttpServer {
         return
       }
 
+      if (request.method === 'GET' && path === '/readyz') {
+        const health = this.options.gateway.snapshot().health
+        const ready = health.ok && health.running
+        this.writeJson(response, ready ? 200 : 503, { ready })
+        return
+      }
+
       if (request.method === 'POST' && path === '/auth/bootstrap') {
         this.assertHostedAuth()
         const body = await this.readJson(request)

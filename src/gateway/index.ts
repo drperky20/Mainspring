@@ -48,6 +48,10 @@ export {
   runExecutionLeaseId,
 } from './HyperCellScheduler.js'
 export {
+  buildKubernetesManifest,
+  kubernetesDeploymentDriver,
+} from './KubernetesDeploymentDriver.js'
+export {
   canonicalRemoteMarketplacePayload,
   fetchVerifiedRemoteMarketplaceCatalog,
   installVerifiedRemoteMarketplaceTemplate,
@@ -61,6 +65,7 @@ export type {
   HyperCellSchedulerOptions,
   PlannedHyperCellRunLease,
 } from './HyperCellScheduler.js'
+export type { KubernetesDeploymentConfig } from './KubernetesDeploymentDriver.js'
 export type {
   RemoteMarketplaceFetchOptions,
   RemoteMarketplacePayload,

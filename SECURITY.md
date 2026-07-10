@@ -29,6 +29,7 @@ Open a private security advisory or contact the maintainers through the distribu
 - Not implemented: tenant-scoped hosted authorization or enterprise identity federation.
 - Not implemented: payment-backed billing or provider-side spend reservation.
 - Not implemented: production browser isolation.
+- Not implemented: managed Kubernetes control plane or production-cluster certification.
 - Linux desktop installer packaging.
 
 ## Required Practice

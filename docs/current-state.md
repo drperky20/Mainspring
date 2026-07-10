@@ -122,7 +122,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Full replacement of `RuntimeKernel` and per-session mailbox execution with RunLog execution.
 - Broader provider-account auth beyond env/local managed refs, such as OAuth provider auth or hosted KMS.
 - AI SDK streaming transport endpoint for the console chat surface; the UI package dependency exists, but gateway chat dispatch still goes through `/runs/start`.
-- Postgres, Redis/BullMQ, S3/R2/MinIO, Kubernetes, and managed-cloud adapters. Docker execution plus local/container/VPS deployment drivers exist, but they are not managed-cloud infrastructure or VM isolation.
+- Postgres, Redis/BullMQ, S3/R2/MinIO, and managed-cloud control-plane adapters. Docker execution plus local/container/VPS/Kubernetes deployment drivers exist, but the Kubernetes driver has not been certified against a real production cluster and none of these are VM isolation.
 - Browser lease adapter with Playwright trace/artifact capture.
 - Browser/page multimodal context and provider-specific content-part adapters.
 - Complete per-tool/per-provider/usage projections beyond the current persisted run-summary cursor.

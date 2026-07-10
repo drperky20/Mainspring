@@ -157,7 +157,7 @@ Next:
 
 Deferred/rejected:
 
-- Hosted payment flows, marketplace reputation/revocation services, cloud compute pools, production Kubernetes, enterprise tenant permission tiers, and hosted multi-tenancy. Local gateway roles and pinned signed remote template catalogs are implemented narrower boundaries.
+- Hosted payment flows, marketplace reputation/revocation services, cloud compute pools, production cluster certification/operations, enterprise tenant permission tiers, and hosted multi-tenancy. Local gateway roles, pinned signed remote template catalogs, and a guarded Kubernetes deployment driver are implemented narrower boundaries.
 
 ## 10. Bibliography
 

@@ -13,10 +13,14 @@ function makeTempRoot(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
 }
 
-function createCommandRunner(log) {
+function createCommandRunner(log, kubernetesManifests) {
   return {
     run(input) {
       log.push(input)
+      const manifestIndex = input.command === 'kubectl' ? input.args.indexOf('-f') : -1
+      if (manifestIndex >= 0) {
+        kubernetesManifests.push(JSON.parse(fs.readFileSync(input.args[manifestIndex + 1], 'utf8')))
+      }
       if (input.args.length === 0) {
         return { status: 0, stdout: `${input.command}\n`, stderr: '' }
       }
@@ -32,6 +36,16 @@ function createCommandRunner(log) {
           stdout: JSON.stringify([{ filename: tarballName }]),
           stderr: '',
         }
+      }
+      if (input.command === 'kubectl' && input.args.includes('secret')) {
+        return {
+          status: 0,
+          stdout: 'MAINSPRING_GATEWAY_BOOTSTRAP_USERNAME\nMAINSPRING_GATEWAY_BOOTSTRAP_PASSWORD\nMAINSPRING_RUNLOG_APPROVAL_KEY\nMAINSPRING_PROVIDER\nMAINSPRING_MODEL\nOPENROUTER_API_KEY\n',
+          stderr: '',
+        }
+      }
+      if (input.command === 'kubectl' && input.args.includes('config')) {
+        return { status: 0, stdout: 'https://kubernetes.example.com', stderr: '' }
       }
       return { status: 0, stdout: 'ok', stderr: '' }
     },
@@ -52,12 +66,13 @@ async function main() {
     pollIntervalMs: 10,
   })
   const commandLog = []
+  const kubernetesManifests = []
   const gateway = createLocalMainspringGateway({
     runtime,
     appState,
     deployments: {
       repoRoot: process.cwd(),
-      commandRunner: createCommandRunner(commandLog),
+      commandRunner: createCommandRunner(commandLog, kubernetesManifests),
     },
   })
   const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
@@ -207,6 +222,60 @@ async function main() {
     }
     if (!commandLog.some((entry) => entry.command === 'docker' && entry.args.includes('run'))) {
       throw new Error('Deployment check did not exercise docker run command generation.')
+    }
+
+    const kubernetesTarget = gateway.deployments.createTarget({
+      workspaceId: workspace.workspaceId,
+      label: 'Northline Kubernetes gateway',
+      kind: 'kubernetes',
+      metadata: {
+        context: 'northline-prod',
+        expectedClusterServer: 'https://kubernetes.example.com',
+        namespace: 'mainspring',
+        deploymentName: 'mainspring-gateway',
+        imageRepository: 'registry.example.com/northline/mainspring-gateway',
+        secretName: 'mainspring-gateway-secrets',
+        storageClaimName: 'mainspring-gateway-data',
+        allowDestroy: true,
+      },
+    })
+    const kubernetesResult = gateway.deployments.execute({
+      targetId: kubernetesTarget.targetId,
+      operation: 'deploy',
+      confirm: 'deploy',
+    })
+    if (!kubernetesResult.execution.ok || kubernetesResult.deploymentRun.status !== 'succeeded') {
+      throw new Error('Kubernetes deployment driver did not succeed with the injected runner.')
+    }
+    if (!commandLog.some((entry) => entry.command === 'kubectl' && entry.args.includes('apply'))) {
+      throw new Error('Deployment check did not exercise kubectl server-side apply.')
+    }
+    if (!commandLog.some((entry) => entry.command === 'kubectl' && entry.args.includes('rollout'))) {
+      throw new Error('Deployment check did not exercise kubectl rollout status.')
+    }
+    const kubernetesManifest = kubernetesManifests[0]
+    const kubernetesDeployment = kubernetesManifest?.items?.find((item) => item.kind === 'Deployment')
+    if (
+      kubernetesDeployment?.spec?.replicas !== 1
+      || kubernetesDeployment?.spec?.template?.spec?.automountServiceAccountToken !== false
+      || kubernetesDeployment?.spec?.template?.spec?.securityContext?.runAsNonRoot !== true
+      || kubernetesDeployment?.spec?.template?.spec?.containers?.[0]?.securityContext?.readOnlyRootFilesystem !== true
+    ) {
+      throw new Error('Generated Kubernetes manifest omitted required workload hardening.')
+    }
+    const serializedKubernetesManifest = JSON.stringify(kubernetesManifest)
+    if (serializedKubernetesManifest.includes('MAINSPRING_RUNLOG_APPROVAL_KEY":"')) {
+      throw new Error('Generated Kubernetes manifest embedded approval key material.')
+    }
+    const kubernetesDestroy = gateway.deployments.execute({
+      targetId: kubernetesTarget.targetId,
+      operation: 'destroy',
+      confirm: 'destroy',
+    })
+    if (!kubernetesDestroy.execution.ok) throw new Error('Kubernetes destroy did not succeed.')
+    const deleteCommand = commandLog.find((entry) => entry.command === 'kubectl' && entry.args.includes('delete'))
+    if (!deleteCommand || deleteCommand.args.some((arg) => arg.startsWith('pvc/') || arg.startsWith('secret/'))) {
+      throw new Error('Kubernetes destroy did not preserve PVC and Secret resources.')
     }
 
     let unsupportedFailedClosed = false

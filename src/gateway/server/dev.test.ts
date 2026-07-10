@@ -4,12 +4,16 @@ import {
   defaultLocalGatewayDevPort,
   defaultLocalGatewayCellLeaseTtlMs,
   isAllowedLocalGatewayDevHost,
+  hasRequiredProductionGatewayProviderConfig,
   resolveLocalGatewayCellCapacity,
   resolveLocalGatewayCellLeaseTtlMs,
   assertExternalGatewayApprovalKey,
   resolveLocalGatewayDevAuth,
   resolveLocalGatewayDevHost,
   resolveLocalGatewayDevPort,
+  resolveLocalGatewayEnvironment,
+  resolveLocalGatewayTrustedOrigins,
+  shouldBootstrapGatewaySampleState,
 } from './dev.js'
 
 describe('local gateway dev host', () => {
@@ -19,6 +23,23 @@ describe('local gateway dev host', () => {
     expect(isAllowedLocalGatewayDevHost('::1')).toBe(true)
     expect(isAllowedLocalGatewayDevHost('0.0.0.0')).toBe(true)
     expect(isAllowedLocalGatewayDevHost('192.168.1.20')).toBe(false)
+  })
+
+  it('keeps sample state local and disables it for production', () => {
+    expect(resolveLocalGatewayEnvironment(undefined)).toBe('local-dev')
+    expect(resolveLocalGatewayEnvironment('production')).toBe('production')
+    expect(shouldBootstrapGatewaySampleState('local-dev', undefined)).toBe(true)
+    expect(shouldBootstrapGatewaySampleState('production', undefined)).toBe(false)
+    expect(shouldBootstrapGatewaySampleState('local-dev', '0')).toBe(false)
+    expect(hasRequiredProductionGatewayProviderConfig({
+      MAINSPRING_PROVIDER: 'openrouter',
+      MAINSPRING_MODEL: 'openrouter/free',
+      OPENROUTER_API_KEY: 'configured',
+    })).toBe(true)
+    expect(hasRequiredProductionGatewayProviderConfig({
+      MAINSPRING_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'configured',
+    })).toBe(false)
   })
 
   it('fails closed to the default host for invalid overrides', () => {
@@ -43,6 +64,17 @@ describe('externally reachable gateway safeguards', () => {
       .toThrow('MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=configured')
     expect(() => assertExternalGatewayApprovalKey({ MAINSPRING_RUNLOG_APPROVAL_KEY: 'configured-key' }, '0.0.0.0', 'configured'))
       .not.toThrow()
+  })
+
+  it('accepts only credential-free HTTP(S) browser origins', () => {
+    expect(resolveLocalGatewayTrustedOrigins('https://console.example.com,http://localhost:5173'))
+      .toEqual(['https://console.example.com', 'http://localhost:5173'])
+    expect(() => resolveLocalGatewayTrustedOrigins('https://user:pass@console.example.com'))
+      .toThrow('credential-free')
+    expect(() => resolveLocalGatewayTrustedOrigins('https://console.example.com/path'))
+      .toThrow('must not include paths')
+    expect(() => resolveLocalGatewayTrustedOrigins('http://console.example.com'))
+      .toThrow('must use HTTPS')
   })
 })
 

@@ -21,6 +21,28 @@ export const defaultLocalGatewayDevHost = '127.0.0.1'
 export const defaultLocalGatewayDevPort = 8787
 export const defaultLocalGatewayCellLeaseTtlMs = 6 * 60 * 60 * 1_000
 
+export function resolveLocalGatewayEnvironment(value: string | undefined): 'local-dev' | 'production' {
+  return value?.trim().toLowerCase() === 'production' ? 'production' : 'local-dev'
+}
+
+export function shouldBootstrapGatewaySampleState(
+  environment: 'local-dev' | 'production',
+  value: string | undefined,
+): boolean {
+  if (value?.trim() === '0') return false
+  return environment === 'local-dev'
+}
+
+export function hasRequiredProductionGatewayProviderConfig(
+  env: Record<string, string | undefined>,
+): boolean {
+  return Boolean(
+    env.MAINSPRING_PROVIDER?.trim()
+    && env.MAINSPRING_MODEL?.trim()
+    && hasConfiguredProviderCredential(env),
+  )
+}
+
 export function isAllowedLocalGatewayDevHost(host: string): boolean {
   const normalized = host.trim().toLowerCase()
   return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1' || normalized === '0.0.0.0'
@@ -58,6 +80,25 @@ export function resolveRunLogApprovalKeyMode(
   return value?.trim() === 'configured' ? 'configured' : 'local-dev'
 }
 
+export function resolveLocalGatewayTrustedOrigins(value: string | undefined): string[] {
+  const origins = value?.split(',').map((entry) => entry.trim()).filter(Boolean) ?? []
+  if (origins.length > 32) throw new Error('MAINSPRING_GATEWAY_TRUSTED_ORIGINS supports at most 32 origins.')
+  return [...new Set(origins.map((entry) => {
+    const url = new URL(entry)
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) {
+      throw new Error('MAINSPRING_GATEWAY_TRUSTED_ORIGINS entries must be credential-free HTTP(S) origins.')
+    }
+    const hostname = url.hostname.replace(/^\[|\]$/g, '')
+    if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(hostname)) {
+      throw new Error('Non-loopback MAINSPRING_GATEWAY_TRUSTED_ORIGINS entries must use HTTPS.')
+    }
+    if (url.pathname !== '/' || url.search || url.hash) {
+      throw new Error('MAINSPRING_GATEWAY_TRUSTED_ORIGINS entries must not include paths, queries, or fragments.')
+    }
+    return url.origin
+  }))]
+}
+
 export function resolveLocalGatewayDevAuth(
   env: Record<string, string | undefined>,
   host: string,
@@ -74,8 +115,10 @@ export function resolveLocalGatewayDevAuth(
       'An externally reachable gateway requires MAINSPRING_GATEWAY_BOOTSTRAP_USERNAME and MAINSPRING_GATEWAY_BOOTSTRAP_PASSWORD.',
     )
   }
+  const trustedOrigins = resolveLocalGatewayTrustedOrigins(env.MAINSPRING_GATEWAY_TRUSTED_ORIGINS)
   return {
     mode: 'hosted',
+    ...(trustedOrigins.length > 0 ? { trustedOrigins } : {}),
     ...(username && password ? { bootstrapAdmin: { username, password } } : {}),
   }
 }
@@ -101,6 +144,8 @@ Usage:
 
 Environment:
   MAINSPRING_GATEWAY_HOST=${defaultLocalGatewayDevHost}
+  MAINSPRING_GATEWAY_ENV=local-dev
+  MAINSPRING_GATEWAY_BOOTSTRAP_SAMPLE_STATE=1
   MAINSPRING_GATEWAY_PORT=${defaultLocalGatewayDevPort}
   MAINSPRING_SESSIONS_ROOT=.mainspring/sessions
   MAINSPRING_WORKSPACE_ROOT=.mainspring/workspaces
@@ -113,6 +158,7 @@ Environment:
   MAINSPRING_GATEWAY_AUTH_MODE=local-dev
   MAINSPRING_GATEWAY_BOOTSTRAP_USERNAME=
   MAINSPRING_GATEWAY_BOOTSTRAP_PASSWORD=
+  MAINSPRING_GATEWAY_TRUSTED_ORIGINS=
   MAINSPRING_GATEWAY_MANAGED_SECRET_KEY=.mainspring/gateway-app.sqlite.managed-key
   MAINSPRING_GATEWAY_MANAGED_SECRET_STORE=auto
   MAINSPRING_GATEWAY_MANAGED_SECRET_CREDENTIAL_NAME=
@@ -130,6 +176,7 @@ Host binding:
 Provider:
   - Uses env-backed runtime provider when available
   - Falls back to EchoProvider for local bring-up without paid keys
+  - MAINSPRING_GATEWAY_ENV=production requires explicit provider/model credentials and disables sample state by default
 `)
 }
 
@@ -140,6 +187,7 @@ async function main(): Promise<void> {
   }
 
   const host = resolveLocalGatewayDevHost(process.env.MAINSPRING_GATEWAY_HOST)
+  const environment = resolveLocalGatewayEnvironment(process.env.MAINSPRING_GATEWAY_ENV)
   const port = resolveLocalGatewayDevPort(process.env.MAINSPRING_GATEWAY_PORT)
   const sessionsRoot = path.resolve(process.env.MAINSPRING_SESSIONS_ROOT || '.mainspring/sessions')
   const workspaceRoot = path.resolve(process.env.MAINSPRING_WORKSPACE_ROOT || '.mainspring/workspaces')
@@ -184,6 +232,15 @@ async function main(): Promise<void> {
   fs.mkdirSync(runLogWorkspaceRoot, { recursive: true })
 
   const envProviderSelection = resolveDevRuntimeProvider(process.env)
+  if (
+    environment === 'production'
+    && (
+      !envProviderSelection
+      || !hasRequiredProductionGatewayProviderConfig(process.env)
+    )
+  ) {
+    throw new Error('Production gateway startup requires a configured provider credential and model.')
+  }
   const provider = envProviderSelection?.provider ?? new EchoProvider()
   const providerId = envProviderSelection?.providerId ?? 'echo'
   const modelId = envProviderSelection?.modelId ?? 'echo/default'
@@ -226,21 +283,23 @@ async function main(): Promise<void> {
     workerId: 'gateway-dev',
   })
   await runtime.start()
-  bootstrapGatewayAppState({
-    runtime,
-    appState,
-    workspaceRoot,
-    providerId,
-    defaultModelId: modelId,
-    secretRef:
-      envProviderSelection?.providerId === 'openrouter'
-        ? 'env:OPENROUTER_API_KEY'
-        : envProviderSelection?.providerId === 'openai'
-          ? 'env:OPENAI_API_KEY'
-          : envProviderSelection?.providerId === 'codex'
-            ? 'env:CODEX_HOME'
-          : 'managed:echo-provider',
-  })
+  if (shouldBootstrapGatewaySampleState(environment, process.env.MAINSPRING_GATEWAY_BOOTSTRAP_SAMPLE_STATE)) {
+    bootstrapGatewayAppState({
+      runtime,
+      appState,
+      workspaceRoot,
+      providerId,
+      defaultModelId: modelId,
+      secretRef:
+        envProviderSelection?.providerId === 'openrouter'
+          ? 'env:OPENROUTER_API_KEY'
+          : envProviderSelection?.providerId === 'openai'
+            ? 'env:OPENAI_API_KEY'
+            : envProviderSelection?.providerId === 'codex'
+              ? 'env:CODEX_HOME'
+            : 'managed:echo-provider',
+    })
+  }
   const gateway = createLocalMainspringGateway({
     runtime,
     appState,

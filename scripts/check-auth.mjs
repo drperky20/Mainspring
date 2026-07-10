@@ -81,6 +81,8 @@ try {
   const started = await server.start()
 
   const healthBefore = await requestOk(`${started.url}/health`)
+  const readinessBefore = await requestOk(`${started.url}/readyz`)
+  assert(readinessBefore.body.ready === true, 'gateway readiness endpoint did not report ready runtime')
   assert(healthBefore.body.mode === 'local-gateway-hosted', 'hosted health did not report hosted mode')
   assert(healthBefore.body.auth?.authenticated === false, 'hosted health reported authenticated without a token')
   assert(healthBefore.body.auth?.bootstrapRequired === true, 'hosted health did not require bootstrap')
