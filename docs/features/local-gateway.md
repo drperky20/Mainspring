@@ -45,6 +45,8 @@ Hosted-auth bootstrap and login are still local operator flows, but browser-orig
 
 Hosted login failures are rate-limited in the running gateway process, and approval decisions record the authenticated hosted-session identity instead of caller-provided approval text. This is an operator safety control, not durable multi-user authorization, tenant isolation, or enterprise identity.
 
+`pnpm gateway:dev` remains loopback-only by default. An explicit `0.0.0.0` bind now requires hosted auth with bootstrap credentials and a configured RunLog approval-receipt key; it is still intended only for an externally constrained runtime such as a hardened container boundary.
+
 ## What It Does Not Do
 
 - It does not provide hosted SaaS tenancy.

@@ -12,7 +12,10 @@ import {
   createLocalMainspringGateway,
   createSqliteLocalGatewayAppStateStore,
 } from '../index.js'
-import { createLocalGatewayServer } from './createLocalGatewayServer.js'
+import {
+  createLocalGatewayServer,
+  type CreateLocalGatewayServerOptions,
+} from './createLocalGatewayServer.js'
 
 export const defaultLocalGatewayDevHost = '127.0.0.1'
 export const defaultLocalGatewayDevPort = 8787
@@ -55,6 +58,41 @@ export function resolveRunLogApprovalKeyMode(
   return value?.trim() === 'configured' ? 'configured' : 'local-dev'
 }
 
+export function resolveLocalGatewayDevAuth(
+  env: Record<string, string | undefined>,
+  host: string,
+): CreateLocalGatewayServerOptions['auth'] | undefined {
+  const hosted = env.MAINSPRING_GATEWAY_AUTH_MODE?.trim() === 'hosted'
+  const username = env.MAINSPRING_GATEWAY_BOOTSTRAP_USERNAME?.trim()
+  const password = env.MAINSPRING_GATEWAY_BOOTSTRAP_PASSWORD?.trim()
+  if (host === '0.0.0.0' && !hosted) {
+    throw new Error('MAINSPRING_GATEWAY_HOST=0.0.0.0 requires MAINSPRING_GATEWAY_AUTH_MODE=hosted.')
+  }
+  if (!hosted) return undefined
+  if (host === '0.0.0.0' && (!username || !password)) {
+    throw new Error(
+      'An externally reachable gateway requires MAINSPRING_GATEWAY_BOOTSTRAP_USERNAME and MAINSPRING_GATEWAY_BOOTSTRAP_PASSWORD.',
+    )
+  }
+  return {
+    mode: 'hosted',
+    ...(username && password ? { bootstrapAdmin: { username, password } } : {}),
+  }
+}
+
+export function assertExternalGatewayApprovalKey(
+  env: Record<string, string | undefined>,
+  host: string,
+  approvalKeyMode: 'local-dev' | 'configured',
+): void {
+  if (host !== '0.0.0.0') return
+  if (approvalKeyMode !== 'configured' || !env.MAINSPRING_RUNLOG_APPROVAL_KEY?.trim()) {
+    throw new Error(
+      'An externally reachable gateway requires MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=configured and MAINSPRING_RUNLOG_APPROVAL_KEY.',
+    )
+  }
+}
+
 function printHelp(): void {
   console.log(`Mainspring local gateway dev server
 
@@ -72,6 +110,9 @@ Environment:
   MAINSPRING_RUNLOG_WORKSPACE_ROOT=.mainspring/runlog/workspaces
   MAINSPRING_RUNLOG_APPROVAL_KEY=
   MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=local-dev
+  MAINSPRING_GATEWAY_AUTH_MODE=local-dev
+  MAINSPRING_GATEWAY_BOOTSTRAP_USERNAME=
+  MAINSPRING_GATEWAY_BOOTSTRAP_PASSWORD=
   MAINSPRING_GATEWAY_MANAGED_SECRET_KEY=.mainspring/gateway-app.sqlite.managed-key
   MAINSPRING_GATEWAY_MANAGED_SECRET_STORE=auto
   MAINSPRING_GATEWAY_MANAGED_SECRET_CREDENTIAL_NAME=
@@ -83,6 +124,7 @@ Environment:
 Host binding:
   - Only localhost / 127.0.0.1 / ::1 / 0.0.0.0 are accepted
   - Use 0.0.0.0 only inside Docker or another externally constrained runtime
+  - 0.0.0.0 requires hosted gateway auth, bootstrap credentials, and a configured RunLog approval key
   - Invalid or remote host overrides fail closed to 127.0.0.1
 
 Provider:
@@ -112,6 +154,8 @@ async function main(): Promise<void> {
   const runLogApprovalKeyMode = resolveRunLogApprovalKeyMode(
     process.env.MAINSPRING_RUNLOG_APPROVAL_KEY_MODE,
   )
+  const gatewayAuth = resolveLocalGatewayDevAuth(process.env, host)
+  assertExternalGatewayApprovalKey(process.env, host, runLogApprovalKeyMode)
   const managedSecretKeyPath = path.resolve(
     process.env.MAINSPRING_GATEWAY_MANAGED_SECRET_KEY || `${appDbPath}.managed-key`,
   )
@@ -215,7 +259,7 @@ async function main(): Promise<void> {
         : {}),
     },
   })
-  const server = createLocalGatewayServer({ gateway, host, port })
+  const server = createLocalGatewayServer({ gateway, host, port, ...(gatewayAuth ? { auth: gatewayAuth } : {}) })
   const started = await server.start()
 
   console.log(`Mainspring local gateway dev server listening on ${started.url}`)

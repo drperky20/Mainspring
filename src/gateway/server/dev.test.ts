@@ -6,6 +6,8 @@ import {
   isAllowedLocalGatewayDevHost,
   resolveLocalGatewayCellCapacity,
   resolveLocalGatewayCellLeaseTtlMs,
+  assertExternalGatewayApprovalKey,
+  resolveLocalGatewayDevAuth,
   resolveLocalGatewayDevHost,
   resolveLocalGatewayDevPort,
 } from './dev.js'
@@ -24,6 +26,23 @@ describe('local gateway dev host', () => {
     expect(resolveLocalGatewayDevHost('')).toBe(defaultLocalGatewayDevHost)
     expect(resolveLocalGatewayDevHost('0.0.0.0')).toBe('0.0.0.0')
     expect(resolveLocalGatewayDevHost('localhost')).toBe('localhost')
+  })
+})
+
+describe('externally reachable gateway safeguards', () => {
+  it('requires hosted auth, bootstrap credentials, and a configured approval key for 0.0.0.0', () => {
+    expect(() => resolveLocalGatewayDevAuth({}, '0.0.0.0')).toThrow('MAINSPRING_GATEWAY_AUTH_MODE=hosted')
+    expect(() => resolveLocalGatewayDevAuth({ MAINSPRING_GATEWAY_AUTH_MODE: 'hosted' }, '0.0.0.0'))
+      .toThrow('MAINSPRING_GATEWAY_BOOTSTRAP_USERNAME')
+    expect(resolveLocalGatewayDevAuth({
+      MAINSPRING_GATEWAY_AUTH_MODE: 'hosted',
+      MAINSPRING_GATEWAY_BOOTSTRAP_USERNAME: 'admin',
+      MAINSPRING_GATEWAY_BOOTSTRAP_PASSWORD: 'NorthlinePass123',
+    }, '0.0.0.0')).toMatchObject({ mode: 'hosted', bootstrapAdmin: { username: 'admin' } })
+    expect(() => assertExternalGatewayApprovalKey({}, '0.0.0.0', 'local-dev'))
+      .toThrow('MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=configured')
+    expect(() => assertExternalGatewayApprovalKey({ MAINSPRING_RUNLOG_APPROVAL_KEY: 'configured-key' }, '0.0.0.0', 'configured'))
+      .not.toThrow()
   })
 })
 
