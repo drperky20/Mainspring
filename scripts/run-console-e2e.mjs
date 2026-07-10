@@ -4,11 +4,17 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const require = createRequire(import.meta.url)
+const playwrightCli = require.resolve('@playwright/test/cli')
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-console-e2e-'))
-const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+const pnpmExecutable = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+const packageManagerScript = process.env.npm_execpath && fs.existsSync(process.env.npm_execpath)
+  ? process.env.npm_execpath
+  : undefined
 const children = []
 
 for (const key of [
@@ -45,6 +51,15 @@ function start(command, args, environment) {
   })
   children.push(child)
   return child
+}
+
+function startPnpm(args, environment) {
+  // Node 24 rejects direct .cmd spawning on Windows with EINVAL. pnpm exposes
+  // its current JS entrypoint through npm_execpath, which is portable and also
+  // avoids shell command parsing for these fixed test-runner arguments.
+  return packageManagerScript
+    ? start(process.execPath, [packageManagerScript, ...args], environment)
+    : start(pnpmExecutable, args, environment)
 }
 
 function waitFor(url, timeoutMs = 20_000) {
@@ -108,15 +123,14 @@ async function main() {
 
   start(process.execPath, ['dist/gateway/server/dev.js'], gatewayEnvironment)
   await waitFor(`${gatewayUrl}/health`)
-  start(
-    pnpm,
+  startPnpm(
     ['--filter', '@mainspring/console', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(consolePort)],
     process.env,
   )
   await waitFor(consoleUrl)
 
   const result = await new Promise((resolve, reject) => {
-    const test = start(pnpm, ['exec', 'playwright', 'test', '--config', 'e2e/playwright.config.ts'], {
+    const test = start(process.execPath, [playwrightCli, 'test', '--config', 'e2e/playwright.config.ts'], {
       ...process.env,
       MAINSPRING_E2E_CONSOLE_URL: consoleUrl,
       MAINSPRING_E2E_GATEWAY_URL: gatewayUrl,
