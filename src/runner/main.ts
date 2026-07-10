@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'node:fs'
 import path from 'node:path'
 import { MainspringMailbox } from '../mailbox/SqliteMailbox.js'
 import { RuntimeKernel } from './RuntimeKernel.js'
@@ -6,6 +7,7 @@ import { createShellTool } from '../tools/ShellTool.js'
 import { createRuntimeProviderFromEnv } from './RuntimeProviderConfig.js'
 import { ChannelBridge } from './ChannelBridge.js'
 import { SessionRuntimeSupervisor } from './SessionRuntimeSupervisor.js'
+import { resolveSessionWorkspaceRoot } from './SessionWorkspace.js'
 import { createMainspringRuntimeTools } from './RuntimeTools.js'
 
 const DEFAULT_SESSIONS_ROOT = '/sessions'
@@ -62,10 +64,16 @@ async function main(): Promise<void> {
 
   if (explicitSessionPath) {
     const mailbox = MainspringMailbox.fromSessionPath(explicitSessionPath)
+    const sessionWorkspaceRoot = resolveSessionWorkspaceRoot({
+      sessionId: path.basename(mailbox.paths.sessionPath),
+      sessionPath: mailbox.paths.sessionPath,
+      defaultWorkspaceRoot: workspaceRoot,
+    })
+    fs.mkdirSync(sessionWorkspaceRoot, { recursive: true })
     const kernel = new RuntimeKernel({
       mailbox,
       provider: providerSelection.provider,
-      cwd: workspaceRoot,
+      cwd: sessionWorkspaceRoot,
       env: process.env,
       tools: createRuntimeTools(),
     })
@@ -75,7 +83,7 @@ async function main(): Promise<void> {
         event: 'mainspring.started',
         mode: 'single-session',
         sessionPath: explicitSessionPath,
-        workspaceRoot,
+        workspaceRoot: sessionWorkspaceRoot,
         pollIntervalMs,
         provider: providerSelection.providerId,
         model: providerSelection.modelId,
@@ -130,14 +138,21 @@ async function main(): Promise<void> {
 
   const supervisor = new SessionRuntimeSupervisor({
     sessionsRoot,
-    createKernel: ({ mailbox }) =>
-      new RuntimeKernel({
+    createKernel: ({ mailbox, sessionId, sessionPath }) => {
+      const sessionWorkspaceRoot = resolveSessionWorkspaceRoot({
+        sessionId,
+        sessionPath,
+        defaultWorkspaceRoot: workspaceRoot,
+      })
+      fs.mkdirSync(sessionWorkspaceRoot, { recursive: true })
+      return new RuntimeKernel({
         mailbox,
         provider: providerSelection.provider,
-        cwd: workspaceRoot,
+        cwd: sessionWorkspaceRoot,
         env: process.env,
         tools: createRuntimeTools(),
-      }),
+      })
+    },
   })
 
   console.log(

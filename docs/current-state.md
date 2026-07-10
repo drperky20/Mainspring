@@ -103,6 +103,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Prototype Or Migration Surfaces
 
 - The old mailbox/runtime path is still present and still important for existing `createMainspring` SDK/gateway behavior.
+- The compatibility runner resolves each mailbox session to its persisted SDK workspace record. Metadata-free legacy/channel sessions receive an isolated per-session workspace beneath `MAINSPRING_WORKSPACE_ROOT`; the runner no longer shares one workspace root across all sessions.
 - All runnable examples now exercise the RunLog SDK host; the old mailbox/runtime path remains for legacy `createMainspring` SDK/gateway compatibility and tests.
 - The default gateway `/runs/start` route is RunLog-backed in the local dev server and in gateways configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways constructed without a RunLog host remain mailbox-compatible for migration tests and older embedders.
 - Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
