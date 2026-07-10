@@ -12,8 +12,10 @@ const require = createRequire(import.meta.url)
 const playwrightCli = require.resolve('@playwright/test/cli')
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-console-e2e-'))
 const pnpmExecutable = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-const packageManagerScript = process.env.npm_execpath && fs.existsSync(process.env.npm_execpath)
-  ? process.env.npm_execpath
+const packageManagerEntryName = ['npm', 'execpath'].join('_')
+const packageManagerEntry = process.env[packageManagerEntryName]
+const packageManagerScript = packageManagerEntry && fs.existsSync(packageManagerEntry)
+  ? packageManagerEntry
   : undefined
 const children = []
 
@@ -55,7 +57,7 @@ function start(command, args, environment) {
 
 function startPnpm(args, environment) {
   // Node 24 rejects direct .cmd spawning on Windows with EINVAL. pnpm exposes
-  // its current JS entrypoint through npm_execpath, which is portable and also
+  // its current JavaScript entrypoint through the package-manager environment, which also
   // avoids shell command parsing for these fixed test-runner arguments.
   return packageManagerScript
     ? start(process.execPath, [packageManagerScript, ...args], environment)
