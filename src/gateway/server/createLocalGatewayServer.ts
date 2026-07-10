@@ -8,6 +8,11 @@ import {
   type ApprovalHistoryStatus,
 } from '../ApprovalHistoryPage.js'
 import {
+  listRunLogActivityPage,
+  publicRunLogEvent,
+  readRunLogTracePage,
+} from '../RunLogActivityPage.js'
+import {
   consoleAgent,
   consoleBudget,
   consoleBudgetStatus,
@@ -26,7 +31,6 @@ import {
   consoleRun,
   consoleRunEvent,
   consoleRunDispatch,
-  consoleRunLogRun,
   consoleSession,
   consoleUsageStatus,
   consoleWorkspace,
@@ -134,7 +138,6 @@ const LOCAL_BROWSER_ORIGIN_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 export const MAX_GATEWAY_JSON_BODY_BYTES = 1024 * 1024
 const DEFAULT_RUNLOG_ACTIVITY_PAGE_LIMIT = 25
 const MAX_RUNLOG_ACTIVITY_PAGE_LIMIT = 100
-const RUNLOG_ACTIVITY_EVENT_TAIL = 64
 const DEFAULT_RUNLOG_TRACE_PAGE_LIMIT = 80
 const MAX_RUNLOG_TRACE_PAGE_LIMIT = 200
 const DEFAULT_APPROVAL_HISTORY_PAGE_LIMIT = 25
@@ -963,7 +966,10 @@ export class LocalGatewayHttpServer {
         this.writeJson(response, 200, {
           sessionId: projection.run.sessionId,
           runId,
-          events: projection.events.map(runLogEventPublic),
+          events: projection.events.flatMap((event) => {
+            const browserEvent = publicRunLogEvent(event)
+            return browserEvent ? [browserEvent] : []
+          }),
         })
         return
       }
@@ -1541,22 +1547,14 @@ export class LocalGatewayHttpServer {
     const limit = runLogActivityPageLimit(url.searchParams.get('limit'))
     const before = parseRunLogActivityCursor(url.searchParams.get('cursor'))
     const sessionId = url.searchParams.get('sessionId')?.trim() || undefined
-    const records = this.options.gateway.runLog.runs.list({
+    const page = listRunLogActivityPage(this.options.gateway.runLog.runs, {
       ...(sessionId ? { sessionId } : {}),
       ...(before ? { before } : {}),
-      limit: limit + 1,
+      limit,
     })
-    const hasMore = records.length > limit
-    const page = records.slice(0, limit)
-    const last = page.at(-1)
-    const runs = page.map((record) =>
-      consoleRunLogRun(
-        this.options.gateway.runLog.runs.projectSummary(record.runId, RUNLOG_ACTIVITY_EVENT_TAIL),
-      ),
-    )
     this.writeJson(response, 200, sanitizeGatewayResponse({
-      runs,
-      ...(hasMore && last ? { nextCursor: encodeRunLogActivityCursor(last) } : {}),
+      runs: page.runs,
+      ...(page.nextCursor ? { nextCursor: encodeRunLogActivityCursor(page.nextCursor) } : {}),
     }))
   }
 
@@ -1596,26 +1594,19 @@ export class LocalGatewayHttpServer {
     if (!this.options.gateway.runLog.available()) {
       throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
     }
-    const run = this.options.gateway.runLog.runs.get(runId)
-    if (!run) throw new GatewayHttpError(404, `Unknown RunLog run: ${runId}`)
-
     const limit = runLogTracePageLimit(url.searchParams.get('limit'))
     const beforeSeq = parseRunLogTraceCursor(url.searchParams.get('cursor'))
-    const records = this.options.gateway.runLog.runs.events({
+    const page = readRunLogTracePage(this.options.gateway.runLog.runs, {
       runId,
       ...(beforeSeq ? { beforeSeq } : {}),
-      order: 'desc',
-      visibility: 'public',
-      limit: limit + 1,
+      limit,
     })
-    const hasMore = records.length > limit
-    const page = records.slice(0, limit)
-    const oldest = page.at(-1)
+    if (!page) throw new GatewayHttpError(404, `Unknown RunLog run: ${runId}`)
     this.writeJson(response, 200, sanitizeGatewayResponse({
-      sessionId: run.sessionId,
-      runId,
-      events: [...page].reverse().map(runLogEventPublic),
-      ...(hasMore && oldest ? { nextCursor: encodeRunLogTraceCursor(oldest) } : {}),
+      sessionId: page.sessionId,
+      runId: page.runId,
+      events: page.events,
+      ...(page.nextCursor ? { nextCursor: encodeRunLogTraceCursor(page.nextCursor) } : {}),
     }))
   }
 
@@ -2052,22 +2043,6 @@ function runLogRunDispatch(record: RunLogRunRecord) {
   }
 }
 
-function runLogEventPublic(event: RunLogEvent) {
-  return {
-    eventId: event.eventId,
-    seq: event.seq,
-    runId: event.runId,
-    sessionId: event.sessionId,
-    agentId: event.agentId,
-    type: event.type,
-    timestamp: event.timestamp,
-    visibility: event.visibility,
-    // Browser clients receive only events explicitly marked public. Sensitive
-    // and artifact-only records remain available to trusted host/SDK readers.
-    ...(event.visibility === 'public' && event.payload !== undefined ? { payload: event.payload } : {}),
-  }
-}
-
 function runLogProjectionResponse(projection: RunLogRunProjection) {
   const publicEvents = projection.events.filter((event) => event.visibility === 'public')
   return {
@@ -2089,7 +2064,10 @@ function runLogProjectionResponse(projection: RunLogRunProjection) {
     usage: projection.usage,
     errors: projection.errors,
     latestSeq: projection.latestSeq,
-    events: publicEvents.map(runLogEventPublic),
+    events: publicEvents.flatMap((event) => {
+      const browserEvent = publicRunLogEvent(event)
+      return browserEvent ? [browserEvent] : []
+    }),
   }
 }
 
