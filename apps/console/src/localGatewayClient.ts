@@ -90,6 +90,8 @@ export type GatewayApprovalHistoryItem = ConsoleGatewaySnapshot['approvalMetadat
 
 export type GatewayUsageHistoryItem = ConsoleGatewaySnapshot['usageLedger'][number]
 
+export type GatewayArtifactHistoryItem = ConsoleGatewaySnapshot['artifacts'][number]
+
 export interface LocalGatewayClient {
   health(input?: { signal?: AbortSignal }): Promise<{
     mode: string
@@ -296,6 +298,11 @@ export interface LocalGatewayClient {
     limit?: number
     signal?: AbortSignal
   }): Promise<{ entries: GatewayUsageHistoryItem[]; nextCursor?: string }>
+  artifactHistory(input?: {
+    cursor?: string
+    limit?: number
+    signal?: AbortSignal
+  }): Promise<{ artifacts: GatewayArtifactHistoryItem[]; nextCursor?: string }>
   cronStatus(): Promise<{
     cron: { enabled: boolean; running: boolean; pollIntervalMs: number; lastTickAt?: string; lastError?: string }
   }>
@@ -726,6 +733,14 @@ export function createLocalGatewayClient(
     usageStatus: () => requestJson(fetchImpl, `${normalizedBaseUrl}/usage/status`, { headers: authHeaders() }),
     usageHistory: (input = {}) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/usage-history${queryString({
+        cursor: input.cursor,
+        limit: input.limit === undefined ? undefined : String(input.limit),
+      })}`, {
+        headers: authHeaders(),
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    artifactHistory: (input = {}) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/artifact-history${queryString({
         cursor: input.cursor,
         limit: input.limit === undefined ? undefined : String(input.limit),
       })}`, {

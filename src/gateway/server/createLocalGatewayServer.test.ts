@@ -834,6 +834,104 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('serves cursor-paginated artifact history without rebuilding the broad snapshot', async () => {
+    const root = makeTempRoot('mainspring-gateway-artifact-history-page-')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    for (const artifactId of ['artifact_1', 'artifact_2', 'artifact_3']) {
+      appState.artifacts.create({
+        artifactId,
+        runId: `run_${artifactId}`,
+        sessionId: 'session_artifact_history',
+        workspaceId: 'workspace_artifact_history',
+        kind: `report artifactPath=${path.join(root, 'private-artifacts', `${artifactId}.md`)}`,
+        label: `Private artifact workspaceRoot=${path.join(root, 'private-artifacts')}`,
+        path: path.join(root, 'private-artifacts', `${artifactId}.md`),
+        mediaType: 'text/markdown',
+        metadata: { privateStoragePath: 'must-not-cross-the-browser-boundary' },
+      })
+    }
+    const gateway = createLocalMainspringGateway({ runtime, appState })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const first = await fetch(`${started.url}/artifact-history?limit=2`)
+      expect(first.status).toBe(200)
+      const firstBody = await first.json() as {
+        artifacts: Array<{ artifactId: string; metadata?: unknown; path?: unknown }>
+        nextCursor?: string
+      }
+      expect(firstBody.artifacts).toHaveLength(2)
+      expect(firstBody.nextCursor).toEqual(expect.any(String))
+      expect(firstBody.artifacts.every((artifact) => artifact.metadata === undefined && artifact.path === undefined)).toBe(true)
+      expect(JSON.stringify(firstBody)).not.toContain('must-not-cross-the-browser-boundary')
+      expect(JSON.stringify(firstBody)).not.toContain('private-artifacts')
+      expect(snapshotCalls).toBe(0)
+
+      const second = await fetch(
+        `${started.url}/artifact-history?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? '')}`,
+      )
+      expect(second.status).toBe(200)
+      const secondBody = await second.json() as { artifacts: Array<{ artifactId: string }>; nextCursor?: string }
+      expect(secondBody.artifacts).toHaveLength(1)
+      expect(secondBody.nextCursor).toBeUndefined()
+      expect(new Set([...firstBody.artifacts, ...secondBody.artifacts].map((artifact) => artifact.artifactId))).toEqual(
+        new Set(['artifact_1', 'artifact_2', 'artifact_3']),
+      )
+      expect(snapshotCalls).toBe(0)
+
+      const invalidCursor = await fetch(`${started.url}/artifact-history?cursor=not-a-valid-cursor`)
+      expect(invalidCursor.status).toBe(400)
+      const invalidLimit = await fetch(`${started.url}/artifact-history?limit=101`)
+      expect(invalidLimit.status).toBe(400)
+    } finally {
+      await server.stop()
+      appState.close()
+      await runtime.stop()
+    }
+  })
+
+  it('keeps artifact history bounded by requiring app-state metadata', async () => {
+    const root = makeTempRoot('mainspring-gateway-artifact-history-no-app-state-')
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const gateway = createLocalMainspringGateway({ runtime })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const response = await fetch(`${started.url}/artifact-history`)
+      expect(response.status).toBe(501)
+      expect(await response.json()).toMatchObject({
+        error: 'Artifact history pagination requires the gateway app-state store.',
+      })
+      expect(snapshotCalls).toBe(0)
+    } finally {
+      await server.stop()
+      await runtime.stop()
+    }
+  })
+
   it('serves cursor-paginated compatibility runs without materializing the broad snapshot', async () => {
     const root = makeTempRoot('mainspring-gateway-compatibility-run-page-')
     const appState = createSqliteLocalGatewayAppStateStore({

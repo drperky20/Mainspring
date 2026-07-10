@@ -27,6 +27,7 @@ import { useCompatibilityRunPage } from './useCompatibilityRunPage'
 import { useRunLogActivityPage } from './useRunLogActivityPage'
 import { useRunLogTracePage } from './useRunLogTracePage'
 import { useUsageHistoryPage } from './useUsageHistoryPage'
+import { useArtifactHistoryPage } from './useArtifactHistoryPage'
 import {
   createChatMessage,
   createScopedRunUiState,
@@ -48,6 +49,7 @@ import {
 } from './ConsoleSetup'
 import {
   ApprovalsScreen,
+  ArtifactsScreen,
   ConnectionNotice,
   ConsoleConnectionScreen,
   OverviewScreen,
@@ -198,6 +200,13 @@ export function ConnectedConsoleApp() {
   const usageHistoryEnabled = screen === 'activity' && activityTab === 'usage'
   const usageHistory = useUsageHistoryPage({
     enabled: usageHistoryEnabled,
+    gatewayClient,
+    revision: snapshot?.generatedAt,
+    limit: 25,
+  })
+  const artifactHistoryEnabled = screen === 'activity' && activityTab === 'artifacts'
+  const artifactHistory = useArtifactHistoryPage({
+    enabled: artifactHistoryEnabled,
     gatewayClient,
     revision: snapshot?.generatedAt,
     limit: 25,
@@ -814,7 +823,7 @@ export function ConnectedConsoleApp() {
                   void resolveOperatorApproval(approval, decision, reason)
                 }}
               />
-            ) : (
+            ) : activityTab === 'usage' ? (
               <UsageScreen
                 entries={usageHistory.entries}
                 error={usageHistoryEnabled ? usageHistory.error : undefined}
@@ -822,6 +831,14 @@ export function ConnectedConsoleApp() {
                 loading={usageHistoryEnabled && usageHistory.loading}
                 model={operatorModel}
                 onLoadMore={() => void usageHistory.loadMore()}
+              />
+            ) : (
+              <ArtifactsScreen
+                artifacts={artifactHistory.artifacts}
+                error={artifactHistoryEnabled ? artifactHistory.error : undefined}
+                hasMore={artifactHistoryEnabled && Boolean(artifactHistory.nextCursor)}
+                loading={artifactHistoryEnabled && artifactHistory.loading}
+                onLoadMore={() => void artifactHistory.loadMore()}
               />
             )}
           </>

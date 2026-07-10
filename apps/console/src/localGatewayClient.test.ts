@@ -176,6 +176,36 @@ describe('createLocalGatewayClient', () => {
     })
   })
 
+  it('requests bounded artifact history with an opaque cursor', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('http://127.0.0.1:8787/artifact-history?cursor=artifact_cursor_1&limit=25')
+      expect(init?.headers).toEqual({ authorization: 'Bearer hosted_token_1' })
+      return new Response(
+        JSON.stringify({
+          artifacts: [{
+            artifactId: 'artifact_1',
+            runId: 'run_artifact_1',
+            sessionId: 'session_artifact_1',
+            kind: 'report',
+            label: 'Deployment report',
+            mediaType: 'text/markdown',
+            sizeBytes: 128,
+            createdAt: '2026-07-10T00:00:00.000Z',
+          }],
+          nextCursor: 'artifact_cursor_2',
+        }),
+        { status: 200 },
+      )
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+    client.setSessionToken('hosted_token_1')
+
+    await expect(client.artifactHistory({ cursor: 'artifact_cursor_1', limit: 25 })).resolves.toMatchObject({
+      artifacts: [expect.objectContaining({ artifactId: 'artifact_1', kind: 'report' })],
+      nextCursor: 'artifact_cursor_2',
+    })
+  })
+
   it('fetches snapshot, run events, run start, and approval resolution through the expected routes', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

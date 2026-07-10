@@ -1091,7 +1091,7 @@ export function consoleApprovalMetadata(
   }
 }
 
-function consoleArtifact(record: LocalGatewayArtifactRecord): ConsoleGatewayArtifact {
+export function consoleArtifact(record: LocalGatewayArtifactRecord): ConsoleGatewayArtifact {
   return {
     artifactId: record.artifactId,
     runId: record.runId,

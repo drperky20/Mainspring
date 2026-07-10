@@ -131,6 +131,20 @@ export interface LocalGatewayArtifactRecord {
   metadata?: Record<string, unknown>
 }
 
+/** Stable reverse-chronological cursor for bounded artifact history. */
+export interface LocalGatewayArtifactCursor {
+  createdAt: string
+  artifactId: string
+}
+
+export interface LocalGatewayArtifactListInput {
+  runId?: string
+  /** Return rows strictly older than this reverse-chronological cursor. */
+  before?: LocalGatewayArtifactCursor
+  limit?: number
+  order?: 'asc' | 'desc'
+}
+
 export interface LocalGatewayUsageLedgerEntryRecord {
   entryId: string
   runId: string
@@ -653,7 +667,7 @@ export interface LocalGatewayAppStateStore {
   artifacts: {
     create(input: CreateLocalGatewayArtifactInput): LocalGatewayArtifactRecord
     get(artifactId: string): LocalGatewayArtifactRecord | null
-    list(input?: { runId?: string }): LocalGatewayArtifactRecord[]
+    list(input?: LocalGatewayArtifactListInput): LocalGatewayArtifactRecord[]
   }
   usageLedger: {
     create(input: CreateLocalGatewayUsageLedgerEntryInput): LocalGatewayUsageLedgerEntryRecord
@@ -853,6 +867,8 @@ CREATE TABLE IF NOT EXISTS gateway_artifacts (
   metadata_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_gateway_artifacts_run ON gateway_artifacts(run_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_artifacts_activity
+  ON gateway_artifacts(created_at DESC, artifact_id DESC);
 
 CREATE TABLE IF NOT EXISTS gateway_usage_ledger_entries (
   entry_id TEXT PRIMARY KEY,
@@ -2354,17 +2370,25 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
       const row = this.db.prepare('SELECT * FROM gateway_artifacts WHERE artifact_id = ?').get(artifactId)
       return row ? artifactFromRow(row) : null
     },
-    list: (input: { runId?: string } = {}) => {
+    list: (input: LocalGatewayArtifactListInput = {}) => {
+      const clauses: string[] = []
+      const params: unknown[] = []
       if (input.runId) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_artifacts
-           WHERE run_id = ?
-           ORDER BY created_at ASC, artifact_id ASC`,
-        ).all(input.runId) as unknown[]).map(artifactFromRow)
+        clauses.push('run_id = ?')
+        params.push(input.runId)
       }
+      if (input.before) {
+        clauses.push('(created_at < ? OR (created_at = ? AND artifact_id < ?))')
+        params.push(input.before.createdAt, input.before.createdAt, input.before.artifactId)
+      }
+      const order = input.order === 'desc' ? 'DESC' : 'ASC'
+      const limit = input.limit === undefined ? '' : ' LIMIT ?'
+      if (input.limit !== undefined) params.push(input.limit)
+      const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : ''
       return (this.db.prepare(
-        'SELECT * FROM gateway_artifacts ORDER BY created_at ASC, artifact_id ASC',
-      ).all() as unknown[]).map(artifactFromRow)
+        `SELECT * FROM gateway_artifacts${where}
+         ORDER BY created_at ${order}, artifact_id ${order}${limit}`,
+      ).all(...params) as unknown[]).map(artifactFromRow)
     },
   }
 

@@ -1,5 +1,9 @@
 import { useState } from 'react'
-import type { ConsoleGatewayRunEvent, ConsoleGatewayUsageLedgerEntry } from 'mainspring/gateway'
+import type {
+  ConsoleGatewayArtifact,
+  ConsoleGatewayRunEvent,
+  ConsoleGatewayUsageLedgerEntry,
+} from 'mainspring/gateway'
 import type {
   OperatorApprovalRow,
   OperatorConsoleViewModel,
@@ -650,6 +654,76 @@ export function UsageScreen({
   )
 }
 
+export function ArtifactsScreen({
+  artifacts = [],
+  error,
+  hasMore = false,
+  loading = false,
+  onLoadMore,
+}: {
+  artifacts?: ConsoleGatewayArtifact[]
+  error?: string
+  hasMore?: boolean
+  loading?: boolean
+  onLoadMore?: () => void
+}) {
+  return (
+    <section className="control-screen artifacts-screen" aria-labelledby="artifacts-title">
+      <header className="control-screen-header">
+        <div>
+          <p className="control-kicker">Durable outcomes</p>
+          <h1 id="artifacts-title">Artifacts</h1>
+          <p>Browser-safe artifact inventory. Files remain available only through the gateway browser-access route.</p>
+        </div>
+        <div className="control-header-stat">
+          <strong>{artifacts.length}</strong>
+          <span>visible artifacts</span>
+        </div>
+      </header>
+
+      <section className="control-panel control-history-panel">
+        <PanelHeader title="Recent artifacts" meta={loading ? 'loading' : `${artifacts.length} visible`} />
+        {error ? <InlineError message={error} /> : null}
+        {loading && artifacts.length === 0 ? (
+          <div className="control-skeleton-list" role="status" aria-label="Loading artifact history">
+            <span /><span /><span />
+          </div>
+        ) : artifacts.length === 0 ? (
+          <CompactEmptyState title="No artifacts recorded" detail="Run outputs that become indexed artifacts will appear here." />
+        ) : (
+          <div className="control-row-list">
+            {artifacts.map((artifact) => (
+              <div className="control-data-row static" key={artifact.artifactId}>
+                <StatusDot status="completed" />
+                <span>
+                  <strong>{artifact.label ?? artifact.kind}</strong>
+                  <small>
+                    {artifact.kind} | {artifact.mediaType ?? 'Unspecified media'} | {formatBytes(artifact.sizeBytes)}
+                  </small>
+                </span>
+                <span className="control-row-meta">
+                  <strong>{shortId(artifact.runId)}</strong>
+                  <small>{formatDateTime(artifact.createdAt)}</small>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {hasMore ? (
+          <button
+            className="simple-secondary control-run-load-more"
+            disabled={loading}
+            type="button"
+            onClick={onLoadMore}
+          >
+            {loading ? 'Loading artifacts...' : 'Load more artifacts'}
+          </button>
+        ) : null}
+      </section>
+    </section>
+  )
+}
+
 function ApprovalCard({
   approval,
   actionBusy,
@@ -849,6 +923,13 @@ function formatMoney(value: number): string {
 
 function formatTokens(value: number): string {
   return new Intl.NumberFormat('en-US', { notation: value >= 10_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value)
+}
+
+function formatBytes(value?: number): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 'Size unavailable'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function formatDateTime(value?: string): string {

@@ -324,6 +324,7 @@ body {
 .control-activity-nav {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   margin: 0 0 18px;
   padding: 4px;

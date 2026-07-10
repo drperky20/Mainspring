@@ -126,6 +126,15 @@ async function main() {
     assert(artifactSummary.kind?.includes('[redacted]'), 'artifact snapshot kind was not redacted')
     assertNoBrowserLeak('artifact snapshot response', artifactSnapshot, [root.replaceAll('\\', '\\\\')])
 
+    const artifactHistory = await requestJson(`${started.url}/artifact-history?limit=1`)
+    assert(
+      artifactHistory.artifacts?.[0]?.artifactId === 'artifact_browser_surface',
+      'artifact history did not include artifact row',
+    )
+    assert(artifactHistory.artifacts?.[0]?.path === undefined, 'artifact history exposed artifact path')
+    assert(artifactHistory.artifacts?.[0]?.metadata === undefined, 'artifact history exposed artifact metadata')
+    assertNoBrowserLeak('artifact history response', artifactHistory, [root.replaceAll('\\', '\\\\')])
+
     const artifactAccess = await requestJson(`${started.url}/auth/browser-access`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
