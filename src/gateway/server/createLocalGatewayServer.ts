@@ -109,6 +109,32 @@ type BrowserAccessTicket = {
 
 const BROWSER_ACCESS_TICKET_TTL_MS = 1000 * 60 * 5
 const LOCAL_BROWSER_ORIGIN_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
+export const MAX_GATEWAY_JSON_BODY_BYTES = 1024 * 1024
+
+export async function readBoundedGatewayJson(
+  request: AsyncIterable<Buffer | Uint8Array | string> & { headers?: IncomingMessage['headers'] },
+  maxBytes = MAX_GATEWAY_JSON_BODY_BYTES,
+): Promise<unknown> {
+  const declaredLength = request.headers?.['content-length']
+  const declaredBytes = typeof declaredLength === 'string' ? Number.parseInt(declaredLength, 10) : NaN
+  if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+    throw new GatewayHttpError(413, `JSON request body exceeds ${maxBytes} bytes.`)
+  }
+
+  const chunks: Buffer[] = []
+  let totalBytes = 0
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    totalBytes += buffer.byteLength
+    if (totalBytes > maxBytes) {
+      throw new GatewayHttpError(413, `JSON request body exceeds ${maxBytes} bytes.`)
+    }
+    chunks.push(buffer)
+  }
+  const raw = Buffer.concat(chunks).toString('utf8').trim()
+  if (!raw) return {}
+  return JSON.parse(raw)
+}
 
 function normalizedBrowserOrigin(origin: string | undefined): string | null {
   if (!origin) return null
@@ -1247,13 +1273,7 @@ export class LocalGatewayHttpServer {
   }
 
   private async readJson(request: IncomingMessage): Promise<unknown> {
-    const chunks: Buffer[] = []
-    for await (const chunk of request) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-    }
-    const raw = Buffer.concat(chunks).toString('utf8').trim()
-    if (!raw) return {}
-    return JSON.parse(raw)
+    return await readBoundedGatewayJson(request)
   }
 
   private applyCors(request: IncomingMessage, response: ServerResponse): boolean {
