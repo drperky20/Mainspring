@@ -73,4 +73,37 @@ test.describe('operator console', () => {
     await expect(page.getByRole('heading', { name: 'Local gateway unavailable' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Retry connection' })).toBeVisible()
   })
+
+  test('keeps Activity and dialog controls usable at a narrow viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await finishFirstRun(page)
+
+    await page.getByRole('button', { name: 'Activity', exact: true }).click()
+    const activityNavigation = page.getByRole('navigation', { name: 'Activity views' })
+    for (const name of ['Runs', 'Approvals', 'Usage', 'Artifacts', 'Audit', 'Memory']) {
+      await expect(activityNavigation.getByRole('button', { name, exact: true })).toBeVisible()
+    }
+    await expect.poll(() => page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    )).toBe(false)
+
+    await page.getByRole('button', { name: 'Memory', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Memory', exact: true })).toBeVisible()
+
+    await page.getByRole('button', { name: 'Workspaces', exact: true }).click()
+    const opener = page.getByRole('button', { name: 'New client', exact: true })
+    await opener.click()
+    const dialog = page.getByRole('dialog', { name: 'Add new client' })
+    const close = dialog.getByRole('button', { name: 'Close' })
+    await expect(close).toBeFocused()
+
+    await page.keyboard.press('Shift+Tab')
+    await expect.poll(() => page.evaluate(
+      () => Boolean(document.activeElement?.closest('[role="dialog"]')),
+    )).toBe(true)
+
+    await page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+    await expect(opener).toBeFocused()
+  })
 })

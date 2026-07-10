@@ -129,9 +129,10 @@ row and executable regression or an explicit limitation.
 
 The shared dialog now has a labelled focus target, local Tab cycling, Escape
 dismissal, and opener-focus restoration; narrow client tabs form a two-column
-grid at phone widths, verified against a temporary 390px browser session.
-Permanent regression coverage for broader keyboard navigation and status
-announcements remains a P2 follow-up after the shell is decomposed further.
+grid at phone widths. The console E2E suite now verifies 390px Activity
+navigation (including Memory), no document overflow, and dialog focus return.
+Broader status-announcement coverage remains a P2 follow-up after the shell is
+decomposed further.
 
 ## External comparison matrix
 
