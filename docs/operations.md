@@ -49,8 +49,9 @@ It runs `optional-verifiers:check` so optional verifier prerequisite diagnostics
 
 `benchmark:overhaul` builds the package and runs deterministic local fixtures
 for bounded RunLog concurrency plus fresh, cached, conditionally revalidated
-console snapshots and the cursor-paginated canonical RunLog activity endpoint.
-It records comparative evidence only; do not turn its timings into a
+console snapshots, cold and warm cursor-paginated compatibility activity,
+canonical RunLog activity, approval history, and a public-only RunLog trace
+page. It records comparative evidence only; do not turn its timings into a
 cross-machine CI threshold or a claim about live provider latency.
 
 ## Focused Checks

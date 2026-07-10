@@ -84,6 +84,10 @@ export type GatewaySnapshotRefresh =
       etag?: string
     }
 
+export type GatewayApprovalHistoryItem = ConsoleGatewaySnapshot['approvalMetadata'][number] & {
+  source: 'compatibility' | 'runlog'
+}
+
 export interface LocalGatewayClient {
   health(input?: { signal?: AbortSignal }): Promise<{
     mode: string
@@ -488,6 +492,15 @@ export interface LocalGatewayClient {
     sessionId: string
     cancelled: true
   }>
+  compatibilityRuns(input?: {
+    sessionId?: string
+    cursor?: string
+    limit?: number
+    signal?: AbortSignal
+  }): Promise<{
+    runs: ConsoleGatewaySnapshot['runs']
+    nextCursor?: string
+  }>
   runLogRuns(input?: {
     sessionId?: string
     cursor?: string
@@ -495,6 +508,26 @@ export interface LocalGatewayClient {
     signal?: AbortSignal
   }): Promise<{
     runs: ConsoleGatewayRunLogRun[]
+    nextCursor?: string
+  }>
+  runLogTrace(input: {
+    runId: string
+    cursor?: string
+    limit?: number
+    signal?: AbortSignal
+  }): Promise<{
+    runId: string
+    sessionId: string
+    events: ConsoleGatewayRunEvent[]
+    nextCursor?: string
+  }>
+  approvalHistory(input?: {
+    status?: 'pending' | 'approved' | 'denied' | 'cancelled'
+    cursor?: string
+    limit?: number
+    signal?: AbortSignal
+  }): Promise<{
+    approvals: GatewayApprovalHistoryItem[]
     nextCursor?: string
   }>
   runEvents(input: { sessionId: string; runId: string }): Promise<{ events: ConsoleGatewayRunEvent[] }>
@@ -798,9 +831,35 @@ export function createLocalGatewayClient(
         headers: { 'content-type': 'application/json', ...authHeaders() },
         body: JSON.stringify(input),
       }),
+    compatibilityRuns: (input = {}) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/compatibility/runs${queryString({
+        sessionId: input.sessionId,
+        cursor: input.cursor,
+        limit: input.limit === undefined ? undefined : String(input.limit),
+      })}`, {
+        headers: authHeaders(),
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
     runLogRuns: (input = {}) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/runlog/runs${queryString({
         sessionId: input.sessionId,
+        cursor: input.cursor,
+        limit: input.limit === undefined ? undefined : String(input.limit),
+      })}`, {
+        headers: authHeaders(),
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    runLogTrace: (input) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/runlog/runs/${encodeURIComponent(input.runId)}/trace${queryString({
+        cursor: input.cursor,
+        limit: input.limit === undefined ? undefined : String(input.limit),
+      })}`, {
+        headers: authHeaders(),
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    approvalHistory: (input = {}) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/approval-history${queryString({
+        status: input.status,
         cursor: input.cursor,
         limit: input.limit === undefined ? undefined : String(input.limit),
       })}`, {

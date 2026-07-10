@@ -156,6 +156,69 @@ describe('LocalMainspringGateway', () => {
     }
   })
 
+  it('reuses only page-scoped compatibility projections without consulting the broad snapshot revision', () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-compatibility-page-cache-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+    })
+    const session = mainspring.sessions.create({
+      sessionId: 'gateway-compatibility-page-cache-session',
+      workspace: { root: workspaceRoot },
+    })
+    appState.runs.upsert({
+      runId: 'run_compatibility_page_cache',
+      sessionId: session.record.sessionId,
+    })
+    const unrelatedSession = mainspring.sessions.create({
+      sessionId: 'gateway-compatibility-page-cache-unrelated',
+      workspace: { root: path.join(workspaceRoot, 'unrelated') },
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })
+    const internalGateway = gateway as unknown as {
+      listRuns: (sessionId: string) => unknown[]
+    }
+    const listRuns = vi.spyOn(internalGateway, 'listRuns')
+    const snapshotRevision = vi.spyOn(gateway, 'snapshotRevision')
+
+    try {
+      expect(gateway.compatibilityRuns.listPage()).toMatchObject({
+        runs: [expect.objectContaining({ runId: 'run_compatibility_page_cache' })],
+      })
+      expect(gateway.compatibilityRuns.listPage()).toMatchObject({
+        runs: [expect.objectContaining({ runId: 'run_compatibility_page_cache' })],
+      })
+      expect(listRuns).toHaveBeenCalledTimes(1)
+      expect(snapshotRevision).not.toHaveBeenCalled()
+
+      MainspringMailbox.fromSessionPath(unrelatedSession.record.sessionPath).writeEvent(
+        { type: 'run.status', runId: 'run_unrelated', status: 'completed' },
+        unrelatedSession.record.sessionId,
+      )
+      expect(gateway.compatibilityRuns.listPage()).toMatchObject({
+        runs: [expect.objectContaining({ runId: 'run_compatibility_page_cache' })],
+      })
+      expect(listRuns).toHaveBeenCalledTimes(1)
+
+      MainspringMailbox.fromSessionPath(session.record.sessionPath).writeEvent(
+        { type: 'run.status', runId: 'run_compatibility_page_cache', status: 'completed' },
+        session.record.sessionId,
+      )
+      expect(gateway.compatibilityRuns.listPage()).toMatchObject({
+        runs: [expect.objectContaining({ runId: 'run_compatibility_page_cache', status: 'completed' })],
+      })
+      expect(listRuns).toHaveBeenCalledTimes(2)
+    } finally {
+      appState.close()
+    }
+  })
+
   it('creates a workspace-linked runtime session for gateway-created clients', () => {
     const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
       'mainspring-gateway-client-session-',

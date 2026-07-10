@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import {
   MainspringEventSchema,
   GatewayRunDispatchSchema,
@@ -51,10 +52,21 @@ export interface RecoverStaleProcessingAcksOptions {
 }
 
 const DEFAULT_STALE_PROCESSING_ACK_MS = 15 * 60 * 1000
+const MAX_TRACKED_SESSION_MUTATION_REVISIONS = 256
 let mailboxChangeRevision = 0
+const mailboxChangeRevisionBySessionPath = new Map<string, number>()
 
-function recordMailboxMutation(): void {
+function recordMailboxMutation(sessionPath: string): void {
   mailboxChangeRevision += 1
+  const normalizedSessionPath = path.resolve(sessionPath)
+  // Refresh insertion order so active sessions remain in the bounded index.
+  mailboxChangeRevisionBySessionPath.delete(normalizedSessionPath)
+  mailboxChangeRevisionBySessionPath.set(normalizedSessionPath, mailboxChangeRevision)
+  while (mailboxChangeRevisionBySessionPath.size > MAX_TRACKED_SESSION_MUTATION_REVISIONS) {
+    const oldestSessionPath = mailboxChangeRevisionBySessionPath.keys().next().value
+    if (!oldestSessionPath) break
+    mailboxChangeRevisionBySessionPath.delete(oldestSessionPath)
+  }
 }
 
 function redactRuntimeProviderSessionIds(value: unknown): unknown {
@@ -115,6 +127,16 @@ export class MainspringMailbox {
    */
   static changeRevision(): number {
     return mailboxChangeRevision
+  }
+
+  /**
+   * Most gateway caches only need to invalidate the session whose mailbox
+   * changed. The bounded index complements the global revision used by broad
+   * snapshot revalidation; an evicted entry simply falls back to the external
+   * file/WAL probe rather than making a freshness claim.
+   */
+  static changeRevisionForSessionPath(sessionPath: string): number | undefined {
+    return mailboxChangeRevisionBySessionPath.get(path.resolve(sessionPath))
   }
 
   ensureRunnerOwnedStores(): void {
@@ -192,7 +214,7 @@ export class MainspringMailbox {
         )
         .run(messageId, status, mailboxNowIso(), error ? redactRuntimeSensitiveText(error) : null),
     )
-    recordMailboxMutation()
+    recordMailboxMutation(this.paths.sessionPath)
   }
 
   recoverStaleProcessingAcks(options: RecoverStaleProcessingAcksOptions = {}): number {
@@ -236,7 +258,7 @@ export class MainspringMailbox {
       transaction(staleMessageIds)
       return staleMessageIds.length
     })
-    if (recovered > 0) recordMailboxMutation()
+    if (recovered > 0) recordMailboxMutation(this.paths.sessionPath)
     return recovered
   }
 
@@ -260,7 +282,7 @@ export class MainspringMailbox {
         )
         .run(id, row.runId, row.sessionId, row.inReplyTo ?? null, mailboxNowIso(), kind, content),
     )
-    recordMailboxMutation()
+    recordMailboxMutation(this.paths.sessionPath)
     return id
   }
 
@@ -366,7 +388,7 @@ export class MainspringMailbox {
         .run(runId, sessionId, parsed.type, mailboxNowIso(), JSON.stringify(parsed))
       return Number(result.lastInsertRowid)
     })
-    recordMailboxMutation()
+    recordMailboxMutation(this.paths.sessionPath)
     return sequence
   }
 
@@ -484,7 +506,7 @@ export class MainspringMailbox {
         )
         .run(id, row.runId, row.sessionId, row.kind, mailboxNowIso(), row.content),
     )
-    recordMailboxMutation()
+    recordMailboxMutation(this.paths.sessionPath)
     return id
   }
 

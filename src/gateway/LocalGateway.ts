@@ -126,6 +126,7 @@ import type {
   LocalGatewayDeploymentRunRecord,
   LocalGatewayDeploymentTargetRecord,
   LocalGatewayProviderProfileRecord,
+  LocalGatewayRunListCursor,
   LocalGatewayRunMetadataRecord,
   LocalGatewayToolCallRecord,
   UpdateLocalGatewayCronScheduleInput,
@@ -304,6 +305,11 @@ export interface LocalGatewayRunProjection {
   providerTransport?: string
   providerSessionId?: string
   runtimeProfile?: MainspringRuntimeProfile
+}
+
+export interface LocalGatewayCompatibilityRunPage {
+  runs: LocalGatewayRunProjection[]
+  nextCursor?: LocalGatewayRunListCursor
 }
 
 export type LocalGatewayStartRunInput = StartRunInput & {
@@ -785,6 +791,28 @@ function projectionFromDispatch(
   }
 }
 
+function compatibilityRunProjectionFromMetadata(
+  record: LocalGatewayRunMetadataRecord,
+): LocalGatewayRunProjection {
+  return {
+    runId: record.runId,
+    sessionId: record.sessionId,
+    status: 'queued',
+    createdAt: record.createdAt,
+    lastEventAt: record.updatedAt,
+    eventCount: 0,
+    pendingInboundCount: 0,
+    ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+    ...(record.agentId ? { agentId: record.agentId } : {}),
+    ...(record.providerProfileId ? { providerProfileId: record.providerProfileId } : {}),
+    ...(record.providerId ? { providerId: record.providerId } : {}),
+    ...(record.modelId ? { modelId: record.modelId } : {}),
+    ...(record.runtimeProfile
+      ? { runtimeProfile: record.runtimeProfile as MainspringRuntimeProfile }
+      : {}),
+  }
+}
+
 function mergeRunProjection(
   existing: LocalGatewayRunProjection | undefined,
   incoming: LocalGatewayRunProjection,
@@ -978,15 +1006,20 @@ function artifactPathFromId(rootPath: string, artifactId: string): string | null
 }
 
 const COMPATIBILITY_MAILBOX_REVISION_PROBE_MS = 30_000
+const MAX_COMPATIBILITY_RUN_PAGE_CACHED_SESSIONS = 64
 
-function mailboxFileRevision(session: MainspringSessionRecord): string {
-  const paths = MainspringMailbox.fromSessionPath(session.sessionPath).paths
+function mailboxPathRevision(sessionPath: string): string {
+  const paths = MainspringMailbox.fromSessionPath(sessionPath).paths
   return [paths.inboundDbPath, paths.outboundDbPath, paths.eventsDbPath]
     // Legacy writers can commit to SQLite's WAL without checkpointing the
     // main database file. Probe both so an external compatibility writer is
     // visible to the bounded revision check.
     .flatMap((filePath) => [fileRevision(filePath), fileRevision(`${filePath}-wal`)])
     .join('|')
+}
+
+function mailboxFileRevision(session: MainspringSessionRecord): string {
+  return mailboxPathRevision(session.sessionPath)
 }
 
 function fileRevision(filePath: string): string {
@@ -1089,6 +1122,22 @@ type LocalGatewaySnapshotReadCache = {
   runMetadataBySessionId: Map<string, Map<string, LocalGatewayRunMetadataRecord>>
 }
 
+type LocalGatewayCompatibilityRunPageCacheEntry = {
+  sessionPath?: string
+  sessionCheckedAtMs: number
+  mailboxChangeRevision?: number
+  mailboxRevision?: {
+    checkedAtMs: number
+    fingerprint: string
+  }
+  runs: Map<string, LocalGatewayRunProjection>
+}
+
+type LocalGatewayCompatibilityRunPageCache = {
+  appStateRevision: number
+  bySessionId: Map<string, LocalGatewayCompatibilityRunPageCacheEntry>
+}
+
 /**
  * In-process Local Gateway boundary over the SDK/runtime package.
  *
@@ -1114,6 +1163,7 @@ export class LocalMainspringGateway {
   private readonly budgetEvaluationStateById = new Map<string, LocalGatewayBudgetEvaluation['status']>()
   private readonly hyperCells?: HyperCellScheduler
   private compatibilityMailboxRevision?: { checkedAtMs: number; fingerprint: string }
+  private compatibilityRunPageCache?: LocalGatewayCompatibilityRunPageCache
   private snapshotReadCache?: LocalGatewaySnapshotReadCache
   private cronTimer: NodeJS.Timeout | null = null
   private cronLastTickAt?: string
@@ -1350,6 +1400,14 @@ export class LocalMainspringGateway {
     },
   }
 
+  readonly compatibilityRuns = {
+    listPage: (input: {
+      sessionId?: string
+      before?: LocalGatewayRunListCursor
+      limit?: number
+    } = {}): LocalGatewayCompatibilityRunPage => this.listCompatibilityRunPage(input),
+  }
+
   readonly events = {
     list: (input: LocalGatewayEventListInput): RunEvent[] =>
       this.runtime.storage.eventStore.listRunEvents(input),
@@ -1444,10 +1502,18 @@ export class LocalMainspringGateway {
       },
       list: (input?: Parameters<RunLogMainspring['runs']['list']>[0]): RunLogRunRecord[] =>
         this.requireRunLogRuntime().runs.list(input),
+      get: (runId: string): RunLogRunRecord | null => this.requireRunLogRuntime().store.getRun(runId),
       project: (runId: string): RunLogRunProjection => this.requireRunLogRuntime().project(runId),
       projectSummary: (runId: string, limit?: number): LocalGatewayRunLogRunProjection =>
         projectLocalRunLogRun(this.requireRunLogRuntime().project(runId, limit)),
-      events: (input: { runId: string; afterSeq?: number; limit?: number }): RunLogEvent[] =>
+      events: (input: {
+        runId: string
+        afterSeq?: number
+        beforeSeq?: number
+        order?: 'asc' | 'desc'
+        visibility?: RunLogEvent['visibility'] | RunLogEvent['visibility'][]
+        limit?: number
+      }): RunLogEvent[] =>
         this.requireRunLogRuntime().store.listEvents(input),
       cancel: (runId: string, reason?: string): RunLogRunRecord =>
         this.requireRunLogRuntime().runs.cancel(runId, reason),
@@ -1467,6 +1533,8 @@ export class LocalMainspringGateway {
     },
     workerStatus: (): LocalGatewayRunLogWorkerStatus => this.runLogWorkerStatus(),
     approvals: {
+      list: (input?: Parameters<RunLogMainspring['store']['listApprovalRequests']>[0]) =>
+        this.requireRunLogRuntime().store.listApprovalRequests(input),
       approve: async (input: LocalGatewayApprovalResponseInput): Promise<RunLogRunProjection> => {
         const runtime = this.requireRunLogRuntime()
         runtime.approvals.approve({
@@ -1879,6 +1947,149 @@ export class LocalMainspringGateway {
     return [...byRunId.values()].sort((left, right) =>
       (left.createdAt ?? '').localeCompare(right.createdAt ?? ''),
     )
+  }
+
+  /**
+   * Bounded compatibility history reader. RunLog rows are deliberately
+   * excluded here: canonical RunLog activity has its own projected endpoint,
+   * while this reader only touches the sessions represented in one metadata
+   * page instead of iterating every local mailbox.
+   */
+  private listCompatibilityRunPage(input: {
+    sessionId?: string
+    before?: LocalGatewayRunListCursor
+    limit?: number
+  }): LocalGatewayCompatibilityRunPage {
+    const appState = this.appState
+    if (!appState) return { runs: [] }
+    const limit = Math.min(Math.max(Math.floor(input.limit ?? 25), 1), 100)
+    const sourceLimit = limit * 3 + 1
+    const candidates = appState.runs.list({
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.before ? { before: input.before } : {}),
+      limit: sourceLimit,
+      order: 'desc',
+    })
+    const compatibility = candidates.filter((record) => {
+      const metadata = record.metadata && typeof record.metadata === 'object'
+        ? record.metadata as Record<string, unknown>
+        : undefined
+      return metadata?.runtime !== 'runlog'
+    })
+    const pageRecords = compatibility.slice(0, limit)
+    const cache = this.compatibilityRunPageCacheForCurrentRevision()
+    const runs = pageRecords.map((record) => {
+      const sessionRuns = this.compatibilityRunProjectionsForSession(record.sessionId, cache)
+      return sessionRuns.get(record.runId) ?? compatibilityRunProjectionFromMetadata(record)
+    })
+    const cursorRecord = pageRecords.at(-1) ?? candidates.at(-1)
+    const hasMore = compatibility.length > limit || candidates.length === sourceLimit
+    return {
+      runs,
+      ...(hasMore && cursorRecord
+        ? { nextCursor: { createdAt: cursorRecord.createdAt, runId: cursorRecord.runId } }
+        : {}),
+    }
+  }
+
+  /**
+   * The page reader must not call `snapshotRevision()`: that token intentionally
+   * observes every session and RunLog record for the full console snapshot.
+   * Here app-state writes invalidate the small page cache. In-process mailbox
+   * changes are narrowed to the affected cached session below, while legacy
+   * external writers are checked only for a cached session at the bounded
+   * probe interval.
+   */
+  private compatibilityRunPageCacheForCurrentRevision(): LocalGatewayCompatibilityRunPageCache {
+    const appStateRevision = this.appState?.revision() ?? 0
+    const existing = this.compatibilityRunPageCache
+    if (existing && existing.appStateRevision === appStateRevision) {
+      return existing
+    }
+    const cache: LocalGatewayCompatibilityRunPageCache = {
+      appStateRevision,
+      bySessionId: new Map(),
+    }
+    this.compatibilityRunPageCache = cache
+    return cache
+  }
+
+  private compatibilityRunProjectionsForSession(
+    sessionId: string,
+    cache: LocalGatewayCompatibilityRunPageCache,
+  ): Map<string, LocalGatewayRunProjection> {
+    const existing = cache.bySessionId.get(sessionId)
+    const now = Date.now()
+    const cachedMailboxChangeRevision = existing?.sessionPath
+      ? MainspringMailbox.changeRevisionForSessionPath(existing.sessionPath)
+      : undefined
+    const mailboxChanged = Boolean(
+      existing
+      && cachedMailboxChangeRevision !== undefined
+      && cachedMailboxChangeRevision !== existing.mailboxChangeRevision,
+    )
+    const sessionRefreshDue = !existing
+      || now - existing.sessionCheckedAtMs >= COMPATIBILITY_MAILBOX_REVISION_PROBE_MS
+    if (existing && !mailboxChanged && !sessionRefreshDue) return existing.runs
+
+    // Fetch session storage only on cache construction, a session-local
+    // mutation, or the bounded external-writer probe. The usual hot path uses
+    // only app-state metadata and the cached session path above.
+    const knownSession = this.runtime.storage.stateStore.getSession(sessionId) ?? undefined
+    const sessionPath = knownSession?.sessionPath
+    const mailboxChangeRevision = sessionPath
+      ? MainspringMailbox.changeRevisionForSessionPath(sessionPath)
+      : undefined
+    const mailboxRevision = sessionPath
+      ? this.compatibilityMailboxRevisionForSessionPath(
+          sessionPath,
+          existing?.sessionPath === sessionPath ? existing.mailboxRevision : undefined,
+          now,
+        )
+      : undefined
+    const stale = !existing
+      || existing.sessionPath !== sessionPath
+      || (
+        mailboxChangeRevision !== undefined
+        && mailboxChangeRevision !== existing.mailboxChangeRevision
+      )
+      || existing.mailboxRevision?.fingerprint !== mailboxRevision?.fingerprint
+    if (!stale) {
+      existing.sessionCheckedAtMs = now
+      if (mailboxRevision) existing.mailboxRevision = mailboxRevision
+      return existing.runs
+    }
+
+    const entry: LocalGatewayCompatibilityRunPageCacheEntry = {
+      ...(sessionPath ? { sessionPath } : {}),
+      sessionCheckedAtMs: now,
+      ...(mailboxChangeRevision !== undefined ? { mailboxChangeRevision } : {}),
+      ...(mailboxRevision ? { mailboxRevision } : {}),
+      runs: new Map(
+        this.listRuns(sessionId, knownSession).map((run) => [run.runId, run] as const),
+      ),
+    }
+    cache.bySessionId.set(sessionId, entry)
+    while (cache.bySessionId.size > MAX_COMPATIBILITY_RUN_PAGE_CACHED_SESSIONS) {
+      const oldestSessionId = cache.bySessionId.keys().next().value
+      if (!oldestSessionId) break
+      cache.bySessionId.delete(oldestSessionId)
+    }
+    return entry.runs
+  }
+
+  private compatibilityMailboxRevisionForSessionPath(
+    sessionPath: string,
+    cached: LocalGatewayCompatibilityRunPageCacheEntry['mailboxRevision'],
+    now = Date.now(),
+  ): NonNullable<LocalGatewayCompatibilityRunPageCacheEntry['mailboxRevision']> {
+    if (cached && now - cached.checkedAtMs < COMPATIBILITY_MAILBOX_REVISION_PROBE_MS) {
+      return cached
+    }
+    return {
+      checkedAtMs: now,
+      fingerprint: mailboxPathRevision(sessionPath),
+    }
   }
 
   private pendingRunProjections(session: MainspringSessionRecord): LocalGatewayRunProjection[] {

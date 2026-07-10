@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { URL } from 'node:url'
 import {
   consoleAgent,
+  consoleApprovalMetadata,
   consoleBudget,
   consoleBudgetStatus,
   consoleCellStatus,
@@ -18,6 +19,7 @@ import {
   consoleMarketplaceTemplate,
   consoleProvenanceReview,
   consoleProviderProfile,
+  consoleRun,
   consoleRunEvent,
   consoleRunDispatch,
   consoleRunLogRun,
@@ -123,12 +125,39 @@ type BrowserAccessTicket = {
   expiresAtMs: number
 }
 
+type ApprovalHistoryStatus = 'pending' | 'approved' | 'denied' | 'cancelled'
+
+type ApprovalHistoryCursor = {
+  requestedAt: string
+  approvalId: string
+}
+
+type ApprovalHistoryRow = {
+  approvalId: string
+  runId: string
+  sessionId: string
+  workspaceId?: string
+  agentId?: string
+  status: string
+  requestedAt: string
+  resolvedAt?: string
+  targetKey?: string
+  source: 'compatibility' | 'runlog'
+}
+
 const BROWSER_ACCESS_TICKET_TTL_MS = 1000 * 60 * 5
 const LOCAL_BROWSER_ORIGIN_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 export const MAX_GATEWAY_JSON_BODY_BYTES = 1024 * 1024
 const DEFAULT_RUNLOG_ACTIVITY_PAGE_LIMIT = 25
 const MAX_RUNLOG_ACTIVITY_PAGE_LIMIT = 100
 const RUNLOG_ACTIVITY_EVENT_TAIL = 64
+const DEFAULT_RUNLOG_TRACE_PAGE_LIMIT = 80
+const MAX_RUNLOG_TRACE_PAGE_LIMIT = 200
+const DEFAULT_APPROVAL_HISTORY_PAGE_LIMIT = 25
+const MAX_APPROVAL_HISTORY_PAGE_LIMIT = 100
+const APPROVAL_HISTORY_SOURCE_FETCH_MULTIPLIER = 3
+const DEFAULT_COMPATIBILITY_RUN_PAGE_LIMIT = 25
+const MAX_COMPATIBILITY_RUN_PAGE_LIMIT = 100
 
 export async function readBoundedGatewayJson(
   request: AsyncIterable<Buffer | Uint8Array | string> & { headers?: IncomingMessage['headers'] },
@@ -493,6 +522,11 @@ export class LocalGatewayHttpServer {
       if (request.method === 'GET' && path === '/approvals') {
         const snapshot = gatewaySnapshotToConsoleState(this.options.gateway.snapshot())
         this.writeJson(response, 200, { approvals: snapshot.approvals })
+        return
+      }
+
+      if (request.method === 'GET' && path === '/approval-history') {
+        this.writeApprovalHistoryPage(response, url)
         return
       }
 
@@ -909,6 +943,17 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'GET' && path === '/runlog/runs') {
         this.writeRunLogActivityPage(response, url)
+        return
+      }
+
+      if (request.method === 'GET' && path === '/compatibility/runs') {
+        this.writeCompatibilityRunPage(response, url)
+        return
+      }
+
+      if (request.method === 'GET' && path.startsWith('/runlog/runs/') && path.endsWith('/trace')) {
+        const runId = decodeURIComponent(path.slice('/runlog/runs/'.length, -'/trace'.length))
+        this.writeRunLogTracePage(response, url, runId)
         return
       }
 
@@ -1532,6 +1577,127 @@ export class LocalGatewayHttpServer {
     }))
   }
 
+  /**
+   * Cursor-paginated compatibility history. It queries only metadata-backed
+   * compatibility rows and the sessions represented by this page; RunLog rows
+   * remain on their canonical activity route.
+   */
+  private writeCompatibilityRunPage(response: ServerResponse, url: URL): void {
+    if (!this.options.gateway.appState) {
+      throw new GatewayHttpError(
+        501,
+        'Compatibility run pagination requires the gateway app-state store.',
+      )
+    }
+    const limit = compatibilityRunPageLimit(url.searchParams.get('limit'))
+    const before = parseCompatibilityRunCursor(url.searchParams.get('cursor'))
+    const sessionId = url.searchParams.get('sessionId')?.trim() || undefined
+    const page = this.options.gateway.compatibilityRuns.listPage({
+      ...(sessionId ? { sessionId } : {}),
+      ...(before ? { before } : {}),
+      limit,
+    })
+    this.writeJson(response, 200, sanitizeGatewayResponse({
+      runs: page.runs.map(consoleRun),
+      ...(page.nextCursor ? { nextCursor: encodeCompatibilityRunCursor(page.nextCursor) } : {}),
+    }))
+  }
+
+  /**
+   * Reverse-paginated, public-only RunLog trace. The full projection endpoint
+   * remains available to compatibility callers; the operator console uses
+   * this bounded route so a long trace never requires a broad snapshot or a
+   * full event history transfer.
+   */
+  private writeRunLogTracePage(response: ServerResponse, url: URL, runId: string): void {
+    if (!this.options.gateway.runLog.available()) {
+      throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
+    }
+    const run = this.options.gateway.runLog.runs.get(runId)
+    if (!run) throw new GatewayHttpError(404, `Unknown RunLog run: ${runId}`)
+
+    const limit = runLogTracePageLimit(url.searchParams.get('limit'))
+    const beforeSeq = parseRunLogTraceCursor(url.searchParams.get('cursor'))
+    const records = this.options.gateway.runLog.runs.events({
+      runId,
+      ...(beforeSeq ? { beforeSeq } : {}),
+      order: 'desc',
+      visibility: 'public',
+      limit: limit + 1,
+    })
+    const hasMore = records.length > limit
+    const page = records.slice(0, limit)
+    const oldest = page.at(-1)
+    this.writeJson(response, 200, sanitizeGatewayResponse({
+      sessionId: run.sessionId,
+      runId,
+      events: [...page].reverse().map(runLogEventPublic),
+      ...(hasMore && oldest ? { nextCursor: encodeRunLogTraceCursor(oldest) } : {}),
+    }))
+  }
+
+  /**
+   * Bounded approval history joins compatibility metadata with the canonical
+   * RunLog approval ledger. It intentionally sends only a sanitized summary,
+   * never the receipt snapshot, tool input, workspace path, or signing data.
+   */
+  private writeApprovalHistoryPage(response: ServerResponse, url: URL): void {
+    const appState = this.options.gateway.appState
+    if (!appState) {
+      throw new GatewayHttpError(
+        501,
+        'Approval history pagination requires the gateway app-state store.',
+      )
+    }
+    const limit = approvalHistoryPageLimit(url.searchParams.get('limit'))
+    const before = parseApprovalHistoryCursor(url.searchParams.get('cursor'))
+    const status = parseApprovalHistoryStatus(url.searchParams.get('status'))
+    const sourceLimit = limit * APPROVAL_HISTORY_SOURCE_FETCH_MULTIPLIER + 1
+    const compatibility = appState.approvals.list({
+      ...(status && status !== 'cancelled' ? { status } : {}),
+      ...(before ? { before } : {}),
+      limit: sourceLimit,
+      order: 'desc',
+    }).map((record) => ({
+      ...consoleApprovalMetadata(record),
+      source: 'compatibility' as const,
+    }))
+
+    const runLog = this.options.gateway.runLog.available()
+      ? this.options.gateway.runLog.approvals.list({
+          ...(status ? { status } : {}),
+          ...(before ? { before } : {}),
+          limit: sourceLimit,
+        }).map((record) => ({
+          approvalId: record.approvalId,
+          runId: record.runId,
+          sessionId: record.sessionId,
+          ...(record.agentId ? { agentId: record.agentId } : {}),
+          status: record.status,
+          requestedAt: record.requestedAt,
+          ...(record.decidedAt ? { resolvedAt: record.decidedAt } : {}),
+          ...(record.toolName ? { targetKey: `tool:${record.toolName}` } : {}),
+          source: 'runlog' as const,
+        }))
+      : []
+
+    const merged = new Map<string, ApprovalHistoryRow>()
+    for (const approval of compatibility) merged.set(approval.approvalId, approval)
+    // The RunLog row is canonical when the mirrored compatibility metadata is
+    // also present after a gateway-originated decision.
+    for (const approval of runLog) merged.set(approval.approvalId, approval)
+    const records = [...merged.values()].sort(sortApprovalHistoryNewestFirst)
+    const page = records.slice(0, limit)
+    const last = page.at(-1)
+    const hasMore = records.length > limit
+      || compatibility.length === sourceLimit
+      || runLog.length === sourceLimit
+    this.writeJson(response, 200, sanitizeGatewayResponse({
+      approvals: page,
+      ...(hasMore && last ? { nextCursor: encodeApprovalHistoryCursor(last) } : {}),
+    }))
+  }
+
   private async writeArtifact(
     response: ServerResponse,
     artifactId: string,
@@ -1718,6 +1884,42 @@ function runLogActivityPageLimit(value: string | null): number {
   return parsed
 }
 
+function runLogTracePageLimit(value: string | null): number {
+  if (!value) return DEFAULT_RUNLOG_TRACE_PAGE_LIMIT
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_RUNLOG_TRACE_PAGE_LIMIT) {
+    throw new GatewayHttpError(
+      400,
+      `RunLog trace limit must be an integer from 1 to ${MAX_RUNLOG_TRACE_PAGE_LIMIT}.`,
+    )
+  }
+  return parsed
+}
+
+function approvalHistoryPageLimit(value: string | null): number {
+  if (!value) return DEFAULT_APPROVAL_HISTORY_PAGE_LIMIT
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_APPROVAL_HISTORY_PAGE_LIMIT) {
+    throw new GatewayHttpError(
+      400,
+      `Approval history limit must be an integer from 1 to ${MAX_APPROVAL_HISTORY_PAGE_LIMIT}.`,
+    )
+  }
+  return parsed
+}
+
+function compatibilityRunPageLimit(value: string | null): number {
+  if (!value) return DEFAULT_COMPATIBILITY_RUN_PAGE_LIMIT
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_COMPATIBILITY_RUN_PAGE_LIMIT) {
+    throw new GatewayHttpError(
+      400,
+      `Compatibility run limit must be an integer from 1 to ${MAX_COMPATIBILITY_RUN_PAGE_LIMIT}.`,
+    )
+  }
+  return parsed
+}
+
 function encodeRunLogActivityCursor(run: Pick<RunLogRunRecord, 'createdAt' | 'runId'>): string {
   return Buffer.from(JSON.stringify({ createdAt: run.createdAt, runId: run.runId }), 'utf8')
     .toString('base64url')
@@ -1737,6 +1939,84 @@ function parseRunLogActivityCursor(value: string | null): RunListCursor | undefi
   } catch {
     throw new GatewayHttpError(400, 'RunLog activity cursor is invalid.')
   }
+}
+
+function encodeCompatibilityRunCursor(run: Pick<RunListCursor, 'createdAt' | 'runId'>): string {
+  return Buffer.from(JSON.stringify({ createdAt: run.createdAt, runId: run.runId }), 'utf8')
+    .toString('base64url')
+}
+
+function parseCompatibilityRunCursor(value: string | null): RunListCursor | undefined {
+  if (!value) return undefined
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8')
+    const parsed = JSON.parse(decoded) as Record<string, unknown>
+    const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt.trim() : ''
+    const runId = typeof parsed.runId === 'string' ? parsed.runId.trim() : ''
+    if (!createdAt || !runId || createdAt.length > 64 || runId.length > 160) {
+      throw new Error('invalid cursor fields')
+    }
+    return { createdAt, runId }
+  } catch {
+    throw new GatewayHttpError(400, 'Compatibility run cursor is invalid.')
+  }
+}
+
+function encodeRunLogTraceCursor(event: Pick<RunLogEvent, 'seq'>): string {
+  return Buffer.from(JSON.stringify({ seq: event.seq }), 'utf8').toString('base64url')
+}
+
+function parseRunLogTraceCursor(value: string | null): number | undefined {
+  if (!value) return undefined
+  if (value.length > 128) throw new GatewayHttpError(400, 'RunLog trace cursor is invalid.')
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8')
+    const parsed = JSON.parse(decoded) as Record<string, unknown>
+    const seq = parsed.seq
+    if (!Number.isSafeInteger(seq) || (seq as number) < 1) {
+      throw new Error('invalid cursor sequence')
+    }
+    return seq as number
+  } catch {
+    throw new GatewayHttpError(400, 'RunLog trace cursor is invalid.')
+  }
+}
+
+function encodeApprovalHistoryCursor(approval: Pick<ApprovalHistoryRow, 'requestedAt' | 'approvalId'>): string {
+  return Buffer.from(
+    JSON.stringify({ requestedAt: approval.requestedAt, approvalId: approval.approvalId }),
+    'utf8',
+  ).toString('base64url')
+}
+
+function parseApprovalHistoryCursor(value: string | null): ApprovalHistoryCursor | undefined {
+  if (!value) return undefined
+  if (value.length > 256) throw new GatewayHttpError(400, 'Approval history cursor is invalid.')
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8')
+    const parsed = JSON.parse(decoded) as Record<string, unknown>
+    const requestedAt = typeof parsed.requestedAt === 'string' ? parsed.requestedAt.trim() : ''
+    const approvalId = typeof parsed.approvalId === 'string' ? parsed.approvalId.trim() : ''
+    if (!requestedAt || !approvalId || requestedAt.length > 64 || approvalId.length > 160) {
+      throw new Error('invalid approval history cursor')
+    }
+    return { requestedAt, approvalId }
+  } catch {
+    throw new GatewayHttpError(400, 'Approval history cursor is invalid.')
+  }
+}
+
+function parseApprovalHistoryStatus(value: string | null): ApprovalHistoryStatus | undefined {
+  if (!value) return undefined
+  if (value === 'pending' || value === 'approved' || value === 'denied' || value === 'cancelled') {
+    return value
+  }
+  throw new GatewayHttpError(400, 'Approval history status is invalid.')
+}
+
+function sortApprovalHistoryNewestFirst(left: ApprovalHistoryRow, right: ApprovalHistoryRow): number {
+  return right.requestedAt.localeCompare(left.requestedAt)
+    || right.approvalId.localeCompare(left.approvalId)
 }
 
 function openRouterCatalogModel(value: unknown): OpenRouterCatalogModel | undefined {

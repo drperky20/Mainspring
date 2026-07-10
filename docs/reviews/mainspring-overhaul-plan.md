@@ -21,8 +21,8 @@ items are complete. Status is updated only after code and verification land.
 | P1 | Conditional `/snapshot` transport with deterministic ETag and browser-safe client handling. | Complete | Server-only revision-cache/health tests, browser-safe client tests, 20-sample cached/304 benchmark. |
 | P1 | Extract visibility-aware, abortable, non-overlapping gateway refresh lifecycle from the connected console. | Complete | `useGatewaySnapshot`, delay/backoff tests, console type/build, and Playwright workflow. |
 | P1 | Add bounded, configurable RunLog worker concurrency without weakening claims, heartbeats, cancellation, or retry behavior. | Complete | Worker saturation and workspace/cancellation tests plus deterministic 3.65x independent-run benchmark. |
-| P1 | Split the connected console shell along stable feature/view-model boundaries. | In progress | `ConsoleNavigation` and `useConsoleRunActivity` are extracted with helper tests; larger client/setup view extraction remains. |
-| P1 | Introduce bounded/paginated advanced gateway read models after console callers are incremental. | In progress | `GET /runlog/runs` has a browser-safe cursor page with 64-event projection tails; the Activity Runs view uses it. Compatibility-run, approval, and trace pages remain. |
+| P1 | Split the connected console shell along stable feature/view-model boundaries. | Complete | `ConsoleNavigation`, `useConsoleRunActivity`, provider catalog/form, first-run setup, and client editing are extracted; console type/build and Playwright workflow pass. |
+| P1 | Introduce bounded/paginated advanced gateway read models after console callers are incremental. | Complete | `GET /runlog/runs`, `GET /compatibility/runs`, `GET /approval-history`, and public-only `GET /runlog/runs/:runId/trace` use bounded cursors; Activity callers load only their visible surface, and compatibility pages keep a 64-session, per-session-invalidated cache without consulting the broad snapshot revision. |
 | P2 | Consolidate `LocalGateway`/`AppStateStore` behind bounded internal services/repositories. | Planned | Public facade stays stable; migrated service tests and migration coverage. |
 | P2 | Simplify first-level console navigation and split style tokens/base/shell/primitives/features. | Planned | Keyboard/narrow viewport tests and console E2E. |
 | P2 | Improve explicit redirect/session/trace UX where RunLog semantics exist. | Planned | Durable event/recovery/cancellation tests. |
@@ -38,10 +38,12 @@ items are complete. Status is updated only after code and verification land.
    serialize same-workspace work in the local executor.
 4. Measure fresh, cached, and conditional transport behavior plus queue drain
    time using deterministic local fixtures.
-5. Load canonical RunLog activity through its bounded cursor endpoint; keep the
-   compatibility aggregate stable while callers migrate.
-6. Continue extracting client/setup views from the connected console, then run
-   all focused and release gates.
+5. Load canonical RunLog and compatibility activity through bounded cursor
+   endpoints, merge their operator rows, page detailed approvals/traces, and
+   keep compatibility cache invalidation scoped to each represented mailbox.
+6. Keep the compatibility aggregate stable for public callers while the
+   console uses extracted provider/setup/client feature boundaries and runs all
+   focused and release gates.
 
 ## Migration notes
 

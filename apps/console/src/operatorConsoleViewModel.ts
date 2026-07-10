@@ -2,6 +2,10 @@ import type { ConsoleGatewaySnapshot } from 'mainspring/gateway'
 import { projectConsoleDashboard } from './dashboardProjection'
 
 type SnapshotRunLogRun = NonNullable<ConsoleGatewaySnapshot['runLog']>['runs'][number]
+type SnapshotCompatibilityRun = ConsoleGatewaySnapshot['runs'][number]
+type SnapshotApprovalHistoryItem = ConsoleGatewaySnapshot['approvalMetadata'][number] & {
+  source: OperatorApprovalSource
+}
 
 export type OperatorRunSource = 'runlog' | 'compatibility'
 
@@ -144,68 +148,15 @@ export function buildOperatorConsoleViewModel(
   snapshot: ConsoleGatewaySnapshot,
 ): OperatorConsoleViewModel {
   const projection = projectConsoleDashboard(snapshot)
-  const workspaceById = new Map(snapshot.workspaces.map((workspace) => [workspace.workspaceId, workspace]))
-  const clientById = new Map(snapshot.clients.map((client) => [client.clientId, client]))
-  const agentById = new Map(snapshot.agents.map((agent) => [agent.agentId, agent]))
-  const providerByProfileId = new Map(
-    snapshot.providerProfiles.map((profile) => [profile.profileId, profile]),
-  )
-  const providerById = new Map(
-    snapshot.providerProfiles.map((profile) => [profile.providerId, profile]),
-  )
-  const sessionById = new Map(snapshot.sessions.map((session) => [session.sessionId, session]))
   const runLogRuns = snapshot.runLog?.runs ?? []
   const runLogRunIds = new Set(runLogRuns.map((run) => run.runId))
 
   const runs = [
     ...buildOperatorRunLogRows(snapshot, runLogRuns),
-    ...snapshot.runs
-      .filter((run) => !runLogRunIds.has(run.runId))
-      .map((run) => {
-        const session = sessionById.get(run.sessionId)
-        const workspaceId = run.workspaceId ?? session?.workspaceId
-        const workspace = workspaceId ? workspaceById.get(workspaceId) : undefined
-        const clientId = workspace?.clientId ?? session?.clientId
-        const client = clientId ? clientById.get(clientId) : undefined
-        const agent = run.agentId ? agentById.get(run.agentId) : undefined
-        const provider =
-          (run.providerProfileId ? providerByProfileId.get(run.providerProfileId) : undefined)
-          ?? (run.providerId ? providerById.get(run.providerId) : undefined)
-        const toolCalls = (snapshot.toolCalls ?? [])
-          .filter((toolCall) => toolCall.runId === run.runId)
-          .map((toolCall) => ({
-            toolCallId: toolCall.toolCallId,
-            name: toolCall.toolName,
-            status: toolCall.status,
-          }))
-        const active = activeRunStatuses.has(String(run.status))
-        return {
-          runId: run.runId,
-          sessionId: run.sessionId,
-          source: 'compatibility' as const,
-          status: String(run.status),
-          active,
-          cancellable: active,
-          needsApproval: run.status === 'waiting_approval'
-            || snapshot.approvals.some(
-              (approval) => approval.runId === run.runId && approval.status === 'pending',
-            ),
-          ...(client ? { clientId: client.clientId, clientName: client.name } : {}),
-          ...(workspace ? { workspaceId: workspace.workspaceId, workspaceName: workspace.name } : {}),
-          ...(agent ? { agentId: agent.agentId, agentName: agent.name } : {}),
-          ...(run.providerId ? { providerId: run.providerId } : {}),
-          ...(provider ? { providerLabel: provider.label } : {}),
-          ...(run.modelId ? { modelId: run.modelId } : {}),
-          ...(run.createdAt ? { createdAt: run.createdAt } : {}),
-          ...(run.lastEventAt ? { lastActivityAt: run.lastEventAt } : {}),
-          eventCount: run.eventCount,
-          artifactCount: snapshot.artifacts.filter((artifact) => artifact.runId === run.runId).length,
-          toolCalls,
-          checkpoints: [],
-          policyDecisions: [],
-          errors: [],
-        }
-      }),
+    ...buildOperatorCompatibilityRunRows(
+      snapshot,
+      snapshot.runs.filter((run) => !runLogRunIds.has(run.runId)),
+    ),
   ].sort(sortRunsNewestFirst)
 
   const runById = new Map(runs.map((run) => [run.runId, run]))
@@ -309,6 +260,115 @@ export function buildOperatorRunLogRows(
       providerById,
     }),
   )
+}
+
+/** Maps either the snapshot's compatibility lane or its bounded page DTO. */
+export function buildOperatorCompatibilityRunRows(
+  snapshot: ConsoleGatewaySnapshot,
+  runs: SnapshotCompatibilityRun[] = snapshot.runs,
+): OperatorRunRow[] {
+  const workspaceById = new Map(snapshot.workspaces.map((workspace) => [workspace.workspaceId, workspace]))
+  const clientById = new Map(snapshot.clients.map((client) => [client.clientId, client]))
+  const agentById = new Map(snapshot.agents.map((agent) => [agent.agentId, agent]))
+  const providerByProfileId = new Map(
+    snapshot.providerProfiles.map((profile) => [profile.profileId, profile]),
+  )
+  const providerById = new Map(
+    snapshot.providerProfiles.map((profile) => [profile.providerId, profile]),
+  )
+  const sessionById = new Map(snapshot.sessions.map((session) => [session.sessionId, session]))
+  const pendingApprovalRunIds = new Set(
+    snapshot.approvals
+      .filter((approval) => approval.status === 'pending')
+      .map((approval) => approval.runId),
+  )
+  const artifactCountByRunId = new Map<string, number>()
+  for (const artifact of snapshot.artifacts) {
+    artifactCountByRunId.set(
+      artifact.runId,
+      (artifactCountByRunId.get(artifact.runId) ?? 0) + 1,
+    )
+  }
+  const toolCallsByRunId = new Map<string, OperatorRunToolCall[]>()
+  for (const toolCall of snapshot.toolCalls ?? []) {
+    const rows = toolCallsByRunId.get(toolCall.runId) ?? []
+    rows.push({
+      toolCallId: toolCall.toolCallId,
+      name: toolCall.toolName,
+      status: toolCall.status,
+    })
+    toolCallsByRunId.set(toolCall.runId, rows)
+  }
+
+  return runs.map((run) => {
+    const session = sessionById.get(run.sessionId)
+    const workspaceId = run.workspaceId ?? session?.workspaceId
+    const workspace = workspaceId ? workspaceById.get(workspaceId) : undefined
+    const clientId = workspace?.clientId ?? session?.clientId
+    const client = clientId ? clientById.get(clientId) : undefined
+    const agent = run.agentId ? agentById.get(run.agentId) : undefined
+    const provider =
+      (run.providerProfileId ? providerByProfileId.get(run.providerProfileId) : undefined)
+      ?? (run.providerId ? providerById.get(run.providerId) : undefined)
+    const active = activeRunStatuses.has(String(run.status))
+    return {
+      runId: run.runId,
+      sessionId: run.sessionId,
+      source: 'compatibility' as const,
+      status: String(run.status),
+      active,
+      cancellable: active,
+      needsApproval: run.status === 'waiting_approval' || pendingApprovalRunIds.has(run.runId),
+      ...(client ? { clientId: client.clientId, clientName: client.name } : {}),
+      ...(workspace ? { workspaceId: workspace.workspaceId, workspaceName: workspace.name } : {}),
+      ...(agent ? { agentId: agent.agentId, agentName: agent.name } : {}),
+      ...(run.providerId ? { providerId: run.providerId } : {}),
+      ...(provider ? { providerLabel: provider.label } : {}),
+      ...(run.modelId ? { modelId: run.modelId } : {}),
+      ...(run.createdAt ? { createdAt: run.createdAt } : {}),
+      ...(run.lastEventAt ? { lastActivityAt: run.lastEventAt } : {}),
+      eventCount: run.eventCount,
+      artifactCount: artifactCountByRunId.get(run.runId) ?? 0,
+      toolCalls: toolCallsByRunId.get(run.runId) ?? [],
+      checkpoints: [],
+      policyDecisions: [],
+      errors: [],
+    }
+  })
+}
+
+/**
+ * Maps the bounded gateway approval-history page onto the same presentation
+ * rows used by the compatibility snapshot. This keeps the approval action
+ * path source-aware without requiring full approval metadata in the screen.
+ */
+export function buildOperatorApprovalRows(
+  snapshot: ConsoleGatewaySnapshot,
+  approvals: SnapshotApprovalHistoryItem[],
+): OperatorApprovalRow[] {
+  const workspaceById = new Map(snapshot.workspaces.map((workspace) => [workspace.workspaceId, workspace]))
+  const clientById = new Map(snapshot.clients.map((client) => [client.clientId, client]))
+  const agentById = new Map(snapshot.agents.map((agent) => [agent.agentId, agent]))
+  const sessionById = new Map(snapshot.sessions.map((session) => [session.sessionId, session]))
+  return approvals.map((approval) => {
+    const session = sessionById.get(approval.sessionId)
+    const workspaceId = approval.workspaceId ?? session?.workspaceId
+    const workspace = workspaceId ? workspaceById.get(workspaceId) : undefined
+    const client = workspace?.clientId ? clientById.get(workspace.clientId) : undefined
+    const agent = approval.agentId ? agentById.get(approval.agentId) : undefined
+    return {
+      approvalId: approval.approvalId,
+      runId: approval.runId,
+      sessionId: approval.sessionId,
+      source: approval.source,
+      status: approval.status,
+      requestedAt: approval.requestedAt,
+      ...(approval.resolvedAt ? { resolvedAt: approval.resolvedAt } : {}),
+      ...(approval.targetKey ? { targetKey: approval.targetKey } : {}),
+      ...(client ? { clientName: client.name } : {}),
+      ...(agent ? { agentName: agent.name } : {}),
+    }
+  }).sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))
 }
 
 function operatorRunLogRow(input: {

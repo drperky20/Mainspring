@@ -51,14 +51,38 @@ The full snapshot is still a compatibility aggregate. Runs, traces, and other
 advanced read models should move to bounded, purpose-specific endpoints before
 the aggregate is narrowed or removed.
 
-`GET /runlog/runs` is the first such purpose-specific endpoint. It returns a
-canonical, sanitized RunLog activity page with a default limit of 25 and a
-maximum of 100 rows. `nextCursor` is opaque and can be sent back as `cursor`
-to continue in reverse creation order. Each row uses a bounded 64-event
-projection tail; detailed event inspection continues through the existing
-per-run endpoint. The console fetches this route only while the Runs activity
-view is open. Mailbox compatibility runs remain available in the compatible
-snapshot while their own bounded read model is still pending.
+`GET /runlog/runs` returns a canonical, sanitized RunLog activity page with a
+default limit of 25 and a maximum of 100 rows. `nextCursor` is opaque and can
+be sent back as `cursor` to continue in reverse creation order. Each row uses
+a bounded 64-event projection tail.
+
+`GET /compatibility/runs` supplies the matching cursor-paginated mailbox
+compatibility history. It requires the gateway app-state store and queries only
+the metadata rows and session mailboxes represented by its page; canonical
+RunLog records are excluded. An app-state-scoped cache retains at most 64
+session projections without calling the broad snapshot revision. Each entry
+invalidates immediately for its own process-local mailbox mutation; a
+per-session database/WAL fingerprint is refreshed at most every 30 seconds for
+legacy external writers. The console merges both pages into one Activity
+timeline. Older/no-app-state embedders retain the compatible `/snapshot` path.
+
+`GET /approval-history` requires the gateway app-state store and pages its
+compatibility approval metadata together with canonical RunLog approval
+summaries, preferring the RunLog source when both have a mirrored approval ID.
+It returns only identifiers, status, safe target labels, timestamps, and
+client/agent linkage fields—not private tool input, receipt data, workspace
+paths, hashes, or signing material. Older/no-app-state embedders retain the
+compatible `/snapshot` path.
+
+`GET /runlog/runs/:runId/trace` returns public events in reverse-cursor pages
+and sends each page in chronological order for display. Sensitive and
+artifact-only events remain host/SDK-only. The legacy
+`/runlog/runs/:runId/events` projection route remains compatible for existing
+RunLog-aware callers.
+
+The console fetches these routes only while the related Activity surface is
+open: Runs loads the two activity pages, Approvals loads approval history, and
+a selected RunLog detail loads its public trace page.
 
 When a gateway has a RunLog host, cron tick and run-now dispatch create ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events. Provider-only cron schedules queue normally; side-effecting schedules fail closed unless their metadata carries a scoped, unexpired cron grant. Operators can call `GET /cron/:scheduleId/grant` to preview the current grant decision and `POST /cron/:scheduleId/grant` to create an expiring scoped grant derived from the current schedule. The React console also exposes review/create controls that display the grant state without raw prompt hashes or secret refs. Gateways without a RunLog host keep the mailbox-compatible cron path for older embedders and migration verifiers.
 

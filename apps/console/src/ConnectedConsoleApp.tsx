@@ -1,24 +1,32 @@
-import type { DragEvent, FormEvent, ReactNode } from 'react'
+import type { DragEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ConsoleGatewayRunEvent, ConsoleGatewaySnapshot } from 'mainspring/gateway'
-import anthropicLogo from './assets/providers/anthropic.png'
-import deepseekLogo from './assets/providers/deepseek.ico'
-import geminiLogo from './assets/providers/gemini.svg'
-import groqLogo from './assets/providers/groq.svg'
-import mistralLogo from './assets/providers/mistral.ico'
-import openaiLogo from './assets/providers/openai.svg'
-import openrouterLogo from './assets/providers/openrouter.ico'
 import {
   createLocalGatewayClient,
-  type GatewayProviderModel,
   type LocalGatewayClient,
 } from './localGatewayClient'
+import {
+  ProviderBadge,
+  ProviderForm,
+  providerCatalog,
+  providerModels,
+  type ProviderProfileDraft,
+} from './ConsoleProviderCatalog'
+import {
+  ClientDetailsPanel,
+  ClientForm,
+  defaultSkills,
+  type DraftClient,
+} from './ConsoleClientForms'
 import {
   isAllowedLocalGatewayUrl,
   localGatewayUrlFromEnv,
 } from './localGatewayTransport'
 import { useGatewaySnapshot } from './useGatewaySnapshot'
+import { useApprovalHistoryPage } from './useApprovalHistoryPage'
+import { useCompatibilityRunPage } from './useCompatibilityRunPage'
 import { useRunLogActivityPage } from './useRunLogActivityPage'
+import { useRunLogTracePage } from './useRunLogTracePage'
 import {
   createChatMessage,
   createScopedRunUiState,
@@ -29,10 +37,15 @@ import {
 import {
   ActivityNavigation,
   ConsoleSidebar,
-  MainspringMark,
   type ActivityTab,
   type ConsoleScreen,
 } from './ConsoleNavigation'
+import {
+  ConsoleToast,
+  SetupWizard,
+  type SetupState,
+  type ToastState,
+} from './ConsoleSetup'
 import {
   ApprovalsScreen,
   ConnectionNotice,
@@ -44,6 +57,8 @@ import {
 } from './OperatorConsoleScreens'
 import {
   buildOperatorRunLogRows,
+  buildOperatorCompatibilityRunRows,
+  buildOperatorApprovalRows,
   buildOperatorConsoleViewModel,
   type OperatorApprovalRow,
   type OperatorRunRow,
@@ -51,30 +66,6 @@ import {
 import './controlRoom.css'
 
 type ClientTab = 'chat' | 'agents' | 'automations' | 'access'
-type ProviderStatus = 'live' | 'connector' | 'catalog'
-type ToastKind = 'ok' | 'error' | 'info'
-
-type ToastState = {
-  kind: ToastKind
-  text: string
-}
-
-type SetupState = {
-  complete: boolean
-  accountName: string
-  username: string
-}
-
-type DraftClient = {
-  name: string
-  contact: string
-  billingLabel: string
-  workspaceName: string
-  agentName: string
-  modelId: string
-  goal: string
-  instructions: string
-}
 
 type AgentDraft = {
   name: string
@@ -91,18 +82,6 @@ type AutomationNode = {
   detail: string
   strong?: boolean
   tone?: 'agent' | 'prompt' | 'read' | 'write' | 'browser' | 'voice' | 'web'
-}
-
-type ProviderCatalogItem = {
-  id: string
-  label: string
-  badge: string
-  status: ProviderStatus
-  profileProviderId?: 'openrouter' | 'openai' | 'codex'
-  defaultModelId: string
-  models: Array<{ id: string; label: string }>
-  setup: string
-  note: string
 }
 
 type HealthAuth = Awaited<ReturnType<LocalGatewayClient['health']>>['auth']
@@ -123,139 +102,6 @@ const toolOptions = [
   { key: 'file.write', label: 'File write', description: 'Write approved outputs.' },
   { key: 'voice.call', label: 'Voice call', description: 'Design placeholder for call tools.' },
 ] as const
-
-const defaultSkills = {
-  'web.fetch': true,
-  'file.read': true,
-  'file.write': false,
-  'browser.screenshot': false,
-  'voice.call': false,
-}
-
-const providerCatalog: ProviderCatalogItem[] = [
-  {
-    id: 'openrouter',
-    label: 'OpenRouter',
-    badge: 'OR',
-    status: 'live',
-    profileProviderId: 'openrouter',
-    defaultModelId: 'openrouter/auto',
-    setup: 'API key or managed secret reference',
-    note: 'Uses the existing Mainspring OpenRouter provider profile.',
-    models: [
-      { id: 'openrouter/auto', label: 'Auto router' },
-      { id: 'openrouter/free', label: 'Free router' },
-      { id: 'anthropic/claude-sonnet-4', label: 'Claude Sonnet via OpenRouter' },
-      { id: 'google/gemini-2.5-flash', label: 'Gemini Flash via OpenRouter' },
-      { id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat via OpenRouter' },
-    ],
-  },
-  {
-    id: 'openai',
-    label: 'OpenAI',
-    badge: 'AI',
-    status: 'live',
-    profileProviderId: 'openai',
-    defaultModelId: 'gpt-4.1-mini',
-    setup: 'API key or managed secret reference',
-    note: 'Uses the existing Mainspring OpenAI provider profile.',
-    models: [
-      { id: 'gpt-4.1-mini', label: 'GPT 4.1 mini' },
-      { id: 'gpt-4.1', label: 'GPT 4.1' },
-      { id: 'o4-mini', label: 'o4 mini' },
-    ],
-  },
-  {
-    id: 'codex',
-    label: 'Codex',
-    badge: 'CX',
-    status: 'live',
-    profileProviderId: 'codex',
-    defaultModelId: 'codex-auto',
-    setup: 'Codex CLI with mounted Codex home auth',
-    note: 'Uses the backend Codex CLI provider path with ChatGPT auth from CODEX_HOME.',
-    models: [
-      { id: 'codex-auto', label: 'Codex account default' },
-      { id: 'gpt-5-codex-mini', label: 'GPT 5 Codex mini' },
-    ],
-  },
-  {
-    id: 'anthropic',
-    label: 'Anthropic',
-    badge: 'CL',
-    status: 'connector',
-    defaultModelId: 'anthropic/claude-sonnet-4',
-    setup: 'Direct API adapter needed',
-    note: 'Use OpenRouter today. Subscription credential reuse is not presented as third-party client auth.',
-    models: [
-      { id: 'anthropic/claude-sonnet-4', label: 'Claude Sonnet via OpenRouter' },
-      { id: 'anthropic/claude-opus-4', label: 'Claude Opus via OpenRouter' },
-    ],
-  },
-  {
-    id: 'google',
-    label: 'Google Gemini',
-    badge: 'GM',
-    status: 'catalog',
-    defaultModelId: 'google/gemini-2.5-flash',
-    setup: 'Available through OpenRouter catalog today',
-    note: 'Direct Gemini provider support can be added behind the same profile UI later.',
-    models: [{ id: 'google/gemini-2.5-flash', label: 'Gemini Flash via OpenRouter' }],
-  },
-  {
-    id: 'mistral',
-    label: 'Mistral',
-    badge: 'MI',
-    status: 'catalog',
-    defaultModelId: 'mistralai/mistral-small-3.2-24b-instruct',
-    setup: 'Available through OpenRouter catalog today',
-    note: 'Use an OpenRouter profile until Mainspring has a direct adapter.',
-    models: [{ id: 'mistralai/mistral-small-3.2-24b-instruct', label: 'Mistral Small via OpenRouter' }],
-  },
-  {
-    id: 'groq',
-    label: 'Groq',
-    badge: 'GQ',
-    status: 'catalog',
-    defaultModelId: 'meta-llama/llama-3.3-70b-instruct',
-    setup: 'Available through OpenRouter catalog today',
-    note: 'Direct Groq provider support can reuse the provider profile pattern.',
-    models: [{ id: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B via OpenRouter' }],
-  },
-  {
-    id: 'deepseek',
-    label: 'DeepSeek',
-    badge: 'DS',
-    status: 'catalog',
-    defaultModelId: 'deepseek/deepseek-chat',
-    setup: 'Available through OpenRouter catalog today',
-    note: 'Shown as catalog routing until a direct DeepSeek provider exists.',
-    models: [{ id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat via OpenRouter' }],
-  },
-]
-
-const providerLogoSources: Record<string, string> = {
-  anthropic: anthropicLogo,
-  codex: openaiLogo,
-  deepseek: deepseekLogo,
-  google: geminiLogo,
-  groq: groqLogo,
-  mistral: mistralLogo,
-  openai: openaiLogo,
-  openrouter: openrouterLogo,
-}
-
-const starterClient: DraftClient = {
-  name: 'Northline Dental',
-  contact: 'ops@northline.example',
-  billingLabel: 'Pilot',
-  workspaceName: 'Northline Workspace',
-  agentName: 'Front desk assistant',
-  modelId: 'openrouter/auto',
-  goal: 'Answer inbound questions, collect lead details, and hand off anything uncertain.',
-  instructions:
-    'Be brief, ask one question at a time, summarize what changed, and keep every action tied to the client workspace.',
-}
 
 export function ConnectedConsoleApp() {
   const [gatewayUrl, setGatewayUrl] = useState(DEFAULT_GATEWAY_URL)
@@ -327,8 +173,8 @@ export function ConnectedConsoleApp() {
     () => snapshot ? buildOperatorConsoleViewModel(snapshot) : undefined,
     [snapshot],
   )
-  const runLogActivityEnabled = screen === 'activity'
-    && activityTab === 'runs'
+  const activityRunsEnabled = screen === 'activity' && activityTab === 'runs'
+  const runLogActivityEnabled = activityRunsEnabled
     && snapshot?.runLog?.configured === true
   const runLogActivity = useRunLogActivityPage({
     enabled: runLogActivityEnabled,
@@ -336,11 +182,41 @@ export function ConnectedConsoleApp() {
     revision: snapshot?.generatedAt,
     limit: 25,
   })
+  const compatibilityRunActivity = useCompatibilityRunPage({
+    enabled: activityRunsEnabled && Boolean(snapshot),
+    gatewayClient,
+    revision: snapshot?.generatedAt,
+    limit: 25,
+  })
+  const approvalHistoryEnabled = screen === 'activity' && activityTab === 'approvals'
+  const approvalHistory = useApprovalHistoryPage({
+    enabled: approvalHistoryEnabled,
+    gatewayClient,
+    revision: snapshot?.generatedAt,
+    limit: 25,
+  })
   const runListModel = useMemo(() => {
-    if (!operatorModel || !snapshot || !runLogActivityEnabled) return operatorModel
-    const runs = runLogActivity.loaded
-      ? buildOperatorRunLogRows(snapshot, runLogActivity.runs)
+    if (!operatorModel || !snapshot || !activityRunsEnabled) return operatorModel
+    const runLogRows = runLogActivityEnabled
+      ? runLogActivity.loaded
+        ? buildOperatorRunLogRows(snapshot, runLogActivity.runs)
+        : []
       : []
+    const compatibilityRows = compatibilityRunActivity.loaded
+      ? buildOperatorCompatibilityRunRows(snapshot, compatibilityRunActivity.runs)
+      : compatibilityRunActivity.error
+        ? operatorModel.runs.filter((run) => run.source === 'compatibility')
+        : []
+    const pagesReady = (runLogActivity.loaded || !runLogActivityEnabled || Boolean(runLogActivity.error))
+      && (compatibilityRunActivity.loaded || Boolean(compatibilityRunActivity.error))
+    if (!pagesReady) {
+      return { ...operatorModel, runs: [], activeRuns: [] }
+    }
+    const runs = [...runLogRows, ...compatibilityRows].sort((left, right) =>
+      (right.lastActivityAt ?? right.createdAt ?? '').localeCompare(
+        left.lastActivityAt ?? left.createdAt ?? '',
+      ) || right.runId.localeCompare(left.runId),
+    )
     return {
       ...operatorModel,
       runs,
@@ -348,11 +224,29 @@ export function ConnectedConsoleApp() {
     }
   }, [
     operatorModel,
+    activityRunsEnabled,
+    compatibilityRunActivity.error,
+    compatibilityRunActivity.loaded,
+    compatibilityRunActivity.runs,
     runLogActivity.loaded,
+    runLogActivity.error,
     runLogActivity.runs,
     runLogActivityEnabled,
     snapshot,
   ])
+  const runActivityPagesLoaded = !activityRunsEnabled || (
+    (runLogActivity.loaded || !runLogActivityEnabled || Boolean(runLogActivity.error))
+    && (compatibilityRunActivity.loaded || Boolean(compatibilityRunActivity.error))
+  )
+  const approvalListModel = useMemo(() => {
+    if (!operatorModel || !snapshot || !approvalHistoryEnabled || !approvalHistory.loaded) return operatorModel
+    const approvals = buildOperatorApprovalRows(snapshot, approvalHistory.approvals)
+    return {
+      ...operatorModel,
+      approvals,
+      pendingApprovals: approvals.filter((approval) => approval.status === 'pending'),
+    }
+  }, [approvalHistory.approvals, approvalHistory.loaded, approvalHistoryEnabled, operatorModel, snapshot])
   const activeRunScopeKey = selectedClient && selectedAgent
     ? `${selectedClient.clientId}:${selectedAgent.agentId}`
     : undefined
@@ -361,9 +255,19 @@ export function ConnectedConsoleApp() {
     : createScopedRunUiState()
   const selectedRun = runListModel?.runs.find((run) => run.runId === selectedRunId)
     ?? operatorModel?.runs.find((run) => run.runId === selectedRunId)
+  const runLogTraceEnabled = screen === 'activity'
+    && activityTab === 'runs'
+    && selectedRun?.source === 'runlog'
+  const runLogTrace = useRunLogTracePage({
+    enabled: runLogTraceEnabled,
+    gatewayClient,
+    runId: selectedRun?.runId,
+    revision: snapshot?.generatedAt,
+    limit: 80,
+  })
 
   const loadSelectedRunEvents = useCallback(async (run: OperatorRunRow | undefined) => {
-    if (!run) {
+    if (!run || run.source === 'runlog') {
       setSelectedRunEvents([])
       setRunEventsError(undefined)
       return
@@ -384,6 +288,17 @@ export function ConnectedConsoleApp() {
     }
   }, [gatewayClient])
 
+  const displayedRunEvents = runLogTraceEnabled ? runLogTrace.events : selectedRunEvents
+  const displayedRunEventsLoading = runLogTraceEnabled ? runLogTrace.loading : runEventsLoading
+  const displayedRunEventsError = runLogTraceEnabled ? runLogTrace.error : runEventsError
+  const reloadSelectedRunEvents = useCallback(async () => {
+    if (runLogTraceEnabled) {
+      await runLogTrace.reload()
+      return
+    }
+    await loadSelectedRunEvents(selectedRun)
+  }, [loadSelectedRunEvents, runLogTrace.reload, runLogTraceEnabled, selectedRun])
+
   useEffect(() => {
     if (selectedAgent && selectedAgent.agentId !== selectedAgentId) {
       setSelectedAgentId(selectedAgent.agentId)
@@ -396,16 +311,17 @@ export function ConnectedConsoleApp() {
       setSelectedRunId(undefined)
       return
     }
-    if (runLogActivityEnabled && !runLogActivity.loaded) return
+    if (activityRunsEnabled && !runActivityPagesLoaded) return
     if (!selectedRunId && runListModel?.runs[0]) {
       setSelectedRunId(runListModel.runs[0]?.runId)
     }
-  }, [operatorModel, runListModel, runLogActivity.loaded, runLogActivityEnabled, selectedRunId])
+  }, [activityRunsEnabled, operatorModel, runActivityPagesLoaded, runListModel, selectedRunId])
 
   useEffect(() => {
     if (screen !== 'activity' || activityTab !== 'runs') return
+    if (selectedRun?.source === 'runlog') return
     void loadSelectedRunEvents(selectedRun)
-  }, [activityTab, loadSelectedRunEvents, screen, selectedRun?.runId])
+  }, [activityTab, loadSelectedRunEvents, screen, selectedRun?.runId, selectedRun?.source])
 
   async function completeSetup(next: SetupState) {
     await refresh()
@@ -857,23 +773,36 @@ export function ConnectedConsoleApp() {
             {activityTab === 'runs' ? (
               <RunsScreen
                 actionBusy={busy}
-                events={selectedRunEvents}
-                eventsError={runEventsError}
-                eventsLoading={runEventsLoading}
+                events={displayedRunEvents}
+                eventsError={displayedRunEventsError}
+                eventsLoading={displayedRunEventsLoading}
+                hasMoreEvents={runLogTraceEnabled && Boolean(runLogTrace.nextCursor)}
                 model={runListModel ?? operatorModel}
-                runsError={runLogActivityEnabled ? runLogActivity.error : undefined}
-                runsLoading={runLogActivityEnabled && runLogActivity.loading}
-                hasMoreRuns={runLogActivityEnabled && Boolean(runLogActivity.nextCursor)}
+                runsError={runLogActivity.error ?? compatibilityRunActivity.error}
+                runsLoading={activityRunsEnabled && (
+                  runLogActivity.loading || compatibilityRunActivity.loading
+                )}
+                hasMoreRuns={Boolean(runLogActivity.nextCursor || compatibilityRunActivity.nextCursor)}
                 selectedRun={selectedRun}
                 onCancel={(run) => void cancelOperatorRun(run)}
-                onLoadMoreRuns={() => void runLogActivity.loadMore()}
-                onReloadEvents={() => void loadSelectedRunEvents(selectedRun)}
+                onLoadMoreEvents={() => void runLogTrace.loadMore()}
+                onLoadMoreRuns={() => {
+                  void Promise.all([
+                    runLogActivity.loadMore(),
+                    compatibilityRunActivity.loadMore(),
+                  ])
+                }}
+                onReloadEvents={() => void reloadSelectedRunEvents()}
                 onSelectRun={setSelectedRunId}
               />
             ) : activityTab === 'approvals' ? (
               <ApprovalsScreen
                 actionBusy={busy}
-                model={operatorModel}
+                error={approvalHistoryEnabled ? approvalHistory.error : undefined}
+                hasMore={approvalHistoryEnabled && Boolean(approvalHistory.nextCursor)}
+                loading={approvalHistoryEnabled && approvalHistory.loading}
+                model={approvalListModel ?? operatorModel}
+                onLoadMore={() => void approvalHistory.loadMore()}
                 onResolve={(approval, decision, reason) => {
                   void resolveOperatorApproval(approval, decision, reason)
                 }}
@@ -923,152 +852,7 @@ export function ConnectedConsoleApp() {
           />
         </Dialog>
       ) : null}
-      {toast ? <Toast toast={toast} onDismiss={() => setToast(undefined)} /> : null}
-    </div>
-  )
-}
-
-function SetupWizard({
-  auth,
-  busy,
-  gatewayClient,
-  providerProfiles,
-  toast,
-  onBusy,
-  onConnectProvider,
-  onDone,
-  onSessionToken,
-  onToast,
-}: {
-  auth?: HealthAuth
-  busy: boolean
-  gatewayClient: LocalGatewayClient
-  providerProfiles: SnapshotProvider[]
-  toast?: ToastState
-  onBusy: (value: boolean) => void
-  onConnectProvider: (input: ProviderProfileDraft) => Promise<void>
-  onDone: (setup: SetupState) => Promise<void>
-  onSessionToken: (token: string | undefined) => void
-  onToast: (toast: ToastState | undefined) => void
-}) {
-  const [step, setStep] = useState<'account' | 'providers' | 'finish'>('account')
-  const [accountName, setAccountName] = useState('Mainspring HQ')
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('')
-
-  async function submitAccount(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    onBusy(true)
-    try {
-      if (auth?.authMode === 'hosted') {
-        if (!password.trim()) throw new Error('Password is required for hosted auth.')
-        if (auth.bootstrapRequired) {
-          await gatewayClient.bootstrapAuth({ username: username.trim(), password })
-        }
-        await gatewayClient.login({ username: username.trim(), password })
-        onSessionToken(gatewayClient.getSessionToken())
-      }
-      setStep('providers')
-      onToast({ kind: 'ok', text: 'Account step complete.' })
-    } catch (error) {
-      onToast({ kind: 'error', text: errorMessage(error) })
-    } finally {
-      onBusy(false)
-    }
-  }
-
-  async function finish() {
-    await onDone({
-      complete: true,
-      accountName: accountName.trim() || 'Mainspring',
-      username: username.trim() || 'admin',
-    })
-  }
-
-  return (
-    <div className="setup-scene">
-      <div className="setup-brand">
-        <MainspringMark />
-        <span>Mainspring</span>
-      </div>
-      <section className="setup-card">
-        <div className="setup-steps" aria-label="Setup steps">
-          {['account', 'providers', 'finish'].map((item, index) => (
-            <button
-              className={step === item ? 'active' : ''}
-              disabled={
-                (item === 'providers' && step === 'account')
-                || (item === 'finish' && step !== 'finish')
-              }
-              key={item}
-              type="button"
-              onClick={() => setStep(item as typeof step)}
-            >
-              <span>{index + 1}</span>
-              {item}
-            </button>
-          ))}
-        </div>
-        {step === 'account' ? (
-          <form className="setup-panel" onSubmit={submitAccount}>
-            <div>
-              <h1>Set up your account</h1>
-              <p>Keep it simple: one owner account, then connect one model service.</p>
-            </div>
-            <label>
-              Account name
-              <input value={accountName} onChange={(event) => setAccountName(event.target.value)} />
-            </label>
-            <label>
-              Username
-              <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />
-            </label>
-            <label>
-              Password
-              <input
-                autoComplete="new-password"
-                placeholder={auth?.authMode === 'hosted' ? 'Required for hosted gateway' : 'Used only for hosted gateway setup'}
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </label>
-            <button className="simple-primary" disabled={busy} type="submit">Continue</button>
-          </form>
-        ) : step === 'providers' ? (
-          <div className="setup-panel">
-            <div>
-              <h1>Connect a service</h1>
-              <p>OpenRouter and OpenAI API-key profiles are wired to the backend today. Other providers are shown as connector or catalog routes.</p>
-            </div>
-            <ProviderForm
-              compact
-              gatewayClient={gatewayClient}
-              providerProfiles={providerProfiles}
-              onCancel={() => setStep('finish')}
-              onSubmit={async (input) => {
-                await onConnectProvider(input)
-                setStep('finish')
-              }}
-            />
-            <button className="simple-text" type="button" onClick={() => setStep('finish')}>Skip for now</button>
-          </div>
-        ) : (
-          <div className="setup-panel">
-            <div>
-              <h1>Ready for clients</h1>
-              <p>The dashboard will start with one action: add a client. Each client gets a workspace and an agent.</p>
-            </div>
-            <div className="setup-summary">
-              <span>{accountName}</span>
-              <span>{providerProfiles.length} connected service{providerProfiles.length === 1 ? '' : 's'}</span>
-              <span>Open-source local gateway</span>
-            </div>
-            <button className="simple-primary" disabled={busy} type="button" onClick={() => void finish()}>Open dashboard</button>
-          </div>
-        )}
-      </section>
-      {toast ? <Toast toast={toast} onDismiss={() => onToast(undefined)} /> : null}
+      {toast ? <ConsoleToast toast={toast} onDismiss={() => setToast(undefined)} /> : null}
     </div>
   )
 }
@@ -1235,54 +1019,6 @@ function ClientsScreen({
         </div>
       </div>
     </section>
-  )
-}
-
-function ClientDetailsPanel({
-  agent,
-  client,
-  provider,
-  workspace,
-  onSave,
-}: {
-  agent?: SnapshotAgent
-  client: SnapshotClient
-  provider?: SnapshotProvider
-  workspace?: SnapshotWorkspace
-  onSave: (draft: DraftClient) => void
-}) {
-  const [editing, setEditing] = useState(false)
-  const draft = clientDraftFromSnapshot(client, workspace, agent)
-
-  return (
-    <aside className="client-detail-panel">
-      <div className="mini-head">
-        <h2>Client</h2>
-        <button className="simple-text" type="button" onClick={() => setEditing((value) => !value)}>
-          {editing ? 'Close' : 'Edit'}
-        </button>
-      </div>
-      {editing ? (
-        <ClientForm
-          initial={draft}
-          onCancel={() => setEditing(false)}
-          onSubmit={(next) => {
-            onSave(next)
-            setEditing(false)
-          }}
-          submitLabel="Save details"
-        />
-      ) : (
-        <div className="detail-list">
-          <InfoRow label="Contact" value={client.contact || 'Not set'} />
-          <InfoRow label="Billing" value={client.billingLabel || 'Not set'} />
-          <InfoRow label="Workspace" value={workspace?.name ?? 'Not set'} />
-          <InfoRow label="Agent" value={agent?.name ?? 'Not set'} />
-          <InfoRow label="Model" value={agent?.defaultModelId ?? provider?.defaultModelId ?? 'Not set'} />
-          <InfoRow label="Approval" value={agent?.approvalMode ?? 'Non-blocking'} />
-        </div>
-      )}
-    </aside>
   )
 }
 
@@ -1825,252 +1561,6 @@ function SettingsScreen({
   )
 }
 
-type ProviderProfileDraft = {
-  catalogId: string
-  label: string
-  modelId: string
-  secretMode: 'ref' | 'value'
-  secretRef: string
-  secretValue: string
-}
-
-function secretRefForProvider(providerId?: ProviderCatalogItem['profileProviderId']): string {
-  if (providerId === 'openai') return 'env:OPENAI_API_KEY'
-  if (providerId === 'codex') return 'env:CODEX_HOME'
-  return 'env:OPENROUTER_API_KEY'
-}
-
-function ProviderForm({
-  compact = false,
-  gatewayClient,
-  providerProfiles,
-  onCancel,
-  onSubmit,
-}: {
-  compact?: boolean
-  gatewayClient: LocalGatewayClient
-  providerProfiles: SnapshotProvider[]
-  onCancel: () => void
-  onSubmit: (input: ProviderProfileDraft) => Promise<void>
-}) {
-  const [catalogId, setCatalogId] = useState('openrouter')
-  const catalogItem = providerCatalog.find((provider) => provider.id === catalogId) ?? providerCatalog[0]
-  const [label, setLabel] = useState(catalogItem.label)
-  const [modelId, setModelId] = useState(catalogItem.defaultModelId)
-  const [secretMode, setSecretMode] = useState<'ref' | 'value'>('ref')
-  const [secretRef, setSecretRef] = useState(secretRefForProvider(catalogItem.profileProviderId))
-  const [secretValue, setSecretValue] = useState('')
-  const [modelSearch, setModelSearch] = useState('')
-  const [liveModels, setLiveModels] = useState<GatewayProviderModel[]>([])
-  const [modelStatus, setModelStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
-
-  function selectCatalog(nextId: string) {
-    const next = providerCatalog.find((provider) => provider.id === nextId) ?? providerCatalog[0]
-    setCatalogId(next.id)
-    setLabel(next.label)
-    setModelId(next.defaultModelId)
-    setSecretRef(secretRefForProvider(next.profileProviderId))
-  }
-
-  useEffect(() => {
-    if (catalogItem.id !== 'openrouter') {
-      setLiveModels([])
-      setModelStatus('idle')
-      return
-    }
-    let canceled = false
-    setModelStatus('loading')
-    gatewayClient.openRouterModels({ q: modelSearch, limit: 80 })
-      .then((result) => {
-        if (canceled) return
-        setLiveModels(result.models)
-        setModelStatus('ready')
-        setModelId((current) =>
-          result.models.some((model) => model.id === current) ? current : result.models[0]?.id ?? current,
-        )
-      })
-      .catch(() => {
-        if (canceled) return
-        setLiveModels([])
-        setModelStatus('error')
-      })
-    return () => {
-      canceled = true
-    }
-  }, [catalogItem.id, gatewayClient, modelSearch])
-
-  const modelOptions =
-    catalogItem.id === 'openrouter' && liveModels.length > 0
-      ? liveModels.map((model) => ({ id: model.id, label: model.name }))
-      : catalogItem.models
-
-  return (
-    <form
-      className={compact ? 'provider-form compact' : 'provider-form'}
-      onSubmit={(event) => {
-        event.preventDefault()
-        void onSubmit({ catalogId, label, modelId, secretMode, secretRef, secretValue })
-      }}
-    >
-      <div className="provider-picker">
-        {providerCatalog.map((provider) => (
-          <button
-            className={provider.id === catalogId ? 'provider-tile active' : 'provider-tile'}
-            key={provider.id}
-            type="button"
-            onClick={() => selectCatalog(provider.id)}
-          >
-            <ProviderBadge providerId={provider.id} />
-            <span>
-              <strong>{provider.label}</strong>
-              <small>{provider.status}</small>
-            </span>
-          </button>
-        ))}
-      </div>
-      <div className="field-grid">
-        <label>
-          Label
-          <input value={label} onChange={(event) => setLabel(event.target.value)} />
-        </label>
-        <label>
-          Model
-          {catalogItem.id === 'openrouter' ? (
-            <input
-              placeholder="Search OpenRouter models"
-              value={modelSearch}
-              onChange={(event) => setModelSearch(event.target.value)}
-            />
-          ) : null}
-          <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
-            {modelOptions.map((model) => (
-              <option key={model.id} value={model.id}>{model.label}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Secret mode
-          <select value={secretMode} onChange={(event) => setSecretMode(event.target.value as 'ref' | 'value')}>
-            <option value="ref">Use environment or secret ref</option>
-            <option value="value">Store managed secret</option>
-          </select>
-        </label>
-        {secretMode === 'ref' ? (
-          <label>
-            Secret ref
-            <input value={secretRef} onChange={(event) => setSecretRef(event.target.value)} />
-          </label>
-        ) : (
-          <label>
-            API key
-            <input
-              autoComplete="off"
-              placeholder="Stored by the gateway secret store"
-              type="password"
-              value={secretValue}
-              onChange={(event) => setSecretValue(event.target.value)}
-            />
-          </label>
-        )}
-      </div>
-      <div className="provider-note">
-        <strong>{catalogItem.setup}</strong>
-        <span>{catalogItem.note}</span>
-        {catalogItem.id === 'openrouter' ? (
-          <em>
-            {modelStatus === 'loading'
-              ? 'Loading OpenRouter models'
-              : modelStatus === 'ready'
-                ? `${modelOptions.length} model${modelOptions.length === 1 ? '' : 's'} available`
-                : modelStatus === 'error'
-                  ? 'Using fallback model list'
-                  : 'OpenRouter model catalog'}
-          </em>
-        ) : null}
-        {providerProfiles.some((profile) => profile.providerId === catalogItem.profileProviderId) ? <em>Already connected</em> : null}
-      </div>
-      <div className="dialog-actions">
-        <button className="simple-primary" type="submit">
-          {catalogItem.profileProviderId ? 'Connect service' : 'Show connector'}
-        </button>
-        <button className="simple-secondary" type="button" onClick={onCancel}>Cancel</button>
-      </div>
-    </form>
-  )
-}
-
-function ClientForm({
-  defaultModelId,
-  initial = { ...starterClient },
-  onCancel,
-  onSubmit,
-  submitLabel,
-}: {
-  defaultModelId?: string
-  initial?: DraftClient
-  onCancel: () => void
-  onSubmit: (draft: DraftClient) => void | Promise<void>
-  submitLabel: string
-}) {
-  const [draft, setDraft] = useState<DraftClient>({
-    ...initial,
-    modelId: initial.modelId || defaultModelId || starterClient.modelId,
-  })
-
-  return (
-    <form
-      className="client-form"
-      onSubmit={(event) => {
-        event.preventDefault()
-        void onSubmit(draft)
-      }}
-    >
-      <div className="field-grid">
-        <label>
-          Client name
-          <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-        </label>
-        <label>
-          Contact
-          <input value={draft.contact} onChange={(event) => setDraft({ ...draft, contact: event.target.value })} />
-        </label>
-        <label>
-          Billing label
-          <input value={draft.billingLabel} onChange={(event) => setDraft({ ...draft, billingLabel: event.target.value })} />
-        </label>
-        <label>
-          Workspace name
-          <input value={draft.workspaceName} onChange={(event) => setDraft({ ...draft, workspaceName: event.target.value })} />
-        </label>
-        <label>
-          Agent name
-          <input value={draft.agentName} onChange={(event) => setDraft({ ...draft, agentName: event.target.value })} />
-        </label>
-        <label>
-          Model
-          <select value={draft.modelId} onChange={(event) => setDraft({ ...draft, modelId: event.target.value })}>
-            {allModels().map((model) => (
-              <option key={model.id} value={model.id}>{model.label}</option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <label>
-        Client workspace prompt
-        <textarea value={draft.goal} onChange={(event) => setDraft({ ...draft, goal: event.target.value })} />
-      </label>
-      <label>
-        Agent system prompt
-        <textarea value={draft.instructions} onChange={(event) => setDraft({ ...draft, instructions: event.target.value })} />
-      </label>
-      <div className="dialog-actions">
-        <button className="simple-primary" type="submit">{submitLabel}</button>
-        <button className="simple-secondary" type="button" onClick={onCancel}>Cancel</button>
-      </div>
-    </form>
-  )
-}
-
 function ActionRail({
   compact = false,
   lastRun,
@@ -2246,35 +1736,6 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-function ProviderBadge({ providerId }: { providerId: string }) {
-  const catalog = providerCatalog.find((provider) => provider.id === providerId || provider.profileProviderId === providerId)
-  const logo = providerLogoSources[catalog?.id ?? providerId]
-  return (
-    <span className={logo ? 'provider-badge has-logo' : 'provider-badge'} title={catalog?.label ?? providerId}>
-      {logo ? <img alt="" src={logo} /> : (catalog?.badge ?? providerId.slice(0, 2).toUpperCase())}
-    </span>
-  )
-}
-
-function Toast({ onDismiss, toast }: { onDismiss: () => void; toast: ToastState }) {
-  useEffect(() => {
-    const timer = window.setTimeout(onDismiss, 4200)
-    return () => window.clearTimeout(timer)
-  }, [onDismiss])
-
-  return (
-    <button
-      aria-live="polite"
-      className={`simple-toast ${toast.kind}`}
-      role="status"
-      type="button"
-      onClick={onDismiss}
-    >
-      {toast.text}
-    </button>
-  )
-}
-
 function findWorkspace(snapshot: ConsoleGatewaySnapshot | null, clientId?: string): SnapshotWorkspace | undefined {
   if (!snapshot || !clientId) return undefined
   return snapshot.workspaces.find((workspace) => workspace.clientId === clientId && workspace.status !== 'archived')
@@ -2343,26 +1804,8 @@ function agentDraft(agent?: SnapshotAgent, provider?: SnapshotProvider): AgentDr
   }
 }
 
-function clientDraftFromSnapshot(client: SnapshotClient, workspace?: SnapshotWorkspace, agent?: SnapshotAgent): DraftClient {
-  return {
-    name: client.name,
-    contact: client.contact ?? '',
-    billingLabel: client.billingLabel ?? '',
-    workspaceName: workspace?.name ?? `${client.name} Workspace`,
-    agentName: agent?.name ?? 'Client agent',
-    modelId: agent?.defaultModelId ?? 'openrouter/auto',
-    goal: agent?.outcome ?? 'Help this client complete daily work.',
-    instructions: agent?.instructions ?? 'Be brief, safe, and specific.',
-  }
-}
-
 function allModels(): Array<{ id: string; label: string }> {
-  const seen = new Set<string>()
-  return providerCatalog.flatMap((provider) => provider.models).filter((model) => {
-    if (seen.has(model.id)) return false
-    seen.add(model.id)
-    return true
-  })
+  return providerModels()
 }
 
 function modelLabel(modelId: string): string {

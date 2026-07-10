@@ -12,6 +12,7 @@ export {
 } from './GatewaySessionContext.js'
 export {
   consoleAgent,
+  consoleApprovalMetadata,
   consoleBudget,
   consoleBudgetStatus,
   consoleCellStatus,
@@ -26,6 +27,7 @@ export {
   consoleMarketplaceTemplate,
   consoleProvenanceReview,
   consoleProviderProfile,
+  consoleRun,
   consoleRunEvent,
   consoleRunDispatch,
   consoleRunLogRun,

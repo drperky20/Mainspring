@@ -14,11 +14,12 @@ The older mailbox runtime remains a deliberately separate compatibility lane.
 The largest remaining product risk is not another runtime: it is the breadth of
 the gateway and console read paths. The operator console now conditionally
 revalidates an in-memory safe snapshot rather than rebuilding it on every
-refresh, and its canonical RunLog Activity view now reads a bounded cursor
-page. The first broad compatibility projection still reads every app-state
-collection. That is correct for a small local installation and materially
-cheaper on normal refreshes, but compatibility history, approvals, and traces
-still need bounded read models before durable history grows without limit.
+refresh, and Activity uses bounded cursor pages for canonical RunLog rows,
+mailbox compatibility history, approval history, and selected public traces.
+The first broad compatibility projection still reads every app-state collection.
+That is appropriate for a small local installation and materially cheaper on
+normal refreshes, but usage, artifacts, audit, memory, and other aggregate
+collections remain candidates for later dedicated read models.
 
 ## Verified inventory
 
@@ -85,13 +86,13 @@ new product behavior from landing there without a compatibility reason.
 
 | Finding | Evidence | Impact | Decision |
 | --- | --- | --- | --- |
-| Broad gateway facade | `src/gateway/LocalGateway.ts` is 3,902 lines. | Ownership is difficult to discover; snapshot/projection work is mixed with domain operations. | Keep the stable facade, extract bounded internal collaborators incrementally. |
+| Broad gateway facade | `src/gateway/LocalGateway.ts` remains a large stable public facade. | Ownership is difficult to discover; snapshot/projection work is mixed with domain operations. | Keep the stable facade; bounded compatibility-run reads now use a dedicated page path, and further internal collaborators remain a P2 refactor. |
 | Broad app-state store | `src/gateway/AppStateStore.ts` is 3,273 lines. | Repository methods, SQL mappings, schema, and migrations are co-located. | Preserve the interface; split only behind tested repository seams. |
-| Broad connected console | `apps/console/src/ConnectedConsoleApp.tsx` is now 2,382 lines. | Connection lifecycle, selection, commands, dialogs, and client/setup views still share one file. | `ConsoleNavigation` and `useConsoleRunActivity` are extracted; continue with client/setup feature views. |
-| Broad snapshot compatibility DTO | `/snapshot` still includes every app-state collection. | Fresh projection cost and unbounded growth pressure remain. | ETag transport, server-only sanitized cache, adaptive refresh, and canonical `GET /runlog/runs` cursor pages are complete; migrate compatibility history, approvals, and traces before narrowing DTOs. |
+| Broad connected console | `apps/console/src/ConnectedConsoleApp.tsx` is now 1,860 lines. | Connection lifecycle, selection, commands, dialogs, and remaining workspace panels still share one file. | Navigation, provider catalog/form, first-run setup, and client editing are now extracted; split remaining client/workspace panels only behind stable props. |
+| Broad snapshot compatibility DTO | `/snapshot` still includes every app-state collection. | Fresh projection cost and unbounded growth pressure remain. | ETag transport, server-only sanitized cache, adaptive refresh, and cursor pages for canonical/compatibility runs, approvals, and traces are complete; usage, artifacts, audit, and memory need future dedicated read models before the aggregate narrows. |
 | Large style surface | `styles.css` is 3,359 lines and `controlRoom.css` is 1,428 lines. | Visual tokens and feature rules are hard to locate. | Split only after the connected UI has stable feature boundaries. |
 | Serial worker dispatch | Default `RunLogWorker` behavior is one active claim. | Safe baseline but unnecessary queue latency for independent work. | Complete: hosts can opt into bounded concurrency; same-workspace work remains serialized in the local executor. |
-| Bounded history is uneven | Run/event views have bounded tails, but the primary snapshot aggregates numerous collections. | Long-lived local state can increase snapshot cost. | Preserve compatibility now; add endpoint/read-model pagination after transport work is validated. |
+| Bounded history is uneven | Activity, approvals, and public traces are paginated; the primary snapshot still aggregates numerous unrelated collections. | Long-lived local state can increase snapshot cost. | Preserve compatibility now; add endpoint/read-model pagination for usage, artifacts, audit, and memory as concrete callers migrate. |
 
 No dead runtime architecture was found. The compatibility mailbox modules are
 still reachable through exported APIs, examples, tests, and gateway fallback,
@@ -118,11 +119,11 @@ row and executable regression or an explicit limitation.
 
 | Journey | Current state | Friction observed | Target direction |
 | --- | --- | --- | --- |
-| First launch/provider setup | Guided local setup and provider profile controls exist. | Console state and setup flow are coupled to the large application component. | Keep one clear setup path; extract it from the shell. |
-| Select client/workspace/agent | Live gateway selections are scoped by client/workspace. | Client/setup feature views still need further decomposition. | Complete first navigation slice: Home, Workspaces, Activity, and Settings; runs/approvals/usage are Activity views. |
-| Start, watch, and stop work | Durable RunLog starts, cancellation, SSE run events, trace inspection, and cursor-paginated canonical Activity rows exist. | Compatibility history and other advanced data still arrive through the broad snapshot. | Retain explicit run/event actions and add bounded compatibility, approval, and trace pages. |
-| Approval | Prominent approvals and RunLog receipt flow are present. | Detailed policy data can compete with the normal task workflow. | Keep action cards visible; move raw traces behind inspection. |
-| Inspect outcomes | Runs, artifacts, tool rows, checkpoints, usage, and trace panels exist. | Broad snapshot loads advanced data even when it is hidden. | Progressively disclose/paginate advanced read models. |
+| First launch/provider setup | Guided local setup and provider profile controls exist. | The flow was previously coupled to the connected shell. | `ConsoleSetup` and `ConsoleProviderCatalog` now own their UI-local state; keep one clear setup path. |
+| Select client/workspace/agent | Live gateway selections are scoped by client/workspace. | Remaining chat/agent/automation panels are still in the shell. | `ConsoleClientForms` owns client editing; retain Home, Workspaces, Activity, and Settings as the first navigation layer. |
+| Start, watch, and stop work | Durable RunLog starts, cancellation, SSE run events, and merged cursor-paginated canonical/compatibility Activity rows exist. | The broad snapshot remains a compatibility source for unrelated summary data. | Retain explicit run/event actions and migrate the next aggregate collections only with concrete UI callers. |
+| Approval | Prominent approvals and RunLog receipt flow are present. | Detailed policy data can compete with the normal task workflow. | Approval history is cursor-paginated and RunLog-preferred; keep action cards visible and raw traces behind inspection. |
+| Inspect outcomes | Runs, artifacts, tool rows, checkpoints, usage, and trace panels exist. | Usage/artifact/audit/memory histories still arrive through the aggregate. | Public RunLog trace pages are bounded; progressively disclose the remaining read models. |
 | Offline/stale behavior | Loading, offline, stale, and unauthorized states exist. | Full snapshots are still expensive when state changes. | Complete visibility-aware, abortable, non-overlapping revalidation with bounded backoff. |
 
 Accessibility posture is solid in individual component conventions but needs
@@ -150,14 +151,15 @@ product references only; no external code is copied. The repository's existing
 - Signed installers, updater infrastructure, tenancy, and production operations require external product/infrastructure ownership.
 - Compatibility mailbox retirement requires explicit public SDK/gateway
   migration coverage; it is not a cleanup-only deletion.
-- Snapshot pagination should be introduced per read model, after callers move
-  off the unconditional aggregate snapshot.
+- Usage, artifacts, audit, and memory pagination should be introduced per read
+  model after callers move off the unconditional aggregate snapshot.
 
 ## Review conclusion
 
 The repository does not need a rewrite. This branch preserves the RunLog spine,
 adds safe bounded concurrency, makes normal console refreshes conditional and
-cheap, gives canonical Activity rows a bounded cursor path, and begins splitting
-the connected shell. The next work is compatibility/approval/trace read models
-plus further client/setup view extraction, without weakening policy, lease, or
+cheap, gives canonical and compatibility Activity rows, approval history, and
+public traces bounded cursor paths, and splits provider/setup/client editing out
+of the connected shell. The next local read-model work is usage, artifacts,
+audit, and memory—not a second runtime or a weakening of policy, lease, or
 browser-safety boundaries.

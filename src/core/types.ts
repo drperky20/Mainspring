@@ -161,6 +161,35 @@ export interface RunLogApprovalRequestSnapshot {
   requestedAt: string
 }
 
+export type RunLogApprovalRequestStatus = 'pending' | 'approved' | 'denied' | 'cancelled'
+
+/**
+ * Browser-safe summary of a durable approval request. The full snapshot keeps
+ * workspace paths, hashes, and tool input host-side for receipt verification.
+ */
+export interface RunLogApprovalRequestSummary {
+  approvalId: string
+  runId: string
+  agentId: string
+  sessionId: string
+  toolCallId: string
+  toolName: string
+  status: RunLogApprovalRequestStatus
+  requestedAt: string
+  decidedAt?: string
+}
+
+export interface RunLogApprovalListCursor {
+  requestedAt: string
+  approvalId: string
+}
+
+export interface ListRunLogApprovalRequestsInput {
+  status?: RunLogApprovalRequestStatus | RunLogApprovalRequestStatus[]
+  before?: RunLogApprovalListCursor
+  limit?: number
+}
+
 export interface RunLogApprovalReceipt {
   version: 1
   receiptId: string
@@ -202,6 +231,7 @@ export interface ListRunEventsInput {
   afterSeq?: number
   beforeSeq?: number
   order?: 'asc' | 'desc'
+  visibility?: RunLogEvent['visibility'] | RunLogEvent['visibility'][]
   types?: RunLogEventType[]
   limit?: number
 }
@@ -373,6 +403,7 @@ export interface RunLogStore {
   latestCheckpoint(runId: string): RunCheckpoint | null
   putApprovalRequest(snapshot: RunLogApprovalRequestSnapshot): void
   getApprovalRequest(approvalId: string): RunLogApprovalRequestSnapshot | null
+  listApprovalRequests(input?: ListRunLogApprovalRequestsInput): RunLogApprovalRequestSummary[]
   putApprovalReceipt(receipt: RunLogApprovalReceipt): void
   getApprovalReceipt(receiptId: string): RunLogApprovalReceipt | null
   getApprovedUnusedReceipt(runId: string): RunLogApprovalReceipt | null

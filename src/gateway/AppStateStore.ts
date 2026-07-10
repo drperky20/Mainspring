@@ -77,6 +77,19 @@ export interface LocalGatewayRunMetadataRecord {
   metadata?: Record<string, unknown>
 }
 
+export interface LocalGatewayRunListCursor {
+  createdAt: string
+  runId: string
+}
+
+export interface LocalGatewayRunListInput {
+  sessionId?: string
+  /** Return rows strictly older than this reverse-chronological cursor. */
+  before?: LocalGatewayRunListCursor
+  limit?: number
+  order?: 'asc' | 'desc'
+}
+
 export interface LocalGatewayApprovalMetadataRecord {
   approvalId: string
   runId: string
@@ -88,6 +101,20 @@ export interface LocalGatewayApprovalMetadataRecord {
   requestedAt: string
   resolvedAt?: string
   metadata?: Record<string, unknown>
+}
+
+export interface LocalGatewayApprovalListCursor {
+  requestedAt: string
+  approvalId: string
+}
+
+export interface LocalGatewayApprovalListInput {
+  runId?: string
+  status?: LocalGatewayApprovalMetadataRecord['status']
+  /** Return rows strictly older than this reverse-chronological cursor. */
+  before?: LocalGatewayApprovalListCursor
+  limit?: number
+  order?: 'asc' | 'desc'
 }
 
 export interface LocalGatewayArtifactRecord {
@@ -602,12 +629,12 @@ export interface LocalGatewayAppStateStore {
   runs: {
     upsert(input: UpsertLocalGatewayRunMetadataInput): LocalGatewayRunMetadataRecord
     get(runId: string): LocalGatewayRunMetadataRecord | null
-    list(input?: { sessionId?: string }): LocalGatewayRunMetadataRecord[]
+    list(input?: LocalGatewayRunListInput): LocalGatewayRunMetadataRecord[]
   }
   approvals: {
     upsert(input: UpsertLocalGatewayApprovalMetadataInput): LocalGatewayApprovalMetadataRecord
     get(approvalId: string): LocalGatewayApprovalMetadataRecord | null
-    list(input?: { runId?: string; status?: LocalGatewayApprovalMetadataRecord['status'] }): LocalGatewayApprovalMetadataRecord[]
+    list(input?: LocalGatewayApprovalListInput): LocalGatewayApprovalMetadataRecord[]
   }
   artifacts: {
     create(input: CreateLocalGatewayArtifactInput): LocalGatewayArtifactRecord
@@ -776,6 +803,9 @@ CREATE TABLE IF NOT EXISTS gateway_runs (
   metadata_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_gateway_runs_session ON gateway_runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_runs_activity ON gateway_runs(created_at DESC, run_id DESC);
+CREATE INDEX IF NOT EXISTS idx_gateway_runs_session_activity
+  ON gateway_runs(session_id, created_at DESC, run_id DESC);
 
 CREATE TABLE IF NOT EXISTS gateway_approvals (
   approval_id TEXT PRIMARY KEY,
@@ -791,6 +821,9 @@ CREATE TABLE IF NOT EXISTS gateway_approvals (
 );
 CREATE INDEX IF NOT EXISTS idx_gateway_approvals_run ON gateway_approvals(run_id);
 CREATE INDEX IF NOT EXISTS idx_gateway_approvals_status ON gateway_approvals(status);
+CREATE INDEX IF NOT EXISTS idx_gateway_approvals_activity ON gateway_approvals(requested_at DESC, approval_id DESC);
+CREATE INDEX IF NOT EXISTS idx_gateway_approvals_status_activity
+  ON gateway_approvals(status, requested_at DESC, approval_id DESC);
 
 CREATE TABLE IF NOT EXISTS gateway_artifacts (
   artifact_id TEXT PRIMARY KEY,
@@ -2145,19 +2178,37 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
         .get(runId)
       return row ? runMetadataFromRow(row) : null
     },
-    list: (input: { sessionId?: string } = {}): LocalGatewayRunMetadataRecord[] => {
+    list: (input: LocalGatewayRunListInput = {}): LocalGatewayRunMetadataRecord[] => {
+      const clauses: string[] = []
+      const params: Record<string, unknown> = {}
       if (input.sessionId) {
-        return (this.db
-          .prepare(
-            `SELECT * FROM gateway_runs
-             WHERE session_id = ?
-             ORDER BY created_at ASC, run_id ASC`,
-          )
-          .all(input.sessionId) as unknown[]).map(runMetadataFromRow)
+        clauses.push('session_id = @sessionId')
+        params.sessionId = input.sessionId
       }
+      if (input.before) {
+        const createdAt = input.before.createdAt.trim()
+        const runId = input.before.runId.trim()
+        if (!createdAt || !runId) {
+          throw new Error('Gateway run cursor requires non-empty createdAt and runId values.')
+        }
+        clauses.push(
+          '(created_at < @beforeCreatedAt OR (created_at = @beforeCreatedAt AND run_id < @beforeRunId))',
+        )
+        params.beforeCreatedAt = createdAt
+        params.beforeRunId = runId
+      }
+      if (input.limit !== undefined) {
+        if (!Number.isSafeInteger(input.limit) || input.limit < 1) {
+          throw new Error('Gateway run list limit must be a positive integer.')
+        }
+        params.limit = input.limit
+      }
+      const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+      const order = input.order === 'desc' ? 'DESC' : 'ASC'
+      const limit = input.limit === undefined ? '' : ' LIMIT @limit'
       return (this.db
-        .prepare('SELECT * FROM gateway_runs ORDER BY created_at ASC, run_id ASC')
-        .all() as unknown[]).map(runMetadataFromRow)
+        .prepare(`SELECT * FROM gateway_runs ${where} ORDER BY created_at ${order}, run_id ${order}${limit}`)
+        .all(params) as unknown[]).map(runMetadataFromRow)
     },
   }
 
@@ -2209,31 +2260,42 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
       const row = this.db.prepare('SELECT * FROM gateway_approvals WHERE approval_id = ?').get(approvalId)
       return row ? approvalMetadataFromRow(row) : null
     },
-    list: (input: { runId?: string; status?: LocalGatewayApprovalMetadataRecord['status'] } = {}) => {
-      if (input.runId && input.status) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_approvals
-           WHERE run_id = ? AND status = ?
-           ORDER BY requested_at ASC, approval_id ASC`,
-        ).all(input.runId, input.status) as unknown[]).map(approvalMetadataFromRow)
-      }
+    list: (input: LocalGatewayApprovalListInput = {}) => {
+      const clauses: string[] = []
+      const params: Record<string, unknown> = {}
       if (input.runId) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_approvals
-           WHERE run_id = ?
-           ORDER BY requested_at ASC, approval_id ASC`,
-        ).all(input.runId) as unknown[]).map(approvalMetadataFromRow)
+        clauses.push('run_id = @runId')
+        params.runId = input.runId
       }
       if (input.status) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_approvals
-           WHERE status = ?
-           ORDER BY requested_at ASC, approval_id ASC`,
-        ).all(input.status) as unknown[]).map(approvalMetadataFromRow)
+        clauses.push('status = @status')
+        params.status = input.status
       }
+      if (input.before) {
+        const requestedAt = input.before.requestedAt.trim()
+        const approvalId = input.before.approvalId.trim()
+        if (!requestedAt || !approvalId) {
+          throw new Error('Gateway approval cursor requires non-empty requestedAt and approvalId values.')
+        }
+        clauses.push(
+          '(requested_at < @beforeRequestedAt OR (requested_at = @beforeRequestedAt AND approval_id < @beforeApprovalId))',
+        )
+        params.beforeRequestedAt = requestedAt
+        params.beforeApprovalId = approvalId
+      }
+      if (input.limit !== undefined) {
+        if (!Number.isSafeInteger(input.limit) || input.limit < 1) {
+          throw new Error('Gateway approval list limit must be a positive integer.')
+        }
+        params.limit = input.limit
+      }
+      const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+      const order = input.order === 'desc' ? 'DESC' : 'ASC'
+      const limit = input.limit === undefined ? '' : ' LIMIT @limit'
       return (this.db.prepare(
-        'SELECT * FROM gateway_approvals ORDER BY requested_at ASC, approval_id ASC',
-      ).all() as unknown[]).map(approvalMetadataFromRow)
+        `SELECT * FROM gateway_approvals ${where}
+         ORDER BY requested_at ${order}, approval_id ${order}${limit}`,
+      ).all(params) as unknown[]).map(approvalMetadataFromRow)
     },
   }
 

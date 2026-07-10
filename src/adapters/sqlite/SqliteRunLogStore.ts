@@ -14,12 +14,14 @@ import type {
   ExecutionFailure,
   ExecutionOutboxRecord,
   ExecutionOutboxStatus,
+  ListRunLogApprovalRequestsInput,
   ListRunEventsInput,
   ListRunsInput,
   RunCheckpoint,
   RunIntent,
   RunLogApprovalReceipt,
   RunLogApprovalRequestSnapshot,
+  RunLogApprovalRequestSummary,
   RunLogEvent,
   RunLogProjectionCatchupResult,
   RunLogRunSummary,
@@ -203,6 +205,22 @@ function mapApprovalRequest(row: Record<string, unknown>): RunLogApprovalRequest
     riskSnapshotHash: '',
     requestedAt: String(row.created_at),
   })
+}
+
+function mapApprovalRequestSummary(row: Record<string, unknown>): RunLogApprovalRequestSummary {
+  const snapshot = mapApprovalRequest(row)
+  const summary: RunLogApprovalRequestSummary = {
+    approvalId: snapshot.approvalId,
+    runId: snapshot.runId,
+    agentId: snapshot.agentId,
+    sessionId: snapshot.sessionId,
+    toolCallId: snapshot.toolCallId,
+    toolName: snapshot.toolName,
+    status: row.status as RunLogApprovalRequestSummary['status'],
+    requestedAt: snapshot.requestedAt || String(row.created_at),
+  }
+  if (row.decided_at) summary.decidedAt = String(row.decided_at)
+  return summary
 }
 
 function mapApprovalReceipt(row: Record<string, unknown>): RunLogApprovalReceipt {
@@ -420,6 +438,10 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
     this.ensureTableColumn('run_approval_requests', 'receipt_id', 'TEXT')
     this.handle().exec(`CREATE INDEX IF NOT EXISTS idx_run_approval_requests_status
       ON run_approval_requests(run_id, status)`)
+    this.handle().exec(`CREATE INDEX IF NOT EXISTS idx_run_approval_requests_activity
+      ON run_approval_requests(status, created_at DESC, approval_id DESC)`)
+    this.handle().exec(`CREATE INDEX IF NOT EXISTS idx_run_approval_requests_created
+      ON run_approval_requests(created_at DESC, approval_id DESC)`)
     this.migrateExecutionOutbox()
     this.migrateRunProjectionSchema()
   }
@@ -1299,6 +1321,20 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       clauses.push('seq < @beforeSeq')
       params.beforeSeq = input.beforeSeq
     }
+    const visibilities = Array.isArray(input.visibility)
+      ? input.visibility
+      : input.visibility
+        ? [input.visibility]
+        : []
+    if (Array.isArray(input.visibility) && visibilities.length === 0) return []
+    if (visibilities.length > 0) {
+      const placeholders = visibilities.map((visibility, index) => {
+        const key = `visibility${index}`
+        params[key] = visibility
+        return `@${key}`
+      })
+      clauses.push(`visibility IN (${placeholders.join(', ')})`)
+    }
     if (input.types) {
       if (input.types.length === 0) return []
       const placeholders = input.types.map((type, index) => {
@@ -1335,6 +1371,20 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
     if (typeof input.beforeSeq === 'number') {
       clauses.push('seq < @beforeSeq')
       params.beforeSeq = input.beforeSeq
+    }
+    const visibilities = Array.isArray(input.visibility)
+      ? input.visibility
+      : input.visibility
+        ? [input.visibility]
+        : []
+    if (Array.isArray(input.visibility) && visibilities.length === 0) return 0
+    if (visibilities.length > 0) {
+      const placeholders = visibilities.map((visibility, index) => {
+        const key = `visibility${index}`
+        params[key] = visibility
+        return `@${key}`
+      })
+      clauses.push(`visibility IN (${placeholders.join(', ')})`)
     }
     if (input.types) {
       if (input.types.length === 0) return 0
@@ -1508,6 +1558,51 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       .prepare('SELECT * FROM run_approval_requests WHERE approval_id = ?')
       .get(approvalId) as Record<string, unknown> | undefined
     return row ? mapApprovalRequest(row) : null
+  }
+
+  listApprovalRequests(input: ListRunLogApprovalRequestsInput = {}): RunLogApprovalRequestSummary[] {
+    const clauses: string[] = []
+    const params: Record<string, unknown> = {}
+    const statuses = Array.isArray(input.status)
+      ? input.status
+      : input.status
+        ? [input.status]
+        : []
+    if (Array.isArray(input.status) && statuses.length === 0) return []
+    if (statuses.length > 0) {
+      const placeholders = statuses.map((status, index) => {
+        const key = `status${index}`
+        params[key] = status
+        return `@${key}`
+      })
+      clauses.push(`status IN (${placeholders.join(', ')})`)
+    }
+    if (input.before) {
+      const requestedAt = input.before.requestedAt.trim()
+      const approvalId = input.before.approvalId.trim()
+      if (!requestedAt || !approvalId) {
+        throw new Error('RunLog approval cursor requires non-empty requestedAt and approvalId values.')
+      }
+      clauses.push(
+        '(created_at < @beforeRequestedAt OR (created_at = @beforeRequestedAt AND approval_id < @beforeApprovalId))',
+      )
+      params.beforeRequestedAt = requestedAt
+      params.beforeApprovalId = approvalId
+    }
+    if (input.limit !== undefined) {
+      if (!Number.isSafeInteger(input.limit) || input.limit < 1) {
+        throw new Error('RunLog approval list limit must be a positive integer.')
+      }
+      params.limit = input.limit
+    } else {
+      params.limit = 500
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    return this.handle()
+      .prepare(`SELECT * FROM run_approval_requests ${where}
+        ORDER BY created_at DESC, approval_id DESC LIMIT @limit`)
+      .all(params)
+      .map((row) => mapApprovalRequestSummary(row as Record<string, unknown>))
   }
 
   putApprovalReceipt(receipt: RunLogApprovalReceipt): void {

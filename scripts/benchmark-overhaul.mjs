@@ -127,18 +127,43 @@ async function benchmarkSnapshotTransport() {
   const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
   let serverStarted = false
   try {
-    await runtime.start()
+    // Keep transport fixtures static. Starting the mailbox compatibility
+    // worker here would mutate every fixture while page caching is measured,
+    // turning this into a scheduler-contention benchmark instead.
+    let traceRunId
     for (let index = 0; index < SNAPSHOT_CLIENT_COUNT; index += 1) {
-      gateway.clients.create({
+      const created = gateway.clients.create({
         name: `Snapshot benchmark client ${index}`,
         workspaceName: `Snapshot benchmark workspace ${index}`,
         workspaceRoot: path.join(root, 'workspaces', `client-${index}`),
       })
-      runLog.runs.start({
+      const compatibilityRun = gateway.runs.start({
+        sessionId: created.session.sessionId,
+        input: `snapshot benchmark compatibility activity ${index}`,
+        mode: 'chat',
+        allowedTools: [],
+        workspaceId: created.workspace.workspaceId,
+      })
+      appState.approvals.upsert({
+        approvalId: `snapshot-benchmark-approval-${index}`,
+        runId: compatibilityRun.runId,
+        sessionId: compatibilityRun.sessionId,
+        workspaceId: created.workspace.workspaceId,
+        status: index % 2 === 0 ? 'pending' : 'approved',
+        targetKey: 'file.write',
+      })
+      const runLogRun = runLog.runs.start({
         sessionId: `snapshot-benchmark-runlog-session-${index}`,
         input: `snapshot benchmark activity ${index}`,
       })
+      if (!traceRunId) traceRunId = runLogRun.record.runId
     }
+    if (!traceRunId) throw new Error('Benchmark fixture did not create a RunLog trace run.')
+    runLog.store.appendEvent({
+      runId: traceRunId,
+      type: 'runtime.warning',
+      payload: { source: 'benchmark trace fixture' },
+    })
     const started = await server.start()
     serverStarted = true
     const cold200 = await measure(SNAPSHOT_COLD_SAMPLES, async () => {
@@ -185,6 +210,32 @@ async function benchmarkSnapshotTransport() {
       }
       return body.byteLength
     })
+    const fetchCompatibilityActivity = async () => {
+      const response = await fetch(`${started.url}/compatibility/runs?limit=${SNAPSHOT_CLIENT_COUNT}`)
+      const body = await response.arrayBuffer()
+      if (response.status !== 200) {
+        throw new Error(`Expected compatibility activity status 200, received ${response.status}.`)
+      }
+      return body.byteLength
+    }
+    const compatibilityActivityCold = await measure(1, fetchCompatibilityActivity)
+    const compatibilityActivityWarm = await measure(SNAPSHOT_SAMPLES, fetchCompatibilityActivity)
+    const approvalHistory = await measure(SNAPSHOT_SAMPLES, async () => {
+      const response = await fetch(`${started.url}/approval-history?limit=${SNAPSHOT_CLIENT_COUNT}`)
+      const body = await response.arrayBuffer()
+      if (response.status !== 200) {
+        throw new Error(`Expected approval history status 200, received ${response.status}.`)
+      }
+      return body.byteLength
+    })
+    const runLogTrace = await measure(SNAPSHOT_SAMPLES, async () => {
+      const response = await fetch(`${started.url}/runlog/runs/${encodeURIComponent(traceRunId)}/trace?limit=80`)
+      const body = await response.arrayBuffer()
+      if (response.status !== 200) {
+        throw new Error(`Expected RunLog trace status 200, received ${response.status}.`)
+      }
+      return body.byteLength
+    })
     return {
       initialResponse: {
         responseBytes: initialBody.byteLength,
@@ -195,6 +246,10 @@ async function benchmarkSnapshotTransport() {
       full200: full,
       unchanged304: unchanged,
       runLogActivity200: runLogActivity,
+      compatibilityActivityCold200: compatibilityActivityCold,
+      compatibilityActivityWarm200: compatibilityActivityWarm,
+      approvalHistory200: approvalHistory,
+      runLogTrace200: runLogTrace,
     }
   } finally {
     if (serverStarted) await server.stop()

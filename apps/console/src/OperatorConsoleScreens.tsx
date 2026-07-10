@@ -232,8 +232,10 @@ export function RunsScreen({
   runsLoading = false,
   runsError,
   hasMoreRuns = false,
+  hasMoreEvents = false,
   actionBusy,
   onCancel,
+  onLoadMoreEvents,
   onLoadMoreRuns,
   onReloadEvents,
   onSelectRun,
@@ -246,8 +248,10 @@ export function RunsScreen({
   runsLoading?: boolean
   runsError?: string
   hasMoreRuns?: boolean
+  hasMoreEvents?: boolean
   actionBusy: boolean
   onCancel: (run: OperatorRunRow) => void
+  onLoadMoreEvents?: () => void
   onLoadMoreRuns?: () => void
   onReloadEvents: () => void
   onSelectRun: (runId: string) => void
@@ -338,8 +342,6 @@ export function RunsScreen({
                   >
                     Cancel run
                   </button>
-                ) : selectedRun.active && selectedRun.source === 'runlog' ? (
-                  <span className="control-action-note">RunLog cancellation is not exposed by the gateway yet.</span>
                 ) : null}
               </header>
 
@@ -383,6 +385,16 @@ export function RunsScreen({
                     ))}
                   </ol>
                 )}
+                {hasMoreEvents ? (
+                  <button
+                    className="simple-secondary control-run-load-more"
+                    disabled={eventsLoading}
+                    type="button"
+                    onClick={onLoadMoreEvents}
+                  >
+                    {eventsLoading ? 'Loading eventsâ€¦' : 'Load earlier events'}
+                  </button>
+                ) : null}
               </section>
 
               <div className="control-run-summary-grid">
@@ -435,10 +447,18 @@ export function RunsScreen({
 export function ApprovalsScreen({
   model,
   actionBusy,
+  loading = false,
+  error,
+  hasMore = false,
+  onLoadMore,
   onResolve,
 }: {
   model: OperatorConsoleViewModel
   actionBusy: boolean
+  loading?: boolean
+  error?: string
+  hasMore?: boolean
+  onLoadMore?: () => void
   onResolve: (
     approval: OperatorApprovalRow,
     decision: 'approved' | 'denied',
@@ -454,11 +474,13 @@ export function ApprovalsScreen({
           <h1 id="approvals-title">Approvals</h1>
           <p>Review side effects with their client, agent, run, and policy target attached.</p>
         </div>
-        <div className={`control-header-stat ${model.pendingApprovals.length > 0 ? 'warning' : ''}`}>
-          <strong>{model.pendingApprovals.length}</strong>
+        <div className={`control-header-stat ${model.counts.pendingApprovals > 0 ? 'warning' : ''}`}>
+          <strong>{model.counts.pendingApprovals}</strong>
           <span>waiting decisions</span>
         </div>
       </header>
+
+      {error ? <InlineError message={error} /> : null}
 
       {model.pendingApprovals.length === 0 ? (
         <LargeEmptyState
@@ -480,7 +502,7 @@ export function ApprovalsScreen({
       )}
 
       <section className="control-panel control-history-panel">
-        <PanelHeader title="Recent decisions" meta={`${resolved.length} recorded`} />
+        <PanelHeader title="Recent decisions" meta={loading ? 'loading' : `${resolved.length} recorded`} />
         {resolved.length === 0 ? (
           <CompactEmptyState title="No decisions in this snapshot" detail="Resolved compatibility approvals will appear here." />
         ) : (
@@ -500,6 +522,16 @@ export function ApprovalsScreen({
             ))}
           </div>
         )}
+        {hasMore ? (
+          <button
+            className="simple-secondary control-run-load-more"
+            disabled={loading}
+            type="button"
+            onClick={onLoadMore}
+          >
+            {loading ? 'Loading approvalsâ€¦' : 'Load more approvals'}
+          </button>
+        ) : null}
       </section>
     </section>
   )

@@ -28,9 +28,11 @@ describe('MainspringMailbox mutation revision', () => {
       content: '{}',
     })
     expect(MainspringMailbox.changeRevision()).toBe(initial + 1)
+    expect(MainspringMailbox.changeRevisionForSessionPath(mailbox.paths.sessionPath)).toBe(initial + 1)
 
     mailbox.markAck(inboundId, 'processing')
     expect(MainspringMailbox.changeRevision()).toBe(initial + 2)
+    expect(MainspringMailbox.changeRevisionForSessionPath(mailbox.paths.sessionPath)).toBe(initial + 2)
 
     mailbox.writeOutbound({
       runId: 'run-revision',
@@ -39,11 +41,13 @@ describe('MainspringMailbox mutation revision', () => {
       content: JSON.stringify({ text: 'completed' }),
     })
     expect(MainspringMailbox.changeRevision()).toBe(initial + 3)
+    expect(MainspringMailbox.changeRevisionForSessionPath(mailbox.paths.sessionPath)).toBe(initial + 3)
 
     mailbox.writeEvent(
       { type: 'run.status', runId: 'run-revision', status: 'running' },
       'session-revision',
     )
     expect(MainspringMailbox.changeRevision()).toBe(initial + 4)
+    expect(MainspringMailbox.changeRevisionForSessionPath(mailbox.paths.sessionPath)).toBe(initial + 4)
   })
 })

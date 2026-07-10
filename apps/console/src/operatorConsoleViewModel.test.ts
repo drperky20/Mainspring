@@ -1,9 +1,34 @@
 import { describe, expect, it } from 'vitest'
 import type { ConsoleGatewaySnapshot } from 'mainspring/gateway'
 import { developmentGatewaySnapshotFixture } from './developmentGatewaySnapshotFixture'
-import { buildOperatorConsoleViewModel } from './operatorConsoleViewModel'
+import { buildOperatorApprovalRows, buildOperatorConsoleViewModel } from './operatorConsoleViewModel'
 
 describe('buildOperatorConsoleViewModel', () => {
+  it('maps bounded approval history rows back to their client and agent context', () => {
+    const rows = buildOperatorApprovalRows(developmentGatewaySnapshotFixture, [
+      {
+        approvalId: 'approval_history_runlog',
+        runId: 'run_northline_done',
+        sessionId: 'session_northline_today',
+        workspaceId: 'workspace_northline',
+        agentId: 'agent_front_desk',
+        source: 'runlog',
+        status: 'pending',
+        requestedAt: '2026-06-27T17:04:00.000Z',
+        targetKey: 'tool:file.write',
+      },
+    ])
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        approvalId: 'approval_history_runlog',
+        source: 'runlog',
+        clientName: 'Northline Dental',
+        agentName: 'Front desk assistant',
+      }),
+    ])
+  })
+
   it('merges compatibility and RunLog runs without duplicating canonical RunLog rows', () => {
     const snapshot: ConsoleGatewaySnapshot = {
       ...developmentGatewaySnapshotFixture,

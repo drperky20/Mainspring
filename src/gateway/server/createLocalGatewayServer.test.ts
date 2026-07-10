@@ -322,7 +322,6 @@ describe('LocalGatewayHttpServer', () => {
       snapshotCalls += 1
       return snapshot()
     }
-
     await mainspring.start()
     try {
       const started = await server.start()
@@ -471,6 +470,358 @@ describe('LocalGatewayHttpServer', () => {
     } finally {
       await server.stop()
       runLog.close()
+      await runtime.stop()
+    }
+  })
+
+  it('serves reverse-paginated public RunLog traces without exposing hidden events', async () => {
+    const root = makeTempRoot('mainspring-gateway-runlog-trace-page-')
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'runlog-trace-page-session',
+      workspace: { root: path.join(root, 'workspace', 'trace-page') },
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([]),
+      agent: {
+        agentId: 'runlog-trace-page-agent',
+        instructions: 'Keep traces public and paginated.',
+        capabilities: ['provider'],
+      },
+    })
+    const agent = runLog.store.getAgent('runlog-trace-page-agent')
+    if (!agent) throw new Error('RunLog trace page agent was not initialized.')
+    const run = runLog.store.createRun({
+      agentId: agent.agentId,
+      sessionId: session.record.sessionId,
+      input: 'trace page input',
+      workspaceRoot: path.join(root, 'private-workspace'),
+    }, agent)
+    for (const label of ['trace-zero', 'trace-one']) {
+      runLog.store.appendEvent({
+        runId: run.runId,
+        type: 'runtime.warning',
+        payload: { label },
+      })
+    }
+    runLog.store.appendEvent({
+      runId: run.runId,
+      type: 'runtime.warning',
+      visibility: 'sensitive',
+      payload: { secret: 'must-not-cross-the-browser-boundary' },
+    })
+    for (const label of ['trace-two', 'trace-three', 'trace-four']) {
+      runLog.store.appendEvent({
+        runId: run.runId,
+        type: 'runtime.warning',
+        payload: { label },
+      })
+    }
+    const gateway = createLocalMainspringGateway({ runtime, runLog })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const first = await fetch(
+        `${started.url}/runlog/runs/${encodeURIComponent(run.runId)}/trace?limit=2`,
+      )
+      expect(first.status).toBe(200)
+      const firstBody = await first.json() as {
+        runId: string
+        sessionId: string
+        events: Array<{ seq: number; payload?: { label?: string } }>
+        nextCursor?: string
+      }
+      expect(firstBody).toMatchObject({
+        runId: run.runId,
+        sessionId: session.record.sessionId,
+      })
+      expect(firstBody.events).toHaveLength(2)
+      expect(firstBody.events.map((event) => event.seq)).toEqual(
+        [...firstBody.events].map((event) => event.seq).sort((left, right) => left - right),
+      )
+      expect(firstBody.events.map((event) => event.payload?.label)).toEqual(['trace-three', 'trace-four'])
+      expect(firstBody.nextCursor).toEqual(expect.any(String))
+      expect(JSON.stringify(firstBody)).not.toContain('must-not-cross-the-browser-boundary')
+
+      const second = await fetch(
+        `${started.url}/runlog/runs/${encodeURIComponent(run.runId)}/trace?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? '')}`,
+      )
+      expect(second.status).toBe(200)
+      const secondBody = await second.json() as {
+        events: Array<{ seq: number; payload?: { label?: string } }>
+        nextCursor?: string
+      }
+      expect(secondBody.events.map((event) => event.payload?.label)).toEqual([
+        'trace-one',
+        'trace-two',
+      ])
+      expect(new Set([...firstBody.events, ...secondBody.events].map((event) => event.seq)).size).toBe(4)
+      expect(secondBody.nextCursor).toEqual(expect.any(String))
+
+      const third = await fetch(
+        `${started.url}/runlog/runs/${encodeURIComponent(run.runId)}/trace?limit=2&cursor=${encodeURIComponent(secondBody.nextCursor ?? '')}`,
+      )
+      expect(third.status).toBe(200)
+      const thirdBody = await third.json() as { events: Array<{ seq: number }>; nextCursor?: string }
+      expect(thirdBody.events).toHaveLength(1)
+      expect(thirdBody.nextCursor).toBeUndefined()
+
+      const invalid = await fetch(`${started.url}/runlog/runs/${encodeURIComponent(run.runId)}/trace?cursor=not-a-valid-cursor`)
+      expect(invalid.status).toBe(400)
+      const invalidLimit = await fetch(`${started.url}/runlog/runs/${encodeURIComponent(run.runId)}/trace?limit=201`)
+      expect(invalidLimit.status).toBe(400)
+    } finally {
+      await server.stop()
+      runLog.close()
+      await runtime.stop()
+    }
+  })
+
+  it('serves bounded approval history from compatibility metadata and canonical RunLog records', async () => {
+    const root = makeTempRoot('mainspring-gateway-approval-history-page-')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([]),
+      agent: {
+        agentId: 'approval-history-agent',
+        instructions: 'Keep approval history bounded.',
+        capabilities: ['provider'],
+      },
+    })
+    const agent = runLog.store.getAgent('approval-history-agent')
+    if (!agent) throw new Error('RunLog approval history agent was not initialized.')
+    const run = runLog.store.createRun({
+      agentId: agent.agentId,
+      sessionId: 'approval-history-session',
+      input: 'approval history input',
+    }, agent)
+    runLog.store.putApprovalRequest({
+      approvalId: 'approval_runlog',
+      runId: run.runId,
+      agentId: agent.agentId,
+      sessionId: run.sessionId,
+      toolCallId: 'tool_call_runlog',
+      toolName: 'file.write',
+      toolInput: { secret: 'must-not-cross-the-browser-boundary' },
+      toolInputHash: 'tool-input-hash',
+      cwd: path.join(root, 'private-workspace'),
+      workspaceId: 'workspace_runlog',
+      workspaceHash: 'workspace-hash',
+      policyHash: 'policy-hash',
+      toolManifestHash: 'manifest-hash',
+      providerContextHash: 'provider-context-hash',
+      riskSnapshotHash: 'risk-snapshot-hash',
+      requestedAt: '2026-07-10T12:04:00.000Z',
+    })
+    // This mirrors what a gateway-originated decision leaves in app state;
+    // the canonical RunLog ledger must win when IDs overlap.
+    appState.approvals.upsert({
+      approvalId: 'approval_runlog',
+      runId: run.runId,
+      sessionId: run.sessionId,
+      status: 'approved',
+      requestedAt: '2026-07-10T12:04:00.000Z',
+      resolvedAt: '2026-07-10T12:05:00.000Z',
+      targetKey: 'file.write',
+    })
+    appState.approvals.upsert({
+      approvalId: 'approval_compat_new',
+      runId: 'run_compat_new',
+      sessionId: 'session_compat',
+      status: 'approved',
+      requestedAt: '2026-07-10T12:03:00.000Z',
+      resolvedAt: '2026-07-10T12:03:30.000Z',
+      targetKey: 'shell.exec',
+    })
+    appState.approvals.upsert({
+      approvalId: 'approval_compat_old',
+      runId: 'run_compat_old',
+      sessionId: 'session_compat',
+      status: 'denied',
+      requestedAt: '2026-07-10T12:02:00.000Z',
+      resolvedAt: '2026-07-10T12:02:30.000Z',
+      targetKey: 'browser.open',
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const first = await fetch(`${started.url}/approval-history?limit=2`)
+      expect(first.status).toBe(200)
+      const firstBody = await first.json() as {
+        approvals: Array<{ approvalId: string; source: string; status: string; targetKey?: string }>
+        nextCursor?: string
+      }
+      expect(firstBody.approvals).toEqual([
+        expect.objectContaining({
+          approvalId: 'approval_runlog',
+          source: 'runlog',
+          status: 'pending',
+          targetKey: 'tool:file.write',
+        }),
+        expect.objectContaining({ approvalId: 'approval_compat_new', source: 'compatibility' }),
+      ])
+      expect(firstBody.nextCursor).toEqual(expect.any(String))
+      expect(JSON.stringify(firstBody)).not.toContain('must-not-cross-the-browser-boundary')
+      expect(JSON.stringify(firstBody)).not.toContain('private-workspace')
+      expect(snapshotCalls).toBe(0)
+
+      const second = await fetch(
+        `${started.url}/approval-history?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? '')}`,
+      )
+      expect(second.status).toBe(200)
+      const secondBody = await second.json() as { approvals: Array<{ approvalId: string }>; nextCursor?: string }
+      expect(secondBody.approvals).toEqual([
+        expect.objectContaining({ approvalId: 'approval_compat_old' }),
+      ])
+      expect(secondBody.nextCursor).toBeUndefined()
+      expect(snapshotCalls).toBe(0)
+
+      const invalid = await fetch(`${started.url}/approval-history?status=unknown`)
+      expect(invalid.status).toBe(400)
+    } finally {
+      await server.stop()
+      runLog.close()
+      appState.close()
+      await runtime.stop()
+    }
+  })
+
+  it('keeps approval history bounded by requiring app-state metadata', async () => {
+    const root = makeTempRoot('mainspring-gateway-approval-history-no-app-state-')
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const gateway = createLocalMainspringGateway({ runtime })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const response = await fetch(`${started.url}/approval-history`)
+      expect(response.status).toBe(501)
+      expect(await response.json()).toMatchObject({
+        error: 'Approval history pagination requires the gateway app-state store.',
+      })
+      expect(snapshotCalls).toBe(0)
+    } finally {
+      await server.stop()
+      await runtime.stop()
+    }
+  })
+
+  it('serves cursor-paginated compatibility runs without materializing the broad snapshot', async () => {
+    const root = makeTempRoot('mainspring-gateway-compatibility-run-page-')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'compatibility-run-page-session',
+      workspace: { root: path.join(root, 'workspace', 'compatibility-page') },
+    })
+    for (const runId of ['run_1', 'run_2', 'run_3']) {
+      appState.runs.upsert({
+        runId,
+        sessionId: session.record.sessionId,
+        workspaceId: 'workspace_compatibility',
+        agentId: 'agent_compatibility',
+        providerId: 'openrouter',
+        modelId: 'openrouter/auto',
+        metadata: { private: 'must-not-cross-the-browser-boundary' },
+      })
+    }
+    appState.runs.upsert({
+      runId: 'run_runlog_mirror',
+      sessionId: session.record.sessionId,
+      metadata: { runtime: 'runlog' },
+    })
+    const gateway = createLocalMainspringGateway({ runtime, appState })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const snapshotRevision = gateway.snapshotRevision.bind(gateway)
+    let snapshotRevisionCalls = 0
+    gateway.snapshotRevision = () => {
+      snapshotRevisionCalls += 1
+      return snapshotRevision()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const first = await fetch(`${started.url}/compatibility/runs?limit=2`)
+      expect(first.status).toBe(200)
+      const firstBody = await first.json() as { runs: Array<{ runId: string; status: string }>; nextCursor?: string }
+      expect(firstBody.runs.map((run) => run.runId)).toEqual(['run_3', 'run_2'])
+      expect(firstBody.runs.every((run) => run.status === 'queued')).toBe(true)
+      expect(firstBody.nextCursor).toEqual(expect.any(String))
+      expect(JSON.stringify(firstBody)).not.toContain('run_runlog_mirror')
+      expect(JSON.stringify(firstBody)).not.toContain('must-not-cross-the-browser-boundary')
+      expect(snapshotCalls).toBe(0)
+      expect(snapshotRevisionCalls).toBe(0)
+
+      MainspringMailbox.fromSessionPath(session.record.sessionPath).writeEvent(
+        { type: 'run.status', runId: 'run_3', status: 'completed' },
+        session.record.sessionId,
+      )
+      const refreshed = await fetch(`${started.url}/compatibility/runs?limit=2`)
+      expect(refreshed.status).toBe(200)
+      const refreshedBody = await refreshed.json() as { runs: Array<{ runId: string; status: string }> }
+      expect(refreshedBody.runs).toEqual(
+        expect.arrayContaining([expect.objectContaining({ runId: 'run_3', status: 'completed' })]),
+      )
+      expect(snapshotCalls).toBe(0)
+      expect(snapshotRevisionCalls).toBe(0)
+
+      const second = await fetch(
+        `${started.url}/compatibility/runs?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? '')}`,
+      )
+      expect(second.status).toBe(200)
+      const secondBody = await second.json() as { runs: Array<{ runId: string }>; nextCursor?: string }
+      expect(secondBody.runs.map((run) => run.runId)).toEqual(['run_1'])
+      expect(secondBody.nextCursor).toBeUndefined()
+      expect(snapshotCalls).toBe(0)
+      expect(snapshotRevisionCalls).toBe(0)
+
+      const invalid = await fetch(`${started.url}/compatibility/runs?cursor=not-a-valid-cursor`)
+      expect(invalid.status).toBe(400)
+      const invalidLimit = await fetch(`${started.url}/compatibility/runs?limit=101`)
+      expect(invalidLimit.status).toBe(400)
+    } finally {
+      await server.stop()
+      appState.close()
       await runtime.stop()
     }
   })

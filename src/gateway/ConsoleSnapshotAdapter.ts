@@ -1018,7 +1018,7 @@ export function consoleSession(record: LocalGatewaySessionProjection): ConsoleGa
   }
 }
 
-function consoleRun(record: LocalGatewayRunProjection): ConsoleGatewayRun {
+export function consoleRun(record: LocalGatewayRunProjection): ConsoleGatewayRun {
   return {
     runId: record.runId,
     sessionId: record.sessionId,
@@ -1075,7 +1075,7 @@ function consoleApproval(
   }
 }
 
-function consoleApprovalMetadata(
+export function consoleApprovalMetadata(
   record: LocalGatewayApprovalMetadataRecord,
 ): ConsoleGatewayApprovalMetadata {
   return {

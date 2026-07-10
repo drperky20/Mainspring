@@ -1,6 +1,6 @@
 # Current State
 
-Last rewritten: 2026-07-09.
+Last rewritten: 2026-07-10.
 
 This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-local long milestone ledger and is excluded from npm package artifacts.
 
@@ -56,12 +56,14 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `GET /snapshot` remains a compatible sanitized aggregate, with `no-store` cache policy, ETag/`If-None-Match` support, and a `304` response with no body for unchanged state.
   - The server caches only the sanitized projection in process memory. The console retains its ETag and last safe projection in memory, adapts refresh timing to visibility/failure state, aborts stale work, and does not put auth material in URLs.
   - In-process mailbox writes invalidate the snapshot revision immediately; a 30-second compatibility probe discovers legacy external mailbox writers eventually. This is not a real-time cross-process event stream.
-  - `GET /runlog/runs` provides a cursor-paginated, bounded canonical activity page without constructing the broad snapshot. The console fetches it only for the Runs activity view; compatibility-run pagination remains future work.
+  - `GET /runlog/runs` provides a cursor-paginated canonical activity page without constructing the broad snapshot. `GET /compatibility/runs` pages metadata-backed mailbox compatibility rows and touches only the sessions represented in that page; an app-state-scoped cache retains at most 64 session projections without consulting the broad snapshot revision. Each cached entry records its own in-process mailbox mutation revision, while a per-session database/WAL probe runs at most every 30 seconds for legacy external writers. It requires the gateway app-state store and otherwise the console falls back to its compatible snapshot.
+  - `GET /approval-history` requires gateway app-state metadata and merges its bounded compatibility approvals with canonical RunLog approval summaries, preferring the RunLog row when a gateway mirror has the same approval ID. It never returns tool input, receipt snapshots, hashes, paths, or signing material; older/no-app-state embedders retain the compatible snapshot path.
+  - `GET /runlog/runs/:runId/trace` is a reverse-paginated public-event trace. Sensitive and artifact-only records stay host/SDK-only; the console expands earlier events only while a selected RunLog detail view is open.
 - Live SaaS-style console:
   - `apps/console/src/ConnectedConsoleApp.tsx` is the default app surface and connects to the local gateway over the public browser-safe gateway client.
   - The first-run UI is a setup wizard for account basics and provider profile setup.
   - The first-level UI is organized around Home, Workspaces, Activity, and Settings. Runs, approvals, and usage remain explicit Activity views; loading, stale, offline, unauthorized, empty, and error states remain visible.
-  - `ConsoleNavigation.tsx` owns primary/activity navigation, `useConsoleRunActivity.ts` owns scoped run streaming, fallback polling, and chat-event projection, and `useRunLogActivityPage.ts` owns bounded Runs-page loading, leaving the connected shell focused on selection and gateway commands.
+  - `ConsoleNavigation.tsx` owns primary/activity navigation; `ConsoleProviderCatalog.tsx`, `ConsoleSetup.tsx`, and `ConsoleClientForms.tsx` own provider, first-run, and client-editing UI; `useConsoleRunActivity.ts` owns scoped run streaming; and dedicated cursor hooks load RunLog, compatibility, approval, and trace pages only while their Activity surface is visible.
   - The run detail view exposes the sanitized event timeline, tool calls, checkpoints, policy decisions, errors, and native RunLog or compatibility-run cancellation.
   - Chat and run-control state is scoped by client and agent so switching workspaces does not leak UI state between operators' contexts.
   - Each client gets a default workspace and first agent; chat, agent editing, and automation testing are scoped inside the selected client.
