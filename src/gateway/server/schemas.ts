@@ -9,6 +9,25 @@ const OptionalTrimmedString = z.string().optional().transform((value) => {
   return trimmed ? trimmed : undefined
 })
 
+const HostedGatewayRoleSchema = z.enum(['admin', 'operator', 'viewer'])
+
+export const CreateHostedAuthUserRequestSchema = z.object({
+  username: z.string().trim().min(1),
+  password: z.string().trim().min(8),
+  role: HostedGatewayRoleSchema,
+})
+
+export const UpdateHostedAuthUserRequestSchema = z
+  .object({
+    password: z.string().trim().min(8).optional(),
+    role: HostedGatewayRoleSchema.optional(),
+    status: z.enum(['active', 'disabled']).optional(),
+  })
+  .refine(
+    (value) => value.password !== undefined || value.role !== undefined || value.status !== undefined,
+    { message: 'At least one hosted auth user field must be provided.' },
+  )
+
 export const StartRunRequestSchema = z.object({
   sessionId: z.string().min(1),
   input: z.string().min(1),
@@ -286,6 +305,8 @@ export const UpdateBudgetRequestSchema = z
   )
 
 export type StartRunRequest = z.infer<typeof StartRunRequestSchema>
+export type CreateHostedAuthUserRequest = z.infer<typeof CreateHostedAuthUserRequestSchema>
+export type UpdateHostedAuthUserRequest = z.infer<typeof UpdateHostedAuthUserRequestSchema>
 export type ResolveApprovalRequest = z.infer<typeof ResolveApprovalRequestSchema>
 export type CreateClientRequest = z.infer<typeof CreateClientRequestSchema>
 export type CreateWorkspaceRequest = z.infer<typeof CreateWorkspaceRequestSchema>

@@ -17,7 +17,7 @@ Open a private security advisory or contact the maintainers through the distribu
 - Provider keys must not be stored in renderer localStorage.
 - Browser-managed provider secrets are write-only and resolved host-side.
 - Local gateway managed secrets are encrypted at rest in app-state storage; Windows can use Credential Manager for the local master key.
-- Local gateway hosted-auth mode uses `scrypt` password hashing and server-side sessions, but it is not enterprise SSO or a cloud identity boundary.
+- Local gateway hosted-auth mode uses `scrypt` password hashing, server-side sessions, and admin/operator/viewer route authorization. It is not enterprise SSO, tenant isolation, or a cloud identity boundary.
 - Host, WSL, and Docker execution backends are explicit. WSL/Docker availability must be detected and fail closed when unavailable.
 - Docker execution is a local container route, not a complete VM isolation product.
 - The Electron shell exposes no raw shell or filesystem bridge to the renderer.
@@ -26,7 +26,7 @@ Open a private security advisory or contact the maintainers through the distribu
 
 - Not implemented: cross-platform secure desktop credential vault.
 - Not implemented: full HyperCell VM pool.
-- Not implemented: operator roles and tenant-scoped hosted authorization.
+- Not implemented: tenant-scoped hosted authorization or enterprise identity federation.
 - Not implemented: payment-backed billing or provider-side spend reservation.
 - Not implemented: production browser isolation.
 - Linux desktop installer packaging.

@@ -140,7 +140,7 @@ export interface LocalGatewayAuthUserRecord {
   passwordSalt: string
   passwordHash: string
   passwordAlgorithm: 'scrypt-v1'
-  role: 'admin'
+  role: 'admin' | 'operator' | 'viewer'
   status: 'active' | 'disabled'
   createdAt: string
   updatedAt: string

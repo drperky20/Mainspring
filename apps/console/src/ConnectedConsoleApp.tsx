@@ -1981,6 +1981,7 @@ function SettingsScreen({
           <InfoRow label="Connection" value={connectionState} />
           <InfoRow label="Auth mode" value={auth?.authMode ?? 'local-dev'} />
           <InfoRow label="Signed in" value={!auth || auth.authenticated || auth.authMode === 'local-dev' ? 'yes' : 'no'} />
+          <InfoRow label="Gateway role" value={auth?.user?.role ?? (auth?.authMode === 'hosted' ? 'signed out' : 'local admin')} />
           <InfoRow label="Last snapshot" value={lastUpdatedAt ?? 'Not loaded'} />
           {connectionError ? <p className="settings-error" role="status">{connectionError}</p> : null}
           <button className="simple-text" type="button" onClick={onResetSetup}>Run setup again</button>

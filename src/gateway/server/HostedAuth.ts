@@ -12,6 +12,10 @@ export class HostedGatewayLoginRateLimitError extends Error {
   }
 }
 
+export class HostedGatewayAuthUserConflictError extends Error {}
+export class HostedGatewayAuthUserNotFoundError extends Error {}
+export class HostedGatewayFinalAdminError extends Error {}
+
 export interface HostedGatewayAuthLoginResult {
   sessionToken: string
   session: LocalGatewayAuthSessionRecord
@@ -24,6 +28,23 @@ export interface HostedGatewayAuthSessionView {
   user?: Pick<LocalGatewayAuthUserRecord, 'userId' | 'username' | 'role'>
   expiresAt?: string
   bootstrapRequired: boolean
+}
+
+export type HostedGatewayAuthUserView = Pick<
+  LocalGatewayAuthUserRecord,
+  'userId' | 'username' | 'role' | 'status' | 'createdAt' | 'updatedAt' | 'lastLoginAt'
+>
+
+export interface CreateHostedGatewayAuthUserInput {
+  username: string
+  password: string
+  role: LocalGatewayAuthUserRecord['role']
+}
+
+export interface UpdateHostedGatewayAuthUserInput {
+  role?: LocalGatewayAuthUserRecord['role']
+  status?: LocalGatewayAuthUserRecord['status']
+  password?: string
 }
 
 const PASSWORD_KEYLEN = 64
@@ -112,6 +133,50 @@ export class HostedGatewayAuthManager {
       role: 'admin',
       status: 'active',
     })
+  }
+
+  listUsers(): HostedGatewayAuthUserView[] {
+    return this.appState.authUsers.list().map((user) => this.userView(user))
+  }
+
+  createUser(input: CreateHostedGatewayAuthUserInput): HostedGatewayAuthUserView {
+    const username = normalizeUsername(input.username)
+    if (this.appState.authUsers.getByUsername(username)) {
+      throw new HostedGatewayAuthUserConflictError(`Hosted auth user already exists: ${username}`)
+    }
+    const password = createHostedPasswordHash(input.password)
+    return this.userView(this.appState.authUsers.create({
+      username,
+      ...password,
+      role: input.role,
+      status: 'active',
+    }))
+  }
+
+  updateUser(userId: string, input: UpdateHostedGatewayAuthUserInput): HostedGatewayAuthUserView {
+    const existing = this.appState.authUsers.get(userId)
+    if (!existing) throw new HostedGatewayAuthUserNotFoundError(`Unknown hosted auth user: ${userId}`)
+    const nextRole = input.role ?? existing.role
+    const nextStatus = input.status ?? existing.status
+    if (
+      existing.role === 'admin' &&
+      existing.status === 'active' &&
+      (nextRole !== 'admin' || nextStatus !== 'active') &&
+      this.activeAdminCount() <= 1
+    ) {
+      throw new HostedGatewayFinalAdminError('The final active admin cannot be demoted or disabled.')
+    }
+    const password = input.password === undefined ? {} : createHostedPasswordHash(input.password)
+    const updated = this.appState.authUsers.update({
+      userId,
+      role: nextRole,
+      status: nextStatus,
+      ...password,
+    })
+    if (input.password !== undefined || nextStatus !== 'active') {
+      this.revokeUserSessions(userId)
+    }
+    return this.userView(updated)
   }
 
   login(input: HostedGatewayAuthBootstrapInput): HostedGatewayAuthLoginResult {
@@ -208,6 +273,36 @@ export class HostedGatewayAuthManager {
       status: 'revoked',
       lastUsedAt: this.now().toISOString(),
     })
+  }
+
+  private activeAdminCount(): number {
+    return this.appState.authUsers
+      .list({ status: 'active' })
+      .filter((user) => user.role === 'admin')
+      .length
+  }
+
+  private revokeUserSessions(userId: string): void {
+    const revokedAt = this.now().toISOString()
+    for (const session of this.appState.authSessions.list({ userId, status: 'active' })) {
+      this.appState.authSessions.update({
+        authSessionId: session.authSessionId,
+        status: 'revoked',
+        lastUsedAt: revokedAt,
+      })
+    }
+  }
+
+  private userView(user: LocalGatewayAuthUserRecord): HostedGatewayAuthUserView {
+    return {
+      userId: user.userId,
+      username: user.username,
+      role: user.role,
+      status: user.status,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      ...(user.lastLoginAt ? { lastLoginAt: user.lastLoginAt } : {}),
+    }
   }
 
   private assertLoginAllowed(username: string, nowMs: number): void {

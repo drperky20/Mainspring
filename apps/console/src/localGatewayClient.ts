@@ -66,6 +66,8 @@ export interface GatewayProviderModel {
   }
 }
 
+export type HostedGatewayRole = 'admin' | 'operator' | 'viewer'
+
 export interface LocalGatewayClient {
   health(): Promise<{
     mode: string
@@ -74,7 +76,7 @@ export interface LocalGatewayClient {
       authMode: 'local-dev' | 'hosted'
       authenticated: boolean
       bootstrapRequired: boolean
-      user?: { userId: string; username: string; role: 'admin' }
+      user?: { userId: string; username: string; role: HostedGatewayRole }
       expiresAt?: string
     }
   }>
@@ -84,15 +86,15 @@ export interface LocalGatewayClient {
       authMode: 'hosted'
       authenticated: boolean
       bootstrapRequired: boolean
-      user?: { userId: string; username: string; role: 'admin' }
+      user?: { userId: string; username: string; role: HostedGatewayRole }
       expiresAt?: string
     }
   }>
   bootstrapAuth(input: { username: string; password: string }): Promise<{
-    user: { userId: string; username: string; role: 'admin' }
+    user: { userId: string; username: string; role: HostedGatewayRole }
   }>
   login(input: { username: string; password: string }): Promise<{
-    user: { userId: string; username: string; role: 'admin' }
+    user: { userId: string; username: string; role: HostedGatewayRole }
     expiresAt: string
   }>
   logout(): Promise<{ loggedOut: true }>

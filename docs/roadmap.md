@@ -14,7 +14,7 @@
 - Cross-platform OS secret storage.
 - Future work: stronger isolation backends.
 - Hosted multi-user control plane.
-- Future work: operator roles and tenant authorization.
+- Future work: tenant authorization and enterprise identity federation beyond local gateway roles.
 - Future work: payment-backed billing integrations.
 - Future work: production browser isolation.
 

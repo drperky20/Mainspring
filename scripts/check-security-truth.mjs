@@ -96,7 +96,7 @@ const claimRules = [
   },
   {
     name: 'marketplace-billing-roles',
-    pattern: /\b(payment-backed|paid marketplace|secure marketplace|billing|operator roles|tenant-scoped|enterprise SSO)\b/i,
+    pattern: /\b(payment-backed|paid marketplace|secure marketplace|billing|tenant-scoped|enterprise SSO)\b/i,
     allowed: [
       /not implemented/i,
       /no /i,

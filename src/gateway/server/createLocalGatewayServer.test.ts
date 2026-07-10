@@ -825,6 +825,63 @@ describe('LocalGatewayHttpServer', () => {
       })
       const loginBody = await loginResponse.json()
       const sessionToken = loginResponse.headers.get('x-mainspring-auth-token')
+      const adminHeaders = {
+        authorization: `Bearer ${sessionToken}`,
+        'content-type': 'application/json',
+      }
+      const createOperatorResponse = await fetch(`${started.url}/auth/users`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          username: 'Operator',
+          password: 'OperatorPass123',
+          role: 'operator',
+        }),
+      })
+      const createViewerResponse = await fetch(`${started.url}/auth/users`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          username: 'Viewer',
+          password: 'ViewerPass123',
+          role: 'viewer',
+        }),
+      })
+      const hostedUsersResponse = await fetch(`${started.url}/auth/users`, { headers: adminHeaders })
+      const hostedUsersBody = await hostedUsersResponse.json()
+      const operatorLoginResponse = await fetch(`${started.url}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Operator', password: 'OperatorPass123' }),
+      })
+      const operatorToken = operatorLoginResponse.headers.get('x-mainspring-auth-token')
+      const viewerLoginResponse = await fetch(`${started.url}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Viewer', password: 'ViewerPass123' }),
+      })
+      const viewerToken = viewerLoginResponse.headers.get('x-mainspring-auth-token')
+      const viewerSnapshot = await fetch(`${started.url}/snapshot`, {
+        headers: { authorization: `Bearer ${viewerToken}` },
+      })
+      const viewerRunMutation = await fetch(`${started.url}/runs/start`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${viewerToken}`, 'content-type': 'application/json' },
+        body: '{}',
+      })
+      const viewerUserList = await fetch(`${started.url}/auth/users`, {
+        headers: { authorization: `Bearer ${viewerToken}` },
+      })
+      const operatorRunMutation = await fetch(`${started.url}/runs/start`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${operatorToken}`, 'content-type': 'application/json' },
+        body: '{}',
+      })
+      const operatorAdminMutation = await fetch(`${started.url}/provider-profiles`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${operatorToken}`, 'content-type': 'application/json' },
+        body: '{}',
+      })
       const unknownUserLogin = await fetch(`${started.url}/auth/login`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -978,6 +1035,22 @@ describe('LocalGatewayHttpServer', () => {
       })
       expect(loginBody).not.toHaveProperty('sessionToken')
       expect(sessionToken).toMatch(/^[a-f0-9]{64}$/)
+      expect(createOperatorResponse.status).toBe(201)
+      expect(createViewerResponse.status).toBe(201)
+      expect(hostedUsersResponse.status).toBe(200)
+      expect(hostedUsersBody.users).toEqual(expect.arrayContaining([
+        expect.objectContaining({ username: 'admin', role: 'admin' }),
+        expect.objectContaining({ username: 'operator', role: 'operator' }),
+        expect.objectContaining({ username: 'viewer', role: 'viewer' }),
+      ]))
+      expect(JSON.stringify(hostedUsersBody)).not.toContain('passwordHash')
+      expect(operatorLoginResponse.status).toBe(200)
+      expect(viewerLoginResponse.status).toBe(200)
+      expect(viewerSnapshot.status).toBe(200)
+      expect(viewerRunMutation.status).toBe(403)
+      expect(viewerUserList.status).toBe(403)
+      expect(operatorRunMutation.status).toBe(400)
+      expect(operatorAdminMutation.status).toBe(403)
       expect(unknownUserLogin.status).toBe(401)
       expect(authorizedSnapshot.status).toBe(200)
       expect(authorizedSnapshotBody.counts.clients).toBe(1)

@@ -151,7 +151,8 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Browser/localStorage provider auth is prototype-only in legacy read-model helpers and must not be reintroduced as the live console auth path.
 - Provider keys must not be stored in renderer localStorage.
 - Process execution must not be marketed as secure containment.
-- Do not claim HyperCells, VM isolation, operator roles, budget caps, billing, marketplace trust, or secure desktop secrets exist unless implementation proves them.
+- Hosted gateway sessions now enforce persisted admin/operator/viewer roles before route body parsing. This is local route authorization, not tenant isolation or enterprise identity.
+- Do not claim HyperCells, VM isolation, provider-side budget reservation, billing, marketplace trust, tenant isolation, or secure desktop secrets exist unless implementation proves them.
 
 ## Current Verification
 

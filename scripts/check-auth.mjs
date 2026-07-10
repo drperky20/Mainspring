@@ -130,6 +130,68 @@ try {
   assert(sessions[0].tokenHash !== token, 'hosted session stored the raw session token')
   assert(/^[a-f0-9]{64}$/.test(sessions[0].tokenHash), 'hosted session token hash was not stored as sha256 hex')
 
+  const adminHeaders = {
+    authorization: `Bearer ${token}`,
+    'content-type': 'application/json',
+  }
+  await requestOk(`${started.url}/auth/users`, {
+    method: 'POST',
+    headers: adminHeaders,
+    body: JSON.stringify({ username: 'Operator', password: 'OperatorAuthCheck123!', role: 'operator' }),
+  })
+  await requestOk(`${started.url}/auth/users`, {
+    method: 'POST',
+    headers: adminHeaders,
+    body: JSON.stringify({ username: 'Viewer', password: 'ViewerAuthCheck123!', role: 'viewer' }),
+  })
+  const hostedUsers = await requestOk(`${started.url}/auth/users`, { headers: adminHeaders })
+  assert(hostedUsers.body.users?.length === 3, 'hosted user list did not return all role records')
+  assert(!JSON.stringify(hostedUsers.body).includes(storedPasswordVerifierField), 'hosted user list leaked password verifier')
+
+  const operatorLogin = await requestOk(`${started.url}/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'operator', password: 'OperatorAuthCheck123!' }),
+  })
+  const operatorToken = operatorLogin.response.headers.get('x-mainspring-auth-token')
+  const viewerLogin = await requestOk(`${started.url}/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'viewer', password: 'ViewerAuthCheck123!' }),
+  })
+  const viewerToken = viewerLogin.response.headers.get('x-mainspring-auth-token')
+
+  await requestOk(`${started.url}/snapshot`, { headers: { authorization: `Bearer ${viewerToken}` } })
+  const viewerOperation = await request(`${started.url}/runs/start`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${viewerToken}`, 'content-type': 'application/json' },
+    body: '{}',
+  })
+  assert(viewerOperation.response.status === 403, 'viewer role reached an operational mutation')
+  const viewerUserList = await request(`${started.url}/auth/users`, {
+    headers: { authorization: `Bearer ${viewerToken}` },
+  })
+  assert(viewerUserList.response.status === 403, 'viewer role reached admin user management')
+  const operatorOperation = await request(`${started.url}/runs/start`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${operatorToken}`, 'content-type': 'application/json' },
+    body: '{}',
+  })
+  assert(operatorOperation.response.status === 400, 'operator role did not reach an operational route')
+  const operatorAdminMutation = await request(`${started.url}/clients`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${operatorToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Forbidden Operator Client' }),
+  })
+  assert(operatorAdminMutation.response.status === 403, 'operator role reached an admin mutation')
+
+  const finalAdminMutation = await request(`${started.url}/auth/users/${encodeURIComponent(bootstrap.body.user.userId)}`, {
+    method: 'PATCH',
+    headers: adminHeaders,
+    body: JSON.stringify({ role: 'viewer' }),
+  })
+  assert(finalAdminMutation.response.status === 409, 'hosted auth allowed the final active admin to be demoted')
+
   const authorizedClient = await requestOk(`${started.url}/clients`, {
     method: 'POST',
     headers: {

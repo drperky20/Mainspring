@@ -82,4 +82,5 @@ Scale adapters can replace pieces independently:
 - Docker/WSL routing is not VM isolation.
 - Browser/localStorage provider auth is prototype-only until replaced.
 - Process execution must not be marketed as secure containment.
-- HyperCells, VM pools, operator roles, billing, marketplace trust, and secure desktop secrets should not be claimed unless backed by implementation.
+- Hosted gateway admin/operator/viewer roles are a local HTTP authorization boundary; they are not tenant isolation or enterprise identity.
+- HyperCells, VM pools, billing, marketplace trust, tenant isolation, and secure desktop secrets should not be claimed unless backed by implementation.

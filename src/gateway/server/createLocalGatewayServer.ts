@@ -28,11 +28,19 @@ import {
   type LocalGatewayEventListInput,
 } from '../index.js'
 import type { LocalMainspringGateway } from '../LocalGateway.js'
+import type { LocalGatewayAuthUserRecord } from '../AppStateStore.js'
 import type { RunEvent } from '../../contracts/runtime.js'
 import type { RunLogEvent, RunRecord as RunLogRunRecord } from '../../core/types.js'
 import type { RunLogRunProjection } from '../../hosts/runlog/RunLogProjection.js'
 import { GatewayHttpError, asGatewayHttpError } from './errors.js'
-import { HostedGatewayAuthManager, HostedGatewayLoginRateLimitError } from './HostedAuth.js'
+import {
+  HostedGatewayAuthManager,
+  HostedGatewayAuthUserConflictError,
+  HostedGatewayAuthUserNotFoundError,
+  HostedGatewayFinalAdminError,
+  HostedGatewayLoginRateLimitError,
+} from './HostedAuth.js'
+import { gatewayRoleAllows, requiredGatewayPermission } from './GatewayAuthorization.js'
 import {
   CreateAgentRequestSchema,
   ApplyProvenanceReviewRequestSchema,
@@ -43,6 +51,7 @@ import {
   CreateDeploymentTargetRequestSchema,
   CreateProviderProfileRequestSchema,
   CreateWorkspaceRequestSchema,
+  CreateHostedAuthUserRequestSchema,
   DeploymentPlanRequestSchema,
   ExecuteDeploymentRequestSchema,
   InstallMarketplaceTemplateRequestSchema,
@@ -55,6 +64,7 @@ import {
   UpdateBudgetRequestSchema,
   UpdateCronScheduleRequestSchema,
   UpdateProviderProfileRequestSchema,
+  UpdateHostedAuthUserRequestSchema,
   type ApplyProvenanceReviewRequest,
   type CreateAgentRequest,
   type CreateBudgetRequest,
@@ -341,6 +351,56 @@ export class LocalGatewayHttpServer {
       const principal = this.requireAuthorizedRequest(request, url, {
         allowBrowserAccessTicket: this.allowsBrowserAccessTicketForRoute(request.method ?? 'GET', path),
       })
+      this.requireRoutePermission(principal, request.method ?? 'GET', path)
+
+      if (request.method === 'GET' && path === '/auth/users') {
+        this.assertHostedAuth()
+        this.writeJson(response, 200, { users: this.hostedAuth!.listUsers() })
+        return
+      }
+
+      if (request.method === 'POST' && path === '/auth/users') {
+        this.assertHostedAuth()
+        const parsed = CreateHostedAuthUserRequestSchema.parse(await this.readJson(request))
+        let user
+        try {
+          user = this.hostedAuth!.createUser(parsed)
+        } catch (error) {
+          if (error instanceof HostedGatewayAuthUserConflictError) {
+            throw new GatewayHttpError(409, error.message)
+          }
+          throw error
+        }
+        this.auditAuthUserChange('created', principal!, user.userId, { role: user.role })
+        this.writeJson(response, 201, { user })
+        return
+      }
+
+      if (request.method === 'PATCH' && path.startsWith('/auth/users/')) {
+        this.assertHostedAuth()
+        const userId = decodeURIComponent(path.slice('/auth/users/'.length))
+        if (!userId) throw new GatewayHttpError(404, 'Hosted auth user id is required.')
+        const parsed = UpdateHostedAuthUserRequestSchema.parse(await this.readJson(request))
+        let user
+        try {
+          user = this.hostedAuth!.updateUser(userId, parsed)
+        } catch (error) {
+          if (error instanceof HostedGatewayAuthUserNotFoundError) {
+            throw new GatewayHttpError(404, error.message)
+          }
+          if (error instanceof HostedGatewayFinalAdminError) {
+            throw new GatewayHttpError(409, error.message)
+          }
+          throw error
+        }
+        this.auditAuthUserChange('updated', principal!, user.userId, {
+          role: user.role,
+          status: user.status,
+          passwordChanged: parsed.password !== undefined,
+        })
+        this.writeJson(response, 200, { user })
+        return
+      }
 
       if (request.method === 'POST' && path === '/auth/browser-access') {
         const body = await this.readJson(request)
@@ -937,16 +997,48 @@ export class LocalGatewayHttpServer {
     request: IncomingMessage,
     url: URL,
     options: { allowBrowserAccessTicket?: boolean } = {},
-  ): { actor: string } | undefined {
+  ): { actor: string; role: LocalGatewayAuthUserRecord['role'] } | undefined {
     if (this.authMode !== 'hosted') return
     const session = this.hostedAuth!.resolveSession(this.readSessionToken(request))
     if (session) {
-      return { actor: `hosted:${session.user.userId}:${session.user.username}` }
+      return {
+        actor: `hosted:${session.user.userId}:${session.user.username}`,
+        role: session.user.role,
+      }
     }
     if (options.allowBrowserAccessTicket && this.resolveBrowserAccessTicket(request.method ?? 'GET', url)) {
       return undefined
     }
     throw new GatewayHttpError(401, 'Authentication required.')
+  }
+
+  private requireRoutePermission(
+    principal: { actor: string; role: LocalGatewayAuthUserRecord['role'] } | undefined,
+    method: string,
+    path: string,
+  ): void {
+    if (this.authMode !== 'hosted') return
+    const permission = requiredGatewayPermission(method, path)
+    const role = principal?.role ?? 'viewer'
+    if (!gatewayRoleAllows(role, permission)) {
+      throw new GatewayHttpError(403, `${role} role cannot perform this operation.`)
+    }
+  }
+
+  private auditAuthUserChange(
+    action: string,
+    principal: { actor: string; role: LocalGatewayAuthUserRecord['role'] },
+    userId: string,
+    metadata: Record<string, unknown>,
+  ): void {
+    this.options.gateway.appState!.auditEvents.create({
+      category: 'auth',
+      action: `hosted-user.${action}`,
+      actor: principal.actor,
+      targetType: 'auth-user',
+      targetId: userId,
+      metadata,
+    })
   }
 
   private createBrowserAccessUrl(requestUrl: URL, body: unknown): {

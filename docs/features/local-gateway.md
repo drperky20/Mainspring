@@ -17,6 +17,7 @@ It provides:
 - trusted local template installs
 - deployment target/run metadata
 - optional hosted-auth mode
+- hosted admin/operator/viewer authorization
 
 When the gateway is configured with a RunLog SDK host, the default `/runs/start` route creates a `RunIntent`, drains through `RunLogKernel`, and returns the compact compatibility run dispatch DTO. Gateways without a RunLog host keep the mailbox-compatible SDK run path. The explicit `/runlog/runs/start`, `/runlog/runs/:runId/events`, and `/runlog/approvals/:approvalId/resolve` routes expose `RunLogProjection`-based responses for RunLog-aware clients.
 
@@ -43,7 +44,9 @@ Hosted browser-access URLs are short-lived local bearer URLs for artifact previe
 
 Hosted-auth bootstrap and login are still local operator flows, but browser-origin requests now use an explicit localhost/loopback allowlist instead of wildcard CORS. Requests without an `Origin` header remain available for CLI and server-side local tooling; browser requests from non-local origins are rejected before route handling.
 
-Hosted login failures are rate-limited in the running gateway process, and approval decisions record the authenticated hosted-session identity instead of caller-provided approval text. This is an operator safety control, not durable multi-user authorization, tenant isolation, or enterprise identity.
+Hosted login failures are rate-limited in the running gateway process, and approval decisions record the authenticated hosted-session identity instead of caller-provided approval text. Hosted sessions carry one of three persisted roles: viewers can read gateway state, operators can also start/cancel runs and perform approval, cron-grant, and provenance-review operations, and admins can use every route. Unclassified mutations fail closed to admin.
+
+Admins can manage hosted users through `GET /auth/users`, `POST /auth/users`, and `PATCH /auth/users/:userId`. Responses omit password verifier material. The final active admin cannot be disabled or demoted, and password changes or account disabling revoke that user's active sessions. This is local gateway authorization, not tenant isolation, enterprise SSO, or a cloud identity control plane.
 
 `pnpm gateway:dev` remains loopback-only by default. An explicit `0.0.0.0` bind now requires hosted auth with bootstrap credentials and a configured RunLog approval-receipt key; it is still intended only for an externally constrained runtime such as a hardened container boundary.
 
