@@ -32,7 +32,7 @@ import type { RunEvent } from '../../contracts/runtime.js'
 import type { RunLogEvent, RunRecord as RunLogRunRecord } from '../../core/types.js'
 import type { RunLogRunProjection } from '../../hosts/runlog/RunLogProjection.js'
 import { GatewayHttpError, asGatewayHttpError } from './errors.js'
-import { HostedGatewayAuthManager } from './HostedAuth.js'
+import { HostedGatewayAuthManager, HostedGatewayLoginRateLimitError } from './HostedAuth.js'
 import {
   CreateAgentRequestSchema,
   ApplyProvenanceReviewRequestSchema,
@@ -294,10 +294,19 @@ export class LocalGatewayHttpServer {
         this.assertHostedAuth()
         const body = await this.readJson(request)
         const payload = body as { username?: string; password?: string }
-        const result = this.hostedAuth!.login({
-          username: String(payload.username ?? ''),
-          password: String(payload.password ?? ''),
-        })
+        let result
+        try {
+          result = this.hostedAuth!.login({
+            username: String(payload.username ?? ''),
+            password: String(payload.password ?? ''),
+          })
+        } catch (error) {
+          if (error instanceof HostedGatewayLoginRateLimitError) {
+            response.setHeader('Retry-After', String(error.retryAfterSeconds))
+            throw new GatewayHttpError(429, error.message)
+          }
+          throw new GatewayHttpError(401, 'Invalid username or password.')
+        }
         this.writeJson(
           response,
           200,
@@ -329,7 +338,7 @@ export class LocalGatewayHttpServer {
         return
       }
 
-      this.requireAuthorizedRequest(request, url, {
+      const principal = this.requireAuthorizedRequest(request, url, {
         allowBrowserAccessTicket: this.allowsBrowserAccessTicketForRoute(request.method ?? 'GET', path),
       })
 
@@ -845,7 +854,7 @@ export class LocalGatewayHttpServer {
         const approvalId = decodeURIComponent(path.slice('/approvals/'.length, -'/resolve'.length))
         const body = await this.readJson(request)
         const parsed = ResolveApprovalRequestSchema.parse(body)
-        this.resolveApproval(approvalId, parsed)
+        this.resolveApproval(approvalId, parsed, principal?.actor)
         this.writeJson(response, 200, { approvalId, status: parsed.decision })
         return
       }
@@ -859,8 +868,8 @@ export class LocalGatewayHttpServer {
         const parsed = ResolveApprovalRequestSchema.parse(body)
         const projection =
           parsed.decision === 'approved'
-            ? await this.options.gateway.runLog.approvals.approve({ ...parsed, approvalId })
-            : await this.options.gateway.runLog.approvals.deny({ ...parsed, approvalId })
+            ? await this.options.gateway.runLog.approvals.approve({ ...parsed, approvalId, actor: principal?.actor })
+            : await this.options.gateway.runLog.approvals.deny({ ...parsed, approvalId, actor: principal?.actor })
         this.writeJson(response, 200, sanitizeGatewayResponse(runLogProjectionResponse(projection)))
         return
       }
@@ -928,12 +937,14 @@ export class LocalGatewayHttpServer {
     request: IncomingMessage,
     url: URL,
     options: { allowBrowserAccessTicket?: boolean } = {},
-  ): void {
+  ): { actor: string } | undefined {
     if (this.authMode !== 'hosted') return
     const session = this.hostedAuth!.resolveSession(this.readSessionToken(request))
-    if (session) return
+    if (session) {
+      return { actor: `hosted:${session.user.userId}:${session.user.username}` }
+    }
     if (options.allowBrowserAccessTicket && this.resolveBrowserAccessTicket(request.method ?? 'GET', url)) {
-      return
+      return undefined
     }
     throw new GatewayHttpError(401, 'Authentication required.')
   }
@@ -1251,13 +1262,14 @@ export class LocalGatewayHttpServer {
     })
   }
 
-  private resolveApproval(approvalId: string, input: ResolveApprovalRequest): void {
+  private resolveApproval(approvalId: string, input: ResolveApprovalRequest, actor?: string): void {
     const payload = {
       sessionId: input.sessionId,
       runId: input.runId,
       approvalId,
       ...(input.reason ? { reason: input.reason } : {}),
       ...(input.response !== undefined ? { response: input.response } : {}),
+      ...(actor ? { actor } : {}),
     }
     if (input.decision === 'approved') {
       this.options.gateway.approvals.approve(payload)

@@ -1545,6 +1545,7 @@ describe('LocalMainspringGateway', () => {
         runId: pendingApproval.runId,
         approvalId: pendingApproval.approvalId,
         reason: 'approved through local gateway boundary',
+        actor: 'test-operator',
       })
       const immediateConsoleState = gatewaySnapshotToConsoleState(gateway.snapshot())
       expect(immediateConsoleState.approvalMetadata).toEqual(
@@ -1586,6 +1587,7 @@ describe('LocalMainspringGateway', () => {
           }),
           expect.objectContaining({
             action: 'approval.approved',
+            actor: 'test-operator',
             targetType: 'approval',
             targetId: pendingApproval.approvalId,
           }),

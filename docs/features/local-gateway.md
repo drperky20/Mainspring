@@ -43,6 +43,8 @@ Hosted browser-access URLs are short-lived local bearer URLs for artifact previe
 
 Hosted-auth bootstrap and login are still local operator flows, but browser-origin requests now use an explicit localhost/loopback allowlist instead of wildcard CORS. Requests without an `Origin` header remain available for CLI and server-side local tooling; browser requests from non-local origins are rejected before route handling.
 
+Hosted login failures are rate-limited in the running gateway process, and approval decisions record the authenticated hosted-session identity instead of caller-provided approval text. This is an operator safety control, not durable multi-user authorization, tenant isolation, or enterprise identity.
+
 ## What It Does Not Do
 
 - It does not provide hosted SaaS tenancy.

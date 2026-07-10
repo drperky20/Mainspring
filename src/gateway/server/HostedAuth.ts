@@ -6,6 +6,12 @@ export interface HostedGatewayAuthBootstrapInput {
   password: string
 }
 
+export class HostedGatewayLoginRateLimitError extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super('Too many login attempts. Try again later.')
+  }
+}
+
 export interface HostedGatewayAuthLoginResult {
   sessionToken: string
   session: LocalGatewayAuthSessionRecord
@@ -22,6 +28,16 @@ export interface HostedGatewayAuthSessionView {
 
 const PASSWORD_KEYLEN = 64
 const SESSION_TOKEN_BYTES = 32
+const MAX_FAILED_LOGIN_ATTEMPTS = 5
+const LOGIN_ATTEMPT_WINDOW_MS = 1000 * 60 * 15
+const LOGIN_LOCKOUT_MS = 1000 * 60 * 15
+const MAX_TRACKED_LOGIN_IDENTITIES = 2_048
+
+type FailedLoginState = {
+  attempts: number
+  firstFailedAtMs: number
+  lockedUntilMs?: number
+}
 
 function normalizeUsername(value: string): string {
   const trimmed = value.trim().toLowerCase()
@@ -63,9 +79,12 @@ export function verifyHostedPassword(input: {
 }
 
 export class HostedGatewayAuthManager {
+  private readonly failedLogins = new Map<string, FailedLoginState>()
+
   constructor(
     private readonly appState: LocalGatewayAppStateStore,
     private readonly sessionTtlMs = 1000 * 60 * 60 * 12,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   authMode(): 'hosted' {
@@ -94,18 +113,30 @@ export class HostedGatewayAuthManager {
 
   login(input: HostedGatewayAuthBootstrapInput): HostedGatewayAuthLoginResult {
     const username = normalizeUsername(input.username)
+    const now = this.now()
+    const nowMs = now.getTime()
+    this.assertLoginAllowed(username, nowMs)
     const user = this.appState.authUsers.getByUsername(username)
     if (!user || user.status !== 'active') {
+      this.recordFailedLogin(username, nowMs)
       throw new Error('Invalid username or password.')
     }
-    if (!verifyHostedPassword({
-      password: input.password,
-      passwordSalt: user.passwordSalt,
-      passwordHash: user.passwordHash,
-    })) {
+    let passwordMatches = false
+    try {
+      passwordMatches = verifyHostedPassword({
+        password: input.password,
+        passwordSalt: user.passwordSalt,
+        passwordHash: user.passwordHash,
+      })
+    } catch {
+      // Treat malformed credentials exactly like an invalid password.
+      passwordMatches = false
+    }
+    if (!passwordMatches) {
+      this.recordFailedLogin(username, nowMs)
       throw new Error('Invalid username or password.')
     }
-    const now = new Date()
+    this.failedLogins.delete(username)
     const expiresAt = new Date(now.getTime() + this.sessionTtlMs).toISOString()
     const sessionToken = randomBytes(SESSION_TOKEN_BYTES).toString('hex')
     const session = this.appState.authSessions.create({
@@ -130,7 +161,7 @@ export class HostedGatewayAuthManager {
     if (!token) return null
     const session = this.appState.authSessions.getByTokenHash(tokenHash(token))
     if (!session || session.status !== 'active') return null
-    const now = new Date()
+    const now = this.now()
     if (new Date(session.expiresAt).getTime() <= now.getTime()) {
       this.appState.authSessions.update({
         authSessionId: session.authSessionId,
@@ -175,7 +206,34 @@ export class HostedGatewayAuthManager {
     this.appState.authSessions.update({
       authSessionId: resolved.session.authSessionId,
       status: 'revoked',
-      lastUsedAt: new Date().toISOString(),
+      lastUsedAt: this.now().toISOString(),
     })
+  }
+
+  private assertLoginAllowed(username: string, nowMs: number): void {
+    const state = this.failedLogins.get(username)
+    if (!state) return
+    if (state.lockedUntilMs && state.lockedUntilMs > nowMs) {
+      throw new HostedGatewayLoginRateLimitError(Math.max(1, Math.ceil((state.lockedUntilMs - nowMs) / 1000)))
+    }
+    if (nowMs - state.firstFailedAtMs > LOGIN_ATTEMPT_WINDOW_MS) {
+      this.failedLogins.delete(username)
+    }
+  }
+
+  private recordFailedLogin(username: string, nowMs: number): void {
+    const existing = this.failedLogins.get(username)
+    const withinWindow = existing && nowMs - existing.firstFailedAtMs <= LOGIN_ATTEMPT_WINDOW_MS
+    const attempts = withinWindow ? existing.attempts + 1 : 1
+    this.failedLogins.set(username, {
+      attempts,
+      firstFailedAtMs: withinWindow ? existing.firstFailedAtMs : nowMs,
+      ...(attempts >= MAX_FAILED_LOGIN_ATTEMPTS ? { lockedUntilMs: nowMs + LOGIN_LOCKOUT_MS } : {}),
+    })
+    while (this.failedLogins.size > MAX_TRACKED_LOGIN_IDENTITIES) {
+      const oldest = this.failedLogins.keys().next().value
+      if (!oldest) break
+      this.failedLogins.delete(oldest)
+    }
   }
 }

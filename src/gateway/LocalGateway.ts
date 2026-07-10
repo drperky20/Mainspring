@@ -307,6 +307,8 @@ export interface LocalGatewayApprovalResponseInput {
   approvalId: string
   reason?: string
   response?: unknown
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface LocalGatewayRunLogStartResult {
@@ -1299,7 +1301,7 @@ export class LocalMainspringGateway {
       this.appState?.auditEvents.create({
         category: 'gateway',
         action: 'approval.approved',
-        actor: 'local-gateway',
+        actor: input.actor?.trim() || 'local-gateway',
         targetType: 'approval',
         targetId: input.approvalId,
         runId: input.runId,
@@ -1312,7 +1314,7 @@ export class LocalMainspringGateway {
       this.appState?.auditEvents.create({
         category: 'gateway',
         action: 'approval.denied',
-        actor: 'local-gateway',
+        actor: input.actor?.trim() || 'local-gateway',
         targetType: 'approval',
         targetId: input.approvalId,
         runId: input.runId,
@@ -1402,7 +1404,7 @@ export class LocalMainspringGateway {
         const runtime = this.requireRunLogRuntime()
         runtime.approvals.approve({
           approvalId: input.approvalId,
-          actor: input.reason ?? 'local-gateway',
+          actor: input.actor?.trim() || 'local-gateway',
         })
         this.recordGatewayApprovalDecision(input, 'approved')
         return runtime.project(input.runId)
@@ -1411,7 +1413,7 @@ export class LocalMainspringGateway {
         const runtime = this.requireRunLogRuntime()
         runtime.approvals.deny({
           approvalId: input.approvalId,
-          actor: input.reason ?? 'local-gateway',
+          actor: input.actor?.trim() || 'local-gateway',
         })
         this.recordGatewayApprovalDecision(input, 'denied')
         return runtime.project(input.runId)

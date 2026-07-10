@@ -922,6 +922,19 @@ describe('LocalGatewayHttpServer', () => {
       const postLogoutSnapshot = await fetch(`${started.url}/snapshot`, {
         headers: { authorization: `Bearer ${sessionToken}` },
       })
+      const failedLoginResponses = []
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        failedLoginResponses.push(await fetch(`${started.url}/auth/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username: 'Admin', password: 'wrong-password' }),
+        }))
+      }
+      const rateLimitedLogin = await fetch(`${started.url}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Admin', password: 'NorthlinePass123' }),
+      })
 
       expect(hostedHealth).toMatchObject({
         mode: 'local-gateway-hosted',
@@ -1004,6 +1017,9 @@ describe('LocalGatewayHttpServer', () => {
       })
       expect(logoutResponse.status).toBe(200)
       expect(postLogoutSnapshot.status).toBe(401)
+      expect(failedLoginResponses.map((response) => response.status)).toEqual([401, 401, 401, 401, 401])
+      expect(rateLimitedLogin.status).toBe(429)
+      expect(Number(rateLimitedLogin.headers.get('retry-after'))).toBeGreaterThan(0)
 
       await server.stop()
     } finally {

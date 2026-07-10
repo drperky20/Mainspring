@@ -18,6 +18,7 @@ Mainspring treats agents as untrusted workers.
 - local gateway hosted-auth mode
 - local-only gateway binding
 - local gateway browser-origin allowlist for localhost/loopback console origins; hostile browser origins are rejected before hosted auth bootstrap/login
+- bounded in-process hosted-login backoff and authenticated-session attribution for gateway approval audit records
 - browser adapter public-target checks for initial opens plus adapter-reported current URLs after open and before/after page interaction/read actions
 - short-lived hosted browser-access tickets for local artifact and SSE reads, with auth-like query parameters rejected on ticketed URLs
 - console-side local gateway URL validation that rejects embedded `user:password@host` credentials
