@@ -94,6 +94,8 @@ export type GatewayArtifactHistoryItem = ConsoleGatewaySnapshot['artifacts'][num
 
 export type GatewayAuditHistoryItem = ConsoleGatewaySnapshot['auditEvents'][number]
 
+export type GatewayMemoryHistoryItem = ConsoleGatewaySnapshot['memoryEntries'][number]
+
 export interface LocalGatewayClient {
   health(input?: { signal?: AbortSignal }): Promise<{
     mode: string
@@ -310,6 +312,12 @@ export interface LocalGatewayClient {
     limit?: number
     signal?: AbortSignal
   }): Promise<{ events: GatewayAuditHistoryItem[]; nextCursor?: string }>
+  memoryHistory(input: {
+    workspaceId: string
+    cursor?: string
+    limit?: number
+    signal?: AbortSignal
+  }): Promise<{ entries: GatewayMemoryHistoryItem[]; nextCursor?: string }>
   cronStatus(): Promise<{
     cron: { enabled: boolean; running: boolean; pollIntervalMs: number; lastTickAt?: string; lastError?: string }
   }>
@@ -756,6 +764,15 @@ export function createLocalGatewayClient(
       }),
     auditHistory: (input = {}) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/audit-history${queryString({
+        cursor: input.cursor,
+        limit: input.limit === undefined ? undefined : String(input.limit),
+      })}`, {
+        headers: authHeaders(),
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    memoryHistory: (input) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/memory-history${queryString({
+        workspaceId: input.workspaceId,
         cursor: input.cursor,
         limit: input.limit === undefined ? undefined : String(input.limit),
       })}`, {

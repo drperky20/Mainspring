@@ -1030,6 +1030,151 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('serves cursor-paginated memory history for a registered workspace without rebuilding the broad snapshot', async () => {
+    const root = makeTempRoot('mainspring-gateway-memory-history-page-')
+    const workspaceRoot = path.join(root, 'workspace-memory-history')
+    const privateMemoryPath = path.join(root, 'memory-history-private')
+    fs.mkdirSync(workspaceRoot, { recursive: true })
+    const memoryDirectory = path.join(workspaceRoot, '.mainspring')
+    fs.mkdirSync(memoryDirectory, { recursive: true })
+    fs.writeFileSync(
+      path.join(memoryDirectory, 'memory.jsonl'),
+      [
+        {
+          entryId: 'memory_1',
+          workspaceRoot,
+          scope: 'workspace',
+          text: `Newest note workspaceRoot=${privateMemoryPath}`,
+          tags: [`filePath=${path.join(privateMemoryPath, 'note.md')}`],
+          createdAt: '2026-07-10T12:03:00.000Z',
+          metadata: { privateMemorySource: 'must-not-cross-the-browser-boundary' },
+        },
+        {
+          entryId: 'memory_2',
+          workspaceRoot,
+          scope: 'session',
+          sessionId: 'session_memory_history',
+          text: 'Session-scoped memory note.',
+          tags: ['session'],
+          createdAt: '2026-07-10T12:02:00.000Z',
+        },
+        {
+          entryId: 'memory_3',
+          workspaceRoot,
+          scope: 'workspace',
+          text: 'Oldest workspace note.',
+          tags: [],
+          createdAt: '2026-07-10T12:01:00.000Z',
+        },
+      ].map((record) => JSON.stringify(record)).join('\n').concat('\n'),
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    appState.workspaces.create({
+      workspaceId: 'workspace_memory_history',
+      name: 'Memory history workspace',
+      root: workspaceRoot,
+    })
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const gateway = createLocalMainspringGateway({ runtime, appState })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const first = await fetch(`${started.url}/memory-history?workspaceId=workspace_memory_history&limit=2`)
+      expect(first.status).toBe(200)
+      const firstBody = await first.json() as {
+        entries: Array<{
+          entryId: string
+          metadata?: unknown
+          workspaceRoot?: unknown
+          textPreview?: string
+        }>
+        nextCursor?: string
+      }
+      expect(firstBody.entries).toHaveLength(2)
+      expect(firstBody.entries[0]?.entryId).not.toBe('memory_1')
+      expect(firstBody.entries[1]?.entryId).not.toBe('memory_2')
+      expect(firstBody.entries.every((entry) => /^memory_[A-Za-z0-9_-]{43}$/.test(entry.entryId))).toBe(true)
+      expect(firstBody.nextCursor).toEqual(expect.any(String))
+      expect(firstBody.entries.every((entry) => entry.metadata === undefined && entry.workspaceRoot === undefined)).toBe(true)
+      expect(firstBody.entries[0]?.textPreview).toContain('[redacted]')
+      expect(JSON.stringify(firstBody)).not.toContain('must-not-cross-the-browser-boundary')
+      expect(JSON.stringify(firstBody)).not.toContain('memory-history-private')
+      expect(JSON.stringify(firstBody)).not.toContain('workspaceRoot')
+      expect(snapshotCalls).toBe(0)
+
+      const second = await fetch(
+        `${started.url}/memory-history?workspaceId=workspace_memory_history&limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? '')}`,
+      )
+      expect(second.status).toBe(200)
+      const secondBody = await second.json() as {
+        entries: Array<{ entryId: string; textPreview?: string }>
+        nextCursor?: string
+      }
+      expect(secondBody.entries).toMatchObject([{ textPreview: 'Oldest workspace note.' }])
+      expect(secondBody.entries[0]?.entryId).not.toBe('memory_3')
+      expect(secondBody.nextCursor).toBeUndefined()
+      expect(snapshotCalls).toBe(0)
+
+      const invalidCursor = await fetch(`${started.url}/memory-history?workspaceId=workspace_memory_history&cursor=not-a-valid-cursor`)
+      expect(invalidCursor.status).toBe(400)
+      const invalidLimit = await fetch(`${started.url}/memory-history?workspaceId=workspace_memory_history&limit=101`)
+      expect(invalidLimit.status).toBe(400)
+      const missingWorkspace = await fetch(`${started.url}/memory-history`)
+      expect(missingWorkspace.status).toBe(400)
+      const unsafeWorkspaceId = `workspaceRoot=${path.join(root, 'private-memory-history')}`
+      const unknownWorkspace = await fetch(
+        `${started.url}/memory-history?workspaceId=${encodeURIComponent(unsafeWorkspaceId)}`,
+      )
+      expect(unknownWorkspace.status).toBe(404)
+      expect(await unknownWorkspace.json()).toEqual({ error: 'Unknown workspace.' })
+    } finally {
+      await server.stop()
+      appState.close()
+      await runtime.stop()
+    }
+  })
+
+  it('keeps memory history bounded by requiring app-state workspace metadata', async () => {
+    const root = makeTempRoot('mainspring-gateway-memory-history-no-app-state-')
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const gateway = createLocalMainspringGateway({ runtime })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const response = await fetch(`${started.url}/memory-history?workspaceId=workspace_memory_history`)
+      expect(response.status).toBe(501)
+      expect(await response.json()).toMatchObject({
+        error: 'Memory history pagination requires the gateway app-state store.',
+      })
+      expect(snapshotCalls).toBe(0)
+    } finally {
+      await server.stop()
+      await runtime.stop()
+    }
+  })
+
   it('serves cursor-paginated compatibility runs without materializing the broad snapshot', async () => {
     const root = makeTempRoot('mainspring-gateway-compatibility-run-page-')
     const appState = createSqliteLocalGatewayAppStateStore({

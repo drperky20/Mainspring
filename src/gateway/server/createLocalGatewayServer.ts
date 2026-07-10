@@ -14,6 +14,10 @@ import {
 } from '../RunLogActivityPage.js'
 import { listArtifactHistoryPage } from '../ArtifactHistoryPage.js'
 import { listAuditHistoryPage } from '../AuditHistoryPage.js'
+import {
+  listMemoryHistoryPage,
+  type MemoryHistoryCursor,
+} from '../MemoryHistoryPage.js'
 import { listUsageHistoryPage } from '../UsageHistoryPage.js'
 import {
   consoleAgent,
@@ -158,6 +162,8 @@ const DEFAULT_ARTIFACT_HISTORY_PAGE_LIMIT = 25
 const MAX_ARTIFACT_HISTORY_PAGE_LIMIT = 100
 const DEFAULT_AUDIT_HISTORY_PAGE_LIMIT = 25
 const MAX_AUDIT_HISTORY_PAGE_LIMIT = 100
+const DEFAULT_MEMORY_HISTORY_PAGE_LIMIT = 25
+const MAX_MEMORY_HISTORY_PAGE_LIMIT = 100
 
 export async function readBoundedGatewayJson(
   request: AsyncIterable<Buffer | Uint8Array | string> & { headers?: IncomingMessage['headers'] },
@@ -511,6 +517,11 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'GET' && path === '/audit-history') {
         this.writeAuditHistoryPage(response, url)
+        return
+      }
+
+      if (request.method === 'GET' && path === '/memory-history') {
+        this.writeMemoryHistoryPage(response, url)
         return
       }
 
@@ -1757,6 +1768,35 @@ export class LocalGatewayHttpServer {
     }))
   }
 
+  /**
+   * Cursor-paginated browser-safe memory previews for one selected app-state
+   * workspace. The browser never supplies or receives a workspace root, and
+   * memory metadata remains in the workspace-local JSONL store.
+   */
+  private writeMemoryHistoryPage(response: ServerResponse, url: URL): void {
+    const appState = this.options.gateway.appState
+    if (!appState) {
+      throw new GatewayHttpError(
+        501,
+        'Memory history pagination requires the gateway app-state store.',
+      )
+    }
+    const workspaceId = memoryHistoryWorkspaceId(url.searchParams.get('workspaceId'))
+    const limit = memoryHistoryPageLimit(url.searchParams.get('limit'))
+    const before = parseMemoryHistoryCursor(url.searchParams.get('cursor'))
+    const page = listMemoryHistoryPage({
+      source: appState,
+      workspaceId,
+      limit,
+      ...(before ? { before } : {}),
+    })
+    if (!page) throw new GatewayHttpError(404, 'Unknown workspace.')
+    this.writeJson(response, 200, sanitizeGatewayResponse({
+      entries: page.entries,
+      ...(page.nextCursor ? { nextCursor: encodeMemoryHistoryCursor(page.nextCursor) } : {}),
+    }))
+  }
+
   private async writeArtifact(
     response: ServerResponse,
     artifactId: string,
@@ -2015,6 +2055,26 @@ function auditHistoryPageLimit(value: string | null): number {
   return parsed
 }
 
+function memoryHistoryPageLimit(value: string | null): number {
+  if (!value) return DEFAULT_MEMORY_HISTORY_PAGE_LIMIT
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_MEMORY_HISTORY_PAGE_LIMIT) {
+    throw new GatewayHttpError(
+      400,
+      `Memory history limit must be an integer from 1 to ${MAX_MEMORY_HISTORY_PAGE_LIMIT}.`,
+    )
+  }
+  return parsed
+}
+
+function memoryHistoryWorkspaceId(value: string | null): string {
+  const workspaceId = value?.trim() ?? ''
+  if (!workspaceId || workspaceId.length > 160) {
+    throw new GatewayHttpError(400, 'Memory history workspaceId is required.')
+  }
+  return workspaceId
+}
+
 function encodeRunLogActivityCursor(run: Pick<RunLogRunRecord, 'createdAt' | 'runId'>): string {
   return Buffer.from(JSON.stringify({ createdAt: run.createdAt, runId: run.runId }), 'utf8')
     .toString('base64url')
@@ -2152,6 +2212,32 @@ function parseAuditHistoryCursor(value: string | null): LocalGatewayAuditEventCu
     return { createdAt, eventId }
   } catch {
     throw new GatewayHttpError(400, 'Audit history cursor is invalid.')
+  }
+}
+
+function encodeMemoryHistoryCursor(
+  record: Pick<MemoryHistoryCursor, 'createdAt' | 'entryId'>,
+): string {
+  return Buffer.from(
+    JSON.stringify({ createdAt: record.createdAt, entryId: record.entryId }),
+    'utf8',
+  ).toString('base64url')
+}
+
+function parseMemoryHistoryCursor(value: string | null): MemoryHistoryCursor | undefined {
+  if (!value) return undefined
+  if (value.length > 256) throw new GatewayHttpError(400, 'Memory history cursor is invalid.')
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8')
+    const parsed = JSON.parse(decoded) as Record<string, unknown>
+    const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt.trim() : ''
+    const entryId = typeof parsed.entryId === 'string' ? parsed.entryId.trim() : ''
+    if (!createdAt || !entryId || createdAt.length > 64 || entryId.length > 160) {
+      throw new Error('invalid memory history cursor fields')
+    }
+    return { createdAt, entryId }
+  } catch {
+    throw new GatewayHttpError(400, 'Memory history cursor is invalid.')
   }
 }
 

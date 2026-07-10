@@ -237,6 +237,40 @@ describe('createLocalGatewayClient', () => {
     })
   })
 
+  it('requests bounded workspace memory history with an opaque cursor', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe(
+        'http://127.0.0.1:8787/memory-history?workspaceId=workspace_memory_1&cursor=memory_cursor_1&limit=25',
+      )
+      expect(init?.headers).toEqual({ authorization: 'Bearer hosted_token_1' })
+      return new Response(
+        JSON.stringify({
+          entries: [{
+            entryId: 'memory_1',
+            workspaceId: 'workspace_memory_1',
+            scope: 'workspace',
+            textPreview: 'Remember the current client preference.',
+            tags: ['preference'],
+            createdAt: '2026-07-10T00:00:00.000Z',
+          }],
+          nextCursor: 'memory_cursor_2',
+        }),
+        { status: 200 },
+      )
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+    client.setSessionToken('hosted_token_1')
+
+    await expect(client.memoryHistory({
+      workspaceId: 'workspace_memory_1',
+      cursor: 'memory_cursor_1',
+      limit: 25,
+    })).resolves.toMatchObject({
+      entries: [expect.objectContaining({ entryId: 'memory_1', scope: 'workspace' })],
+      nextCursor: 'memory_cursor_2',
+    })
+  })
+
   it('fetches snapshot, run events, run start, and approval resolution through the expected routes', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

@@ -1,7 +1,7 @@
 import type { ConsoleConnectionState } from './OperatorConsoleScreens'
 
 export type ConsoleScreen = 'home' | 'workspaces' | 'activity' | 'settings'
-export type ActivityTab = 'runs' | 'approvals' | 'usage' | 'artifacts' | 'audit'
+export type ActivityTab = 'runs' | 'approvals' | 'usage' | 'artifacts' | 'audit' | 'memory'
 
 type NavigationClient = {
   clientId: string
@@ -154,6 +154,7 @@ export function ActivityNavigation({
     { id: 'usage', label: 'Usage' },
     { id: 'artifacts', label: 'Artifacts' },
     { id: 'audit', label: 'Audit' },
+    { id: 'memory', label: 'Memory' },
   ]
   return (
     <nav className="control-activity-nav" aria-label="Activity views">

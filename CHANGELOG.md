@@ -13,11 +13,12 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Conditional console snapshot delivery with a server-only sanitized revision cache, adaptive browser revalidation, and a cheap health probe.
 - Configurable bounded RunLog worker concurrency with same-workspace process-local serialization and deterministic performance coverage.
 - `ConsoleNavigation` and `useConsoleRunActivity` boundaries for the connected operator shell.
+- Workspace-scoped, cursor-paginated memory history with browser-safe previews and no browser-supplied host paths.
 
 ### Changed
 - Verification lane standardized around `pnpm verify`.
 - Public docs now separate implemented behavior, prototype-only surfaces, and roadmap claims more explicitly.
-- Operator navigation now groups normal work into Home, Workspaces, Activity, and Settings; runs, approvals, and usage are Activity views.
+- Operator navigation now groups normal work into Home, Workspaces, Activity, and Settings; runs, approvals, usage, artifacts, audit, and memory are Activity views.
 
 ### Security
 - Security language now consistently states that host shell execution is not a sandbox and browser-side provider auth remains prototype-only.

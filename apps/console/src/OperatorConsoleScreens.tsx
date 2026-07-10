@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type {
   ConsoleGatewayArtifact,
   ConsoleGatewayAuditEvent,
+  ConsoleGatewayMemoryEntry,
   ConsoleGatewayRunEvent,
   ConsoleGatewayUsageLedgerEntry,
 } from 'mainspring/gateway'
@@ -786,6 +787,88 @@ export function AuditScreen({
             onClick={onLoadMore}
           >
             {loading ? 'Loading audit events...' : 'Load more audit events'}
+          </button>
+        ) : null}
+      </section>
+    </section>
+  )
+}
+
+export function MemoryScreen({
+  entries = [],
+  error,
+  hasMore = false,
+  loading = false,
+  onLoadMore,
+  workspaceId,
+  workspaceName,
+}: {
+  entries?: ConsoleGatewayMemoryEntry[]
+  error?: string
+  hasMore?: boolean
+  loading?: boolean
+  onLoadMore?: () => void
+  workspaceId?: string
+  workspaceName?: string
+}) {
+  const selectedWorkspaceLabel = workspaceName ? ` for ${workspaceName}` : ''
+  return (
+    <section className="control-screen memory-screen" aria-labelledby="memory-title">
+      <header className="control-screen-header">
+        <div>
+          <p className="control-kicker">Workspace context</p>
+          <h1 id="memory-title">Memory</h1>
+          <p>
+            {workspaceId
+              ? `Browser-safe memory previews${selectedWorkspaceLabel}. Source metadata and workspace paths remain host-side.`
+              : 'Select a workspace to inspect its browser-safe memory previews.'}
+          </p>
+        </div>
+        <div className="control-header-stat">
+          <strong>{entries.length}</strong>
+          <span>visible entries</span>
+        </div>
+      </header>
+
+      <section className="control-panel control-history-panel">
+        <PanelHeader title="Recent workspace memory" meta={loading ? 'loading' : `${entries.length} visible`} />
+        {error ? <InlineError message={error} /> : null}
+        {!workspaceId ? (
+          <CompactEmptyState title="No workspace selected" detail="Choose a client workspace before reviewing its memory history." />
+        ) : loading && entries.length === 0 ? (
+          <div className="control-skeleton-list" role="status" aria-label="Loading memory history">
+            <span /><span /><span />
+          </div>
+        ) : entries.length === 0 ? (
+          <CompactEmptyState title="No memory recorded" detail="Approved workspace and session memory will appear here as safe previews." />
+        ) : (
+          <div className="control-row-list">
+            {entries.map((entry) => (
+              <div className="control-data-row static" key={entry.entryId}>
+                <StatusDot status="neutral" />
+                <span>
+                  <strong>{entry.textPreview}</strong>
+                  <small>
+                    {entry.scope === 'session' ? 'Session-scoped' : 'Workspace-scoped'}
+                    {entry.tags.length > 0 ? ` | ${entry.tags.join(', ')}` : ''}
+                  </small>
+                </span>
+                <span className="control-row-meta">
+                  <strong>{entry.scope === 'session' ? 'Session' : 'Workspace'}</strong>
+                  <small>{formatDateTime(entry.createdAt)}</small>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {hasMore ? (
+          <button
+            className="simple-secondary control-run-load-more"
+            disabled={loading}
+            type="button"
+            onClick={onLoadMore}
+          >
+            {loading ? 'Loading memory...' : 'Load more memory'}
           </button>
         ) : null}
       </section>

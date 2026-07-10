@@ -99,14 +99,21 @@ browser-access route.
 `GET /audit-history` returns a browser-safe, reverse-cursor page of local
 audit rows with the same limits. It requires the gateway app-state store and
 omits durable event metadata while returning sanitized category, action, actor,
-target, and optional run/session linkage fields. Memory history still awaits a
-dedicated page.
+target, and optional run/session linkage fields.
+
+`GET /memory-history?workspaceId=...` returns a browser-safe, reverse-cursor
+page of memory previews for one gateway-registered workspace with the same
+limits. It requires the gateway app-state store, resolves the workspace root
+only on the host, and omits memory metadata, raw paths, and source entry IDs.
+It never accepts a browser-supplied workspace root. The JSONL source is read
+for the selected workspace to produce a deterministic page; this is deliberately not a claim
+of a global memory index.
 
 The console fetches these routes only while the related Activity surface is
 open: Runs loads the two activity pages, Approvals loads approval history, and
 a selected RunLog detail loads its public trace page; Usage loads detailed
 ledger history; Artifacts loads the bounded inventory; Audit loads the bounded
-authority trail.
+authority trail; Memory loads the selected workspace's bounded preview page.
 
 When a gateway has a RunLog host, cron tick and run-now dispatch create ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events. Provider-only cron schedules queue normally; side-effecting schedules fail closed unless their metadata carries a scoped, unexpired cron grant. Operators can call `GET /cron/:scheduleId/grant` to preview the current grant decision and `POST /cron/:scheduleId/grant` to create an expiring scoped grant derived from the current schedule. The React console also exposes review/create controls that display the grant state without raw prompt hashes or secret refs. Gateways without a RunLog host keep the mailbox-compatible cron path for older embedders and migration verifiers.
 

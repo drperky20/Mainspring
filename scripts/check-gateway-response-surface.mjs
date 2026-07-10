@@ -83,13 +83,14 @@ async function main() {
     assert(health.health?.ok === true, 'health response did not report ok=true')
     assertNoBrowserLeak('health response', health, [root.replaceAll('\\', '\\\\')])
 
+    const clientWorkspaceRoot = path.join(root, 'workspace-client')
     const createdClient = await requestJson(`${started.url}/clients`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         name: 'Browser Surface Client workspaceRoot=E:/Mainspring/browser-surface-hidden',
         workspaceName: 'Browser Surface Workspace filePath=/srv/browser-surface-hidden/workspace.md',
-        workspaceRoot: path.join(root, 'workspace-client'),
+        workspaceRoot: clientWorkspaceRoot,
       }),
     })
     assertNoBrowserLeak('client create response', createdClient, [root.replaceAll('\\', '\\\\')])
@@ -98,6 +99,32 @@ async function main() {
 
     const sessionId = createdClient.session.sessionId
     const workspaceId = createdClient.workspace.workspaceId
+
+    const memoryPath = path.join(clientWorkspaceRoot, '.mainspring', 'memory.jsonl')
+    fs.mkdirSync(path.dirname(memoryPath), { recursive: true })
+    fs.writeFileSync(memoryPath, `${JSON.stringify({
+      entryId: 'memory_browser_surface',
+      workspaceRoot: clientWorkspaceRoot,
+      scope: 'workspace',
+      text: 'Remember workspaceRoot=E:/Mainspring/browser-surface-hidden-memory filePath=/srv/browser-surface-hidden/memory.md',
+      tags: ['browser-surface', 'artifactPath=C:/browser-surface-hidden/memory.md'],
+      createdAt: '2026-07-10T00:00:00.000Z',
+      metadata: { internalMemorySource: 'browser-surface-memory-private-sentinel' },
+    })}\n`)
+    const memoryHistory = await requestJson(
+      `${started.url}/memory-history?workspaceId=${encodeURIComponent(workspaceId)}&limit=1`,
+    )
+    assert(
+      memoryHistory.entries?.[0]?.entryId?.startsWith('memory_')
+        && memoryHistory.entries?.[0]?.entryId !== 'memory_browser_surface',
+      'memory history did not expose an opaque workspace memory row ID',
+    )
+    assert(memoryHistory.entries?.[0]?.metadata === undefined, 'memory history exposed memory metadata')
+    assert(memoryHistory.entries?.[0]?.workspaceRoot === undefined, 'memory history exposed workspace root')
+    assertNoBrowserLeak('memory history response', memoryHistory, [
+      root.replaceAll('\\', '\\\\'),
+      'browser-surface-memory-private-sentinel',
+    ])
 
     const snapshot = await requestJson(`${started.url}/snapshot`)
     assert(snapshot.counts?.clients >= 1, 'snapshot response did not include client counts')

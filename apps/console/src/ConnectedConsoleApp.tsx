@@ -29,6 +29,7 @@ import { useRunLogTracePage } from './useRunLogTracePage'
 import { useUsageHistoryPage } from './useUsageHistoryPage'
 import { useArtifactHistoryPage } from './useArtifactHistoryPage'
 import { useAuditHistoryPage } from './useAuditHistoryPage'
+import { useMemoryHistoryPage } from './useMemoryHistoryPage'
 import {
   createChatMessage,
   createScopedRunUiState,
@@ -56,6 +57,7 @@ import {
   ConsoleConnectionScreen,
   OverviewScreen,
   RunsScreen,
+  MemoryScreen,
   UsageScreen,
 } from './OperatorConsoleScreens'
 import { InfoRow, SettingsScreen } from './ConsoleSettings'
@@ -218,6 +220,16 @@ export function ConnectedConsoleApp() {
     enabled: auditHistoryEnabled,
     gatewayClient,
     revision: snapshot?.generatedAt,
+    limit: 25,
+  })
+  const memoryHistoryEnabled = screen === 'activity'
+    && activityTab === 'memory'
+    && Boolean(selectedWorkspace?.workspaceId)
+  const memoryHistory = useMemoryHistoryPage({
+    enabled: memoryHistoryEnabled,
+    gatewayClient,
+    revision: snapshot?.generatedAt,
+    workspaceId: selectedWorkspace?.workspaceId,
     limit: 25,
   })
   const runListModel = useMemo(() => {
@@ -849,13 +861,23 @@ export function ConnectedConsoleApp() {
                 loading={artifactHistoryEnabled && artifactHistory.loading}
                 onLoadMore={() => void artifactHistory.loadMore()}
               />
-            ) : (
+            ) : activityTab === 'audit' ? (
               <AuditScreen
                 error={auditHistoryEnabled ? auditHistory.error : undefined}
                 events={auditHistory.events}
                 hasMore={auditHistoryEnabled && Boolean(auditHistory.nextCursor)}
                 loading={auditHistoryEnabled && auditHistory.loading}
                 onLoadMore={() => void auditHistory.loadMore()}
+              />
+            ) : (
+              <MemoryScreen
+                entries={memoryHistory.entries}
+                error={memoryHistoryEnabled ? memoryHistory.error : undefined}
+                hasMore={memoryHistoryEnabled && Boolean(memoryHistory.nextCursor)}
+                loading={memoryHistoryEnabled && memoryHistory.loading}
+                workspaceId={selectedWorkspace?.workspaceId}
+                workspaceName={selectedWorkspace?.name}
+                onLoadMore={() => void memoryHistory.loadMore()}
               />
             )}
           </>

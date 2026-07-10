@@ -1,10 +1,14 @@
+import { createHash } from 'node:crypto'
 import { sanitizeRuntimeResponse } from '#protocol'
 import type { RunEvent, RuntimeHealth } from '../contracts/runtime.js'
 import type { RunRecord } from '../contracts/runtime.js'
 import type { RunLogCronPolicyMetadata } from '../capabilities/cron/RunLogCron.js'
 import type { ProvenanceReviewItem } from '../provenance/ProvenanceReview.js'
 import type { RunRecord as RunLogRunRecord } from '../core/types.js'
-import { listStoredMemoryEntries } from '../memory/MemoryStore.js'
+import {
+  listStoredMemoryEntries,
+  type MemoryRecord,
+} from '../memory/MemoryStore.js'
 import { redactBrowserUnsafeGatewayText } from './browserSafety.js'
 import type {
   InstallLocalMarketplaceTemplateResult,
@@ -902,18 +906,36 @@ export function consoleRunLogRun(run: LocalGatewayRunLogRunProjection): ConsoleG
   }
 }
 
+export function consoleMemoryEntry(
+  entry: Pick<MemoryRecord, 'entryId' | 'sessionId' | 'scope' | 'text' | 'tags' | 'createdAt'>,
+  workspaceId?: string,
+): ConsoleGatewayMemoryEntry {
+  return {
+    entryId: consoleMemoryEntryId(entry.entryId),
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+    scope: entry.scope,
+    textPreview: memoryPreview(entry.text),
+    tags: entry.tags.map(browserSafePreviewText),
+    createdAt: entry.createdAt,
+  }
+}
+
+/**
+ * Memory entry IDs can originate in workspace-local JSONL. Keep the browser
+ * identifier stable for row identity and paging without promoting arbitrary
+ * source IDs into a renderer DTO or an opaque cursor payload.
+ */
+export function consoleMemoryEntryId(entryId: string): string {
+  return `memory_${createHash('sha256').update(entryId).digest('base64url')}`
+}
+
 function consoleMemoryEntries(snapshot: LocalGatewaySnapshot): ConsoleGatewayMemoryEntry[] {
   return snapshot.appState.workspaces.flatMap((workspace) => {
     try {
-      return listStoredMemoryEntries(workspace.root).map((entry) => ({
-        entryId: entry.entryId,
-        workspaceId: workspace.workspaceId,
-        ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
-        scope: entry.scope,
-        textPreview: memoryPreview(entry.text),
-        tags: entry.tags.map(browserSafePreviewText),
-        createdAt: entry.createdAt,
-      }))
+      return listStoredMemoryEntries(workspace.root).map((entry) =>
+        consoleMemoryEntry(entry, workspace.workspaceId),
+      )
     } catch {
       return []
     }

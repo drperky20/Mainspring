@@ -22,7 +22,7 @@ items are complete. Status is updated only after code and verification land.
 | P1 | Extract visibility-aware, abortable, non-overlapping gateway refresh lifecycle from the connected console. | Complete | `useGatewaySnapshot`, delay/backoff tests, console type/build, and Playwright workflow. |
 | P1 | Add bounded, configurable RunLog worker concurrency without weakening claims, heartbeats, cancellation, or retry behavior. | Complete | Worker saturation and workspace/cancellation tests plus deterministic 3.65x independent-run benchmark. |
 | P1 | Split the connected console shell along stable feature/view-model boundaries. | Complete | `ConsoleNavigation`, `useConsoleRunActivity`, provider catalog/form, first-run setup, and client editing are extracted; console type/build and Playwright workflow pass. |
-| P1 | Introduce bounded/paginated advanced gateway read models after console callers are incremental. | Complete | `GET /runlog/runs`, `GET /compatibility/runs`, `GET /approval-history`, public-only `GET /runlog/runs/:runId/trace`, and `GET /usage-history` use bounded cursors; Activity callers load only their visible surface, and compatibility pages keep a 64-session, per-session-invalidated cache without consulting the broad snapshot revision. |
+| P1 | Introduce bounded/paginated advanced gateway read models after console callers are incremental. | Complete | `GET /runlog/runs`, `GET /compatibility/runs`, `GET /approval-history`, public-only `GET /runlog/runs/:runId/trace`, plus usage, artifact, audit, and per-workspace memory pages use bounded cursors; Activity callers load only their visible surface, and compatibility pages keep a 64-session, per-session-invalidated cache without consulting the broad snapshot revision. |
 | P2 | Consolidate `LocalGateway`/`AppStateStore` behind bounded internal services/repositories. | In progress | `CompatibilityRunPageReader` owns metadata pagination, session cache, and mailbox freshness; `ApprovalHistoryPage` owns canonical/compatibility approval merging; `RunLogActivityPage` owns canonical activity/trace reads and public-event projection behind thin HTTP routes. Remaining gateway/app-state domains still need their own tested seams. |
 | P2 | Simplify first-level console navigation and split style tokens/base/shell/primitives/features. | In progress | Primary navigation is already constrained; `ConsoleSettings` owns settings UI and feature CSS, while `ConsoleWorkflowPrimitives` owns shared workflow controls and accessible modal focus behavior. Phone-width client tabs now remain reachable in a two-column grid. Broader automated keyboard/narrow-viewport coverage and remaining CSS feature-boundary splits remain. |
 | P2 | Improve explicit redirect/session/trace UX where RunLog semantics exist. | Planned | Durable event/recovery/cancellation tests. |
@@ -39,8 +39,9 @@ items are complete. Status is updated only after code and verification land.
 4. Measure fresh, cached, and conditional transport behavior plus queue drain
    time using deterministic local fixtures.
 5. Load canonical RunLog and compatibility activity through bounded cursor
-   endpoints, merge their operator rows, page detailed approvals/traces, and
-   keep compatibility cache invalidation scoped to each represented mailbox.
+   endpoints, merge their operator rows, page detailed approvals/traces/usage/
+   artifacts/audit/per-workspace memory, and keep compatibility cache
+   invalidation scoped to each represented mailbox.
 6. Keep the compatibility aggregate stable for public callers while the
    console uses extracted provider/setup/client feature boundaries and runs all
    focused and release gates.
