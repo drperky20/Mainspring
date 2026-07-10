@@ -51,6 +51,15 @@ The full snapshot is still a compatibility aggregate. Runs, traces, and other
 advanced read models should move to bounded, purpose-specific endpoints before
 the aggregate is narrowed or removed.
 
+`GET /runlog/runs` is the first such purpose-specific endpoint. It returns a
+canonical, sanitized RunLog activity page with a default limit of 25 and a
+maximum of 100 rows. `nextCursor` is opaque and can be sent back as `cursor`
+to continue in reverse creation order. Each row uses a bounded 64-event
+projection tail; detailed event inspection continues through the existing
+per-run endpoint. The console fetches this route only while the Runs activity
+view is open. Mailbox compatibility runs remain available in the compatible
+snapshot while their own bounded read model is still pending.
+
 When a gateway has a RunLog host, cron tick and run-now dispatch create ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events. Provider-only cron schedules queue normally; side-effecting schedules fail closed unless their metadata carries a scoped, unexpired cron grant. Operators can call `GET /cron/:scheduleId/grant` to preview the current grant decision and `POST /cron/:scheduleId/grant` to create an expiring scoped grant derived from the current schedule. The React console also exposes review/create controls that display the grant state without raw prompt hashes or secret refs. Gateways without a RunLog host keep the mailbox-compatible cron path for older embedders and migration verifiers.
 
 Staged memory/skill provenance reviews are exposed through local gateway routes:

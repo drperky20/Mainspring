@@ -20,6 +20,7 @@ import {
   consoleProviderProfile,
   consoleRunEvent,
   consoleRunDispatch,
+  consoleRunLogRun,
   consoleSession,
   consoleUsageStatus,
   consoleWorkspace,
@@ -31,7 +32,11 @@ import {
 import type { LocalMainspringGateway } from '../LocalGateway.js'
 import type { LocalGatewayAuthUserRecord } from '../AppStateStore.js'
 import type { RunEvent } from '../../contracts/runtime.js'
-import type { RunLogEvent, RunRecord as RunLogRunRecord } from '../../core/types.js'
+import type {
+  RunListCursor,
+  RunLogEvent,
+  RunRecord as RunLogRunRecord,
+} from '../../core/types.js'
 import type { RunLogRunProjection } from '../../hosts/runlog/RunLogProjection.js'
 import { GatewayHttpError, asGatewayHttpError } from './errors.js'
 import {
@@ -121,6 +126,9 @@ type BrowserAccessTicket = {
 const BROWSER_ACCESS_TICKET_TTL_MS = 1000 * 60 * 5
 const LOCAL_BROWSER_ORIGIN_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 export const MAX_GATEWAY_JSON_BODY_BYTES = 1024 * 1024
+const DEFAULT_RUNLOG_ACTIVITY_PAGE_LIMIT = 25
+const MAX_RUNLOG_ACTIVITY_PAGE_LIMIT = 100
+const RUNLOG_ACTIVITY_EVENT_TAIL = 64
 
 export async function readBoundedGatewayJson(
   request: AsyncIterable<Buffer | Uint8Array | string> & { headers?: IncomingMessage['headers'] },
@@ -899,6 +907,11 @@ export class LocalGatewayHttpServer {
         return
       }
 
+      if (request.method === 'GET' && path === '/runlog/runs') {
+        this.writeRunLogActivityPage(response, url)
+        return
+      }
+
       if (request.method === 'GET' && path.startsWith('/runs/') && path.endsWith('/events')) {
         const runId = decodeURIComponent(path.slice('/runs/'.length, -'/events'.length))
         const sessionId = url.searchParams.get('sessionId') ?? this.lookupSessionIdForRun(runId)
@@ -1488,6 +1501,37 @@ export class LocalGatewayHttpServer {
     this.writeJson(response, 200, snapshot, headers)
   }
 
+  /**
+   * Bounded canonical activity feed. Unlike the compatibility `/snapshot`,
+   * this route never materializes every app-state collection just to render a
+   * run list.
+   */
+  private writeRunLogActivityPage(response: ServerResponse, url: URL): void {
+    if (!this.options.gateway.runLog.available()) {
+      throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
+    }
+    const limit = runLogActivityPageLimit(url.searchParams.get('limit'))
+    const before = parseRunLogActivityCursor(url.searchParams.get('cursor'))
+    const sessionId = url.searchParams.get('sessionId')?.trim() || undefined
+    const records = this.options.gateway.runLog.runs.list({
+      ...(sessionId ? { sessionId } : {}),
+      ...(before ? { before } : {}),
+      limit: limit + 1,
+    })
+    const hasMore = records.length > limit
+    const page = records.slice(0, limit)
+    const last = page.at(-1)
+    const runs = page.map((record) =>
+      consoleRunLogRun(
+        this.options.gateway.runLog.runs.projectSummary(record.runId, RUNLOG_ACTIVITY_EVENT_TAIL),
+      ),
+    )
+    this.writeJson(response, 200, sanitizeGatewayResponse({
+      runs,
+      ...(hasMore && last ? { nextCursor: encodeRunLogActivityCursor(last) } : {}),
+    }))
+  }
+
   private async writeArtifact(
     response: ServerResponse,
     artifactId: string,
@@ -1660,6 +1704,39 @@ function requestEtagMatches(request: IncomingMessage, etag: string): boolean {
     const candidate = value.trim()
     return candidate === '*' || candidate === etag
   })
+}
+
+function runLogActivityPageLimit(value: string | null): number {
+  if (!value) return DEFAULT_RUNLOG_ACTIVITY_PAGE_LIMIT
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_RUNLOG_ACTIVITY_PAGE_LIMIT) {
+    throw new GatewayHttpError(
+      400,
+      `RunLog activity limit must be an integer from 1 to ${MAX_RUNLOG_ACTIVITY_PAGE_LIMIT}.`,
+    )
+  }
+  return parsed
+}
+
+function encodeRunLogActivityCursor(run: Pick<RunLogRunRecord, 'createdAt' | 'runId'>): string {
+  return Buffer.from(JSON.stringify({ createdAt: run.createdAt, runId: run.runId }), 'utf8')
+    .toString('base64url')
+}
+
+function parseRunLogActivityCursor(value: string | null): RunListCursor | undefined {
+  if (!value) return undefined
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8')
+    const parsed = JSON.parse(decoded) as Record<string, unknown>
+    const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt.trim() : ''
+    const runId = typeof parsed.runId === 'string' ? parsed.runId.trim() : ''
+    if (!createdAt || !runId || createdAt.length > 64 || runId.length > 160) {
+      throw new Error('invalid cursor fields')
+    }
+    return { createdAt, runId }
+  } catch {
+    throw new GatewayHttpError(400, 'RunLog activity cursor is invalid.')
+  }
 }
 
 function openRouterCatalogModel(value: unknown): OpenRouterCatalogModel | undefined {

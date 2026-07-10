@@ -18,6 +18,7 @@ import {
   localGatewayUrlFromEnv,
 } from './localGatewayTransport'
 import { useGatewaySnapshot } from './useGatewaySnapshot'
+import { useRunLogActivityPage } from './useRunLogActivityPage'
 import {
   createChatMessage,
   createScopedRunUiState,
@@ -42,6 +43,7 @@ import {
   UsageScreen,
 } from './OperatorConsoleScreens'
 import {
+  buildOperatorRunLogRows,
   buildOperatorConsoleViewModel,
   type OperatorApprovalRow,
   type OperatorRunRow,
@@ -325,13 +327,40 @@ export function ConnectedConsoleApp() {
     () => snapshot ? buildOperatorConsoleViewModel(snapshot) : undefined,
     [snapshot],
   )
+  const runLogActivityEnabled = screen === 'activity'
+    && activityTab === 'runs'
+    && snapshot?.runLog?.configured === true
+  const runLogActivity = useRunLogActivityPage({
+    enabled: runLogActivityEnabled,
+    gatewayClient,
+    revision: snapshot?.generatedAt,
+    limit: 25,
+  })
+  const runListModel = useMemo(() => {
+    if (!operatorModel || !snapshot || !runLogActivityEnabled) return operatorModel
+    const runs = runLogActivity.loaded
+      ? buildOperatorRunLogRows(snapshot, runLogActivity.runs)
+      : []
+    return {
+      ...operatorModel,
+      runs,
+      activeRuns: runs.filter((run) => run.active),
+    }
+  }, [
+    operatorModel,
+    runLogActivity.loaded,
+    runLogActivity.runs,
+    runLogActivityEnabled,
+    snapshot,
+  ])
   const activeRunScopeKey = selectedClient && selectedAgent
     ? `${selectedClient.clientId}:${selectedAgent.agentId}`
     : undefined
   const activeRunUi = activeRunScopeKey
     ? runUiByScope[activeRunScopeKey] ?? createScopedRunUiState()
     : createScopedRunUiState()
-  const selectedRun = operatorModel?.runs.find((run) => run.runId === selectedRunId)
+  const selectedRun = runListModel?.runs.find((run) => run.runId === selectedRunId)
+    ?? operatorModel?.runs.find((run) => run.runId === selectedRunId)
 
   const loadSelectedRunEvents = useCallback(async (run: OperatorRunRow | undefined) => {
     if (!run) {
@@ -362,14 +391,16 @@ export function ConnectedConsoleApp() {
   }, [selectedAgent, selectedAgentId])
 
   useEffect(() => {
-    if (!operatorModel || operatorModel.runs.length === 0) {
-      if (selectedRunId) setSelectedRunId(undefined)
+    if (!operatorModel) return
+    if (selectedRunId && !operatorModel.runs.some((run) => run.runId === selectedRunId)) {
+      setSelectedRunId(undefined)
       return
     }
-    if (!selectedRunId || !operatorModel.runs.some((run) => run.runId === selectedRunId)) {
-      setSelectedRunId(operatorModel.runs[0]?.runId)
+    if (runLogActivityEnabled && !runLogActivity.loaded) return
+    if (!selectedRunId && runListModel?.runs[0]) {
+      setSelectedRunId(runListModel.runs[0]?.runId)
     }
-  }, [operatorModel, selectedRunId])
+  }, [operatorModel, runListModel, runLogActivity.loaded, runLogActivityEnabled, selectedRunId])
 
   useEffect(() => {
     if (screen !== 'activity' || activityTab !== 'runs') return
@@ -829,9 +860,13 @@ export function ConnectedConsoleApp() {
                 events={selectedRunEvents}
                 eventsError={runEventsError}
                 eventsLoading={runEventsLoading}
-                model={operatorModel}
+                model={runListModel ?? operatorModel}
+                runsError={runLogActivityEnabled ? runLogActivity.error : undefined}
+                runsLoading={runLogActivityEnabled && runLogActivity.loading}
+                hasMoreRuns={runLogActivityEnabled && Boolean(runLogActivity.nextCursor)}
                 selectedRun={selectedRun}
                 onCancel={(run) => void cancelOperatorRun(run)}
+                onLoadMoreRuns={() => void runLogActivity.loadMore()}
                 onReloadEvents={() => void loadSelectedRunEvents(selectedRun)}
                 onSelectRun={setSelectedRunId}
               />

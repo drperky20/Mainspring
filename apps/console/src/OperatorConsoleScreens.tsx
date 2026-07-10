@@ -229,8 +229,12 @@ export function RunsScreen({
   events,
   eventsLoading,
   eventsError,
+  runsLoading = false,
+  runsError,
+  hasMoreRuns = false,
   actionBusy,
   onCancel,
+  onLoadMoreRuns,
   onReloadEvents,
   onSelectRun,
 }: {
@@ -239,8 +243,12 @@ export function RunsScreen({
   events: ConsoleGatewayRunEvent[]
   eventsLoading: boolean
   eventsError?: string
+  runsLoading?: boolean
+  runsError?: string
+  hasMoreRuns?: boolean
   actionBusy: boolean
   onCancel: (run: OperatorRunRow) => void
+  onLoadMoreRuns?: () => void
   onReloadEvents: () => void
   onSelectRun: (runId: string) => void
 }) {
@@ -254,11 +262,16 @@ export function RunsScreen({
         </div>
         <div className="control-header-stat">
           <strong>{model.runs.length}</strong>
-          <span>recorded runs</span>
+          <span>visible runs</span>
         </div>
       </header>
 
-      {model.runs.length === 0 ? (
+      {runsError ? <InlineError message={runsError} /> : null}
+      {runsLoading && model.runs.length === 0 ? (
+        <div className="control-skeleton-list" role="status" aria-label="Loading durable runs">
+          <span /><span /><span />
+        </div>
+      ) : model.runs.length === 0 ? (
         <LargeEmptyState
           code="RUN/00"
           title="No durable runs yet"
@@ -269,7 +282,7 @@ export function RunsScreen({
           <aside className="control-run-index" aria-label="Run list">
             <div className="control-index-head">
               <strong>Run index</strong>
-              <span>{model.activeRuns.length} active</span>
+              <span>{model.counts.activeRuns} active</span>
             </div>
             <div className="control-run-list">
               {model.runs.map((run) => (
@@ -292,6 +305,16 @@ export function RunsScreen({
                 </button>
               ))}
             </div>
+            {hasMoreRuns ? (
+              <button
+                className="simple-secondary control-run-load-more"
+                disabled={runsLoading}
+                type="button"
+                onClick={onLoadMoreRuns}
+              >
+                {runsLoading ? 'Loading runs…' : 'Load more runs'}
+              </button>
+            ) : null}
           </aside>
 
           {selectedRun ? (

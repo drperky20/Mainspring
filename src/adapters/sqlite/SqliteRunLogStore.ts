@@ -291,6 +291,8 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
         ON runs(status, lease_until, created_at);
       CREATE INDEX IF NOT EXISTS idx_runs_session
         ON runs(session_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_runs_created
+        ON runs(created_at DESC, run_id DESC);
 
       CREATE TABLE IF NOT EXISTS run_events (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -688,6 +690,18 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       })
       clauses.push(`status IN (${placeholders.join(', ')})`)
     }
+    if (input.before) {
+      const createdAt = input.before.createdAt.trim()
+      const runId = input.before.runId.trim()
+      if (!createdAt || !runId) {
+        throw new Error('Run list cursor requires non-empty createdAt and runId values.')
+      }
+      clauses.push(
+        '(created_at < @beforeCreatedAt OR (created_at = @beforeCreatedAt AND run_id < @beforeRunId))',
+      )
+      params.beforeCreatedAt = createdAt
+      params.beforeRunId = runId
+    }
     if (input.limit !== undefined) {
       const limit = Math.floor(input.limit)
       if (!Number.isFinite(limit) || limit <= 0) return []
@@ -696,7 +710,7 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
     const limit = input.limit === undefined ? '' : 'LIMIT @limit'
     return this.handle()
-      .prepare(`SELECT * FROM runs ${where} ORDER BY created_at DESC, rowid DESC ${limit}`)
+      .prepare(`SELECT * FROM runs ${where} ORDER BY created_at DESC, run_id DESC ${limit}`)
       .all(params)
       .map((row) => mapRun(row as Record<string, unknown>))
   }

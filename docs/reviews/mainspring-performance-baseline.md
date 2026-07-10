@@ -62,19 +62,20 @@ does not claim provider latency, browser automation speed, or host isolation.
 ## Post-overhaul measurements
 
 Captured on the same Windows host with `pnpm benchmark:overhaul` after the
-transport, scheduler, and console changes. The fixture creates 24 local
-client/workspace/session records and uses an eight-run provider fixture with a
-20 ms deterministic delay. These are local comparative measurements, not CI
-thresholds or live-provider claims.
+transport, scheduler, console, and bounded-activity changes. The fixture creates
+24 local client/workspace/session records plus 24 queued RunLog records, and
+uses an eight-run provider fixture with a 20 ms deterministic delay. These are
+local comparative measurements, not CI thresholds or live-provider claims.
 
 | Measure | Result | Interpretation |
 | --- | --- | --- |
-| Eight runs, default one active worker | 246.78 ms | Compatibility-preserving serial baseline. |
-| Eight runs, `maxConcurrentRuns=4` | 67.61 ms | 3.65x faster for independent delayed provider-only runs. |
-| Fresh server projection, five samples | median 1209.68 ms; mean 1097.40 ms; p95 1711.27 ms; 49,989 bytes | A full compatibility projection remains intentionally bounded but is still the expensive path. |
-| Cached full `200`, 20 samples | median 12.99 ms; mean 13.06 ms; p95 14.00 ms; 49,989 bytes | The sanitized server projection is reused when its revision is unchanged. |
-| Conditional unchanged `304`, 20 samples | median 1.11 ms; mean 1.14 ms; p95 1.30 ms; 0 bytes | Browser retains only its in-memory safe projection and receives no body. |
-| Snapshot revision check, 20 samples | median 0.47 ms; p95 0.57 ms | Process-local mailbox revisions avoid rereading every mailbox on normal refreshes. |
+| Eight runs, default one active worker | 248.04 ms | Compatibility-preserving serial baseline. |
+| Eight runs, `maxConcurrentRuns=4` | 85.25 ms | 2.91x faster for independent delayed provider-only runs. |
+| Fresh server projection, five samples | median 819.94 ms; mean 904.51 ms; p95 1149.06 ms; median 62,828 bytes | A full compatibility projection remains the expensive path. |
+| Cached full `200`, 20 samples | median 15.09 ms; mean 15.30 ms; p95 16.63 ms; 63,302 bytes | The sanitized server projection is reused when its revision is unchanged. |
+| Conditional unchanged `304`, 20 samples | median 1.67 ms; mean 1.75 ms; p95 2.14 ms; 0 bytes | Browser retains only its in-memory safe projection and receives no body. |
+| Snapshot revision check, 20 samples | median 1.06 ms; p95 1.19 ms | Process-local mailbox revisions avoid rereading every mailbox on normal refreshes. |
+| Cursor-paginated RunLog activity `200`, 20 samples | median 11.06 ms; mean 11.65 ms; p95 14.15 ms; 13,107 bytes | The Runs screen can load the canonical 24-row activity page without rebuilding the 63,302-byte aggregate snapshot. |
 
 Before the revision cache, an equivalent exploratory 24-client probe took
 about 2.74 s for a repeated full snapshot and about 2.48 s for a conditional
@@ -82,8 +83,8 @@ request because the server rebuilt the whole projection before calculating an
 ETag. Those pre-change observations were single samples, so the comparison is
 directional; the post-change rows above are the repeatable evidence.
 
-The current console bundle is 302.46 kB JavaScript (90.63 kB gzip) and 80.96
-kB CSS (15.44 kB gzip). The modest JavaScript increase over baseline reflects
+The current console bundle is 305.62 kB JavaScript (91.50 kB gzip) and 81.02
+kB CSS (15.46 kB gzip). The modest JavaScript increase over baseline reflects
 the new connection/navigation boundaries; it is not presented as a bundle-size
 improvement. The measured UI win is avoided transfer and projection work on
 normal refreshes, not a claim of code splitting.
@@ -97,6 +98,6 @@ normal refreshes, not a claim of code splitting.
   sends `Cache-Control: no-store`; browser and intermediary persistence are not
   enabled.
 - The compatibility mailbox mutation token detects in-process writes
-  immediately. A filesystem fingerprint is refreshed at most every 30 seconds
-  to discover legacy external writers without paying a filesystem scan on each
-  console refresh.
+  immediately. A database/WAL fingerprint is refreshed at most every 30
+  seconds to discover legacy external writers without paying a filesystem scan
+  on each console refresh.

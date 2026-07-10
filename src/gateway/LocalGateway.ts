@@ -1445,6 +1445,8 @@ export class LocalMainspringGateway {
       list: (input?: Parameters<RunLogMainspring['runs']['list']>[0]): RunLogRunRecord[] =>
         this.requireRunLogRuntime().runs.list(input),
       project: (runId: string): RunLogRunProjection => this.requireRunLogRuntime().project(runId),
+      projectSummary: (runId: string, limit?: number): LocalGatewayRunLogRunProjection =>
+        projectLocalRunLogRun(this.requireRunLogRuntime().project(runId, limit)),
       events: (input: { runId: string; afterSeq?: number; limit?: number }): RunLogEvent[] =>
         this.requireRunLogRuntime().store.listEvents(input),
       cancel: (runId: string, reason?: string): RunLogRunRecord =>

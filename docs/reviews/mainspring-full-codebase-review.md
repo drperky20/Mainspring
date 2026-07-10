@@ -14,10 +14,11 @@ The older mailbox runtime remains a deliberately separate compatibility lane.
 The largest remaining product risk is not another runtime: it is the breadth of
 the gateway and console read paths. The operator console now conditionally
 revalidates an in-memory safe snapshot rather than rebuilding it on every
-refresh, but the first broad compatibility projection still reads every
-app-state collection. That is correct for a small local installation and
-materially cheaper on normal refreshes, but advanced data must move to bounded
-read models before durable history grows without limit.
+refresh, and its canonical RunLog Activity view now reads a bounded cursor
+page. The first broad compatibility projection still reads every app-state
+collection. That is correct for a small local installation and materially
+cheaper on normal refreshes, but compatibility history, approvals, and traces
+still need bounded read models before durable history grows without limit.
 
 ## Verified inventory
 
@@ -87,7 +88,7 @@ new product behavior from landing there without a compatibility reason.
 | Broad gateway facade | `src/gateway/LocalGateway.ts` is 3,902 lines. | Ownership is difficult to discover; snapshot/projection work is mixed with domain operations. | Keep the stable facade, extract bounded internal collaborators incrementally. |
 | Broad app-state store | `src/gateway/AppStateStore.ts` is 3,273 lines. | Repository methods, SQL mappings, schema, and migrations are co-located. | Preserve the interface; split only behind tested repository seams. |
 | Broad connected console | `apps/console/src/ConnectedConsoleApp.tsx` is now 2,382 lines. | Connection lifecycle, selection, commands, dialogs, and client/setup views still share one file. | `ConsoleNavigation` and `useConsoleRunActivity` are extracted; continue with client/setup feature views. |
-| Broad snapshot compatibility DTO | `/snapshot` still includes every app-state collection. | Fresh projection cost and unbounded growth pressure remain. | ETag transport, server-only sanitized cache, and adaptive refresh are complete; add bounded advanced read models before narrowing DTOs. |
+| Broad snapshot compatibility DTO | `/snapshot` still includes every app-state collection. | Fresh projection cost and unbounded growth pressure remain. | ETag transport, server-only sanitized cache, adaptive refresh, and canonical `GET /runlog/runs` cursor pages are complete; migrate compatibility history, approvals, and traces before narrowing DTOs. |
 | Large style surface | `styles.css` is 3,359 lines and `controlRoom.css` is 1,428 lines. | Visual tokens and feature rules are hard to locate. | Split only after the connected UI has stable feature boundaries. |
 | Serial worker dispatch | Default `RunLogWorker` behavior is one active claim. | Safe baseline but unnecessary queue latency for independent work. | Complete: hosts can opt into bounded concurrency; same-workspace work remains serialized in the local executor. |
 | Bounded history is uneven | Run/event views have bounded tails, but the primary snapshot aggregates numerous collections. | Long-lived local state can increase snapshot cost. | Preserve compatibility now; add endpoint/read-model pagination after transport work is validated. |
@@ -119,7 +120,7 @@ row and executable regression or an explicit limitation.
 | --- | --- | --- | --- |
 | First launch/provider setup | Guided local setup and provider profile controls exist. | Console state and setup flow are coupled to the large application component. | Keep one clear setup path; extract it from the shell. |
 | Select client/workspace/agent | Live gateway selections are scoped by client/workspace. | Client/setup feature views still need further decomposition. | Complete first navigation slice: Home, Workspaces, Activity, and Settings; runs/approvals/usage are Activity views. |
-| Start, watch, and stop work | Durable RunLog starts, cancellation, SSE run events, and trace inspection exist. | General transport remains a broad compatibility snapshot on cache misses. | Complete adaptive conditional refresh; retain explicit run/event actions and plan bounded advanced read models. |
+| Start, watch, and stop work | Durable RunLog starts, cancellation, SSE run events, trace inspection, and cursor-paginated canonical Activity rows exist. | Compatibility history and other advanced data still arrive through the broad snapshot. | Retain explicit run/event actions and add bounded compatibility, approval, and trace pages. |
 | Approval | Prominent approvals and RunLog receipt flow are present. | Detailed policy data can compete with the normal task workflow. | Keep action cards visible; move raw traces behind inspection. |
 | Inspect outcomes | Runs, artifacts, tool rows, checkpoints, usage, and trace panels exist. | Broad snapshot loads advanced data even when it is hidden. | Progressively disclose/paginate advanced read models. |
 | Offline/stale behavior | Loading, offline, stale, and unauthorized states exist. | Full snapshots are still expensive when state changes. | Complete visibility-aware, abortable, non-overlapping revalidation with bounded backoff. |
@@ -156,6 +157,7 @@ product references only; no external code is copied. The repository's existing
 
 The repository does not need a rewrite. This branch preserves the RunLog spine,
 adds safe bounded concurrency, makes normal console refreshes conditional and
-cheap, and begins splitting the connected shell. The next work is bounded
-advanced read models plus further client/setup view extraction, without
-weakening policy, lease, or browser-safety boundaries.
+cheap, gives canonical Activity rows a bounded cursor path, and begins splitting
+the connected shell. The next work is compatibility/approval/trace read models
+plus further client/setup view extraction, without weakening policy, lease, or
+browser-safety boundaries.

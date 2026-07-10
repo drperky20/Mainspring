@@ -113,7 +113,17 @@ async function benchmarkSnapshotTransport() {
   const appState = createSqliteLocalGatewayAppStateStore({
     dbPath: path.join(root, 'gateway-app.sqlite'),
   })
-  const gateway = createLocalMainspringGateway({ runtime, appState })
+  const runLog = createRunLogMainspring({
+    rootPath: path.join(root, 'runlog'),
+    workspaceRoot: path.join(root, 'runlog-workspaces'),
+    provider: new EchoProvider(),
+    agent: {
+      agentId: 'snapshot-benchmark-agent',
+      instructions: 'Keep benchmark activity compact.',
+      capabilities: ['provider'],
+    },
+  })
+  const gateway = createLocalMainspringGateway({ runtime, appState, runLog })
   const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
   let serverStarted = false
   try {
@@ -123,6 +133,10 @@ async function benchmarkSnapshotTransport() {
         name: `Snapshot benchmark client ${index}`,
         workspaceName: `Snapshot benchmark workspace ${index}`,
         workspaceRoot: path.join(root, 'workspaces', `client-${index}`),
+      })
+      runLog.runs.start({
+        sessionId: `snapshot-benchmark-runlog-session-${index}`,
+        input: `snapshot benchmark activity ${index}`,
       })
     }
     const started = await server.start()
@@ -163,6 +177,14 @@ async function benchmarkSnapshotTransport() {
       if (response.status !== 304) throw new Error(`Expected conditional snapshot status 304, received ${response.status}.`)
       return body.byteLength
     })
+    const runLogActivity = await measure(SNAPSHOT_SAMPLES, async () => {
+      const response = await fetch(`${started.url}/runlog/runs?limit=${SNAPSHOT_CLIENT_COUNT}`)
+      const body = await response.arrayBuffer()
+      if (response.status !== 200) {
+        throw new Error(`Expected RunLog activity status 200, received ${response.status}.`)
+      }
+      return body.byteLength
+    })
     return {
       initialResponse: {
         responseBytes: initialBody.byteLength,
@@ -172,9 +194,11 @@ async function benchmarkSnapshotTransport() {
       revisionCheck,
       full200: full,
       unchanged304: unchanged,
+      runLogActivity200: runLogActivity,
     }
   } finally {
     if (serverStarted) await server.stop()
+    runLog.close()
     appState.close()
     await runtime.stop()
     fs.rmSync(root, { recursive: true, force: true })

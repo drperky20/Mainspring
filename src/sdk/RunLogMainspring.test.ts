@@ -185,6 +185,18 @@ describe('RunLogMainspring SDK host', () => {
       second.record.runId,
       first.record.runId,
     ])
+    const newestPage = app.runs.list({ sessionId: 'session_discovery', limit: 1 })
+    const olderPage = app.runs.list({
+      sessionId: 'session_discovery',
+      before: {
+        createdAt: newestPage[0]!.createdAt,
+        runId: newestPage[0]!.runId,
+      },
+      limit: 1,
+    })
+    expect([...newestPage, ...olderPage].map((run) => run.runId)).toEqual(
+      app.runs.list({ sessionId: 'session_discovery' }).map((run) => run.runId),
+    )
     expect(first.cancel('No longer needed.')).toMatchObject({ status: 'cancelled' })
     expect(app.runs.list({ status: 'cancelled' }).map((run) => run.runId)).toEqual([
       first.record.runId,

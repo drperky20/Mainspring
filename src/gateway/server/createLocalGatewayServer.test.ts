@@ -392,6 +392,89 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('serves cursor-paginated RunLog activity without building the broad snapshot', async () => {
+    const root = makeTempRoot('mainspring-gateway-runlog-activity-page-')
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'runlog-activity-page-session',
+      workspace: { root: path.join(root, 'workspace', 'activity-page') },
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([]),
+      agent: {
+        agentId: 'runlog-activity-page-agent',
+        instructions: 'Keep activity projections compact.',
+        capabilities: ['provider'],
+      },
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const runs = [
+      runLog.runs.start({
+        sessionId: session.record.sessionId,
+        input: 'private activity prompt one',
+        workspaceRoot: path.join(root, 'private-workspace'),
+      }),
+      runLog.runs.start({
+        sessionId: session.record.sessionId,
+        input: 'private activity prompt two',
+        workspaceRoot: path.join(root, 'private-workspace'),
+      }),
+      runLog.runs.start({
+        sessionId: session.record.sessionId,
+        input: 'private activity prompt three',
+        workspaceRoot: path.join(root, 'private-workspace'),
+      }),
+    ]
+
+    const started = await server.start()
+    try {
+      const first = await fetch(`${started.url}/runlog/runs?limit=2`)
+      expect(first.status).toBe(200)
+      const firstBody = await first.json() as { runs: Array<{ runId: string }>; nextCursor?: string }
+      expect(firstBody.runs).toHaveLength(2)
+      expect(firstBody.runs).toEqual(
+        expect.arrayContaining([expect.objectContaining({ runId: expect.any(String) })]),
+      )
+      expect(firstBody.nextCursor).toEqual(expect.any(String))
+      expect(JSON.stringify(firstBody)).not.toContain('private activity prompt')
+      expect(JSON.stringify(firstBody)).not.toContain('private-workspace')
+      expect(snapshotCalls).toBe(0)
+
+      const second = await fetch(
+        `${started.url}/runlog/runs?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? '')}`,
+      )
+      expect(second.status).toBe(200)
+      const secondBody = await second.json() as { runs: Array<{ runId: string }>; nextCursor?: string }
+      expect(secondBody.runs).toHaveLength(1)
+      expect(secondBody.nextCursor).toBeUndefined()
+      expect(new Set([...firstBody.runs, ...secondBody.runs].map((run) => run.runId))).toEqual(
+        new Set(runs.map((run) => run.record.runId)),
+      )
+      expect(snapshotCalls).toBe(0)
+
+      const invalid = await fetch(`${started.url}/runlog/runs?cursor=not-a-valid-cursor`)
+      expect(invalid.status).toBe(400)
+      const invalidLimit = await fetch(`${started.url}/runlog/runs?limit=25runs`)
+      expect(invalidLimit.status).toBe(400)
+    } finally {
+      await server.stop()
+      runLog.close()
+      await runtime.stop()
+    }
+  })
+
   it('keeps managed provider secrets write-only while HTTP-created profiles drive runtime provider resolution', async () => {
     const root = makeTempRoot('mainspring-gateway-server-secret-http-')
     const sessionsRoot = path.join(root, 'sessions')

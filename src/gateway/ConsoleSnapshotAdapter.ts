@@ -847,7 +847,11 @@ function consoleRunLogSnapshot(
   }
 }
 
-function consoleRunLogRun(run: LocalGatewayRunLogRunProjection): ConsoleGatewayRunLogRun {
+/**
+ * Projects one canonical RunLog row for bounded activity endpoints without
+ * materializing the broader console snapshot.
+ */
+export function consoleRunLogRun(run: LocalGatewayRunLogRunProjection): ConsoleGatewayRunLogRun {
   return {
     runId: run.runId,
     sessionId: run.sessionId,

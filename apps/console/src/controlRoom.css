@@ -759,6 +759,11 @@ button.control-data-row:hover {
   overflow: auto;
 }
 
+.control-run-load-more {
+  margin: 12px;
+  width: calc(100% - 24px);
+}
+
 .control-run-row {
   display: grid;
   grid-template-columns: 10px minmax(0, 1fr) auto;

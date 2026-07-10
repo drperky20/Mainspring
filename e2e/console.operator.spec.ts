@@ -52,7 +52,14 @@ test.describe('operator console', () => {
     }, { timeout: 15_000 }).toBe('completed')
 
     await page.reload()
+    const activityPage = page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === '/runlog/runs'
+        && url.searchParams.get('limit') === '25'
+        && response.status() === 200
+    })
     await page.getByRole('button', { name: 'Activity', exact: true }).click()
+    await activityPage
     await page.getByRole('button', { name: 'Runs', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible()
     const runRow = page.locator('.control-run-row').first()

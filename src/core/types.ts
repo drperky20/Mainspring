@@ -222,10 +222,21 @@ export interface RunLogProjectionCatchupResult {
   lastSeq: number
 }
 
+/**
+ * Stable cursor for reverse-chronological RunLog activity pages. Both values
+ * are persisted run fields, so callers never need to depend on SQLite rowids.
+ */
+export interface RunListCursor {
+  createdAt: string
+  runId: string
+}
+
 export interface ListRunsInput {
   sessionId?: string
   agentId?: string
   status?: RunStatus | RunStatus[]
+  /** Return rows strictly older than this reverse-chronological cursor. */
+  before?: RunListCursor
   limit?: number
 }
 

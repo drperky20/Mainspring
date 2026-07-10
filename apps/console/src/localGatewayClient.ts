@@ -1,4 +1,9 @@
-import type { ConsoleExecutionBackendStatus, ConsoleGatewayRunEvent, ConsoleGatewaySnapshot } from 'mainspring/gateway'
+import type {
+  ConsoleExecutionBackendStatus,
+  ConsoleGatewayRunEvent,
+  ConsoleGatewayRunLogRun,
+  ConsoleGatewaySnapshot,
+} from 'mainspring/gateway'
 import {
   browserUnsafeGatewayTextMarkers,
   containsBrowserUnsafeGatewayText,
@@ -483,6 +488,15 @@ export interface LocalGatewayClient {
     sessionId: string
     cancelled: true
   }>
+  runLogRuns(input?: {
+    sessionId?: string
+    cursor?: string
+    limit?: number
+    signal?: AbortSignal
+  }): Promise<{
+    runs: ConsoleGatewayRunLogRun[]
+    nextCursor?: string
+  }>
   runEvents(input: { sessionId: string; runId: string }): Promise<{ events: ConsoleGatewayRunEvent[] }>
   resolveApproval(input: {
     approvalId: string
@@ -783,6 +797,15 @@ export function createLocalGatewayClient(
         method: 'POST',
         headers: { 'content-type': 'application/json', ...authHeaders() },
         body: JSON.stringify(input),
+      }),
+    runLogRuns: (input = {}) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/runlog/runs${queryString({
+        sessionId: input.sessionId,
+        cursor: input.cursor,
+        limit: input.limit === undefined ? undefined : String(input.limit),
+      })}`, {
+        headers: authHeaders(),
+        ...(input.signal ? { signal: input.signal } : {}),
       }),
     runEvents: (input) =>
       requestJson(

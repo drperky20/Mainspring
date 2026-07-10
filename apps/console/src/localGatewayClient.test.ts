@@ -97,6 +97,55 @@ describe('createLocalGatewayClient', () => {
     })
   })
 
+  it('requests a bounded RunLog activity page with its opaque cursor', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe(
+        'http://127.0.0.1:8787/runlog/runs?sessionId=session_activity&cursor=cursor_1&limit=25',
+      )
+      expect(init?.headers).toEqual({ authorization: 'Bearer hosted_token_1' })
+      return new Response(
+        JSON.stringify({
+          runs: [
+            {
+              runId: 'run_activity_1',
+              sessionId: 'session_activity',
+              agentId: 'agent_activity',
+              status: 'queued',
+              createdAt: '2026-07-10T00:00:00.000Z',
+              updatedAt: '2026-07-10T00:00:00.000Z',
+              latestSeq: 3,
+              eventCount: 3,
+              pendingApprovalCount: 0,
+              approvalDecisionCount: 0,
+              toolCallCount: 0,
+              checkpointCount: 0,
+              policyDecisionCount: 0,
+              errorCount: 0,
+              pendingApprovals: [],
+              toolCalls: [],
+              checkpoints: [],
+              policyDecisions: [],
+              errors: [],
+            },
+          ],
+          nextCursor: 'cursor_2',
+        }),
+        { status: 200 },
+      )
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+    client.setSessionToken('hosted_token_1')
+
+    await expect(client.runLogRuns({
+      sessionId: 'session_activity',
+      cursor: 'cursor_1',
+      limit: 25,
+    })).resolves.toMatchObject({
+      runs: [expect.objectContaining({ runId: 'run_activity_1' })],
+      nextCursor: 'cursor_2',
+    })
+  })
+
   it('fetches snapshot, run events, run start, and approval resolution through the expected routes', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

@@ -158,16 +158,7 @@ export function buildOperatorConsoleViewModel(
   const runLogRunIds = new Set(runLogRuns.map((run) => run.runId))
 
   const runs = [
-    ...runLogRuns.map((run) =>
-      operatorRunLogRow({
-        run,
-        snapshot,
-        workspaceById,
-        clientById,
-        agentById,
-        providerById,
-      }),
-    ),
+    ...buildOperatorRunLogRows(snapshot, runLogRuns),
     ...snapshot.runs
       .filter((run) => !runLogRunIds.has(run.runId))
       .map((run) => {
@@ -296,6 +287,28 @@ export function buildOperatorConsoleViewModel(
     budgets,
     recentActivity: buildRecentActivity(snapshot, runs, pendingApprovals),
   }
+}
+
+export function buildOperatorRunLogRows(
+  snapshot: ConsoleGatewaySnapshot,
+  runs: SnapshotRunLogRun[] = snapshot.runLog?.runs ?? [],
+): OperatorRunRow[] {
+  const workspaceById = new Map(snapshot.workspaces.map((workspace) => [workspace.workspaceId, workspace]))
+  const clientById = new Map(snapshot.clients.map((client) => [client.clientId, client]))
+  const agentById = new Map(snapshot.agents.map((agent) => [agent.agentId, agent]))
+  const providerById = new Map(
+    snapshot.providerProfiles.map((profile) => [profile.providerId, profile]),
+  )
+  return runs.map((run) =>
+    operatorRunLogRow({
+      run,
+      snapshot,
+      workspaceById,
+      clientById,
+      agentById,
+      providerById,
+    }),
+  )
 }
 
 function operatorRunLogRow(input: {
