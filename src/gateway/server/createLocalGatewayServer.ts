@@ -1175,15 +1175,25 @@ export class LocalGatewayHttpServer {
 
   private assertBrowserAccessEventStreamTarget(sessionId?: string, runId?: string): void {
     if (!sessionId && !runId) return
-    if (sessionId && !this.options.gateway.sessions.list().some((session) => session.sessionId === sessionId)) {
-      throw new GatewayHttpError(404, `Unknown session: ${sessionId}`)
+    if (!runId) {
+      if (sessionId && !this.options.gateway.sessions.list().some((session) => session.sessionId === sessionId)) {
+        throw new GatewayHttpError(404, `Unknown session: ${sessionId}`)
+      }
+      return
     }
-    if (!runId) return
-    const run = gatewaySnapshotToConsoleState(this.options.gateway.snapshot()).runs.find(
+
+    // Canonical RunLog runs are not mirrored into the compatibility run list.
+    // Resolve them from the RunLog store before falling back to the legacy
+    // snapshot, so a browser capability is issued only for the real run/session
+    // pair instead of forcing callers onto the console's direct-stream fallback.
+    const run = this.options.gateway.runLog.available()
+      ? this.options.gateway.runLog.runs.get(runId)
+      : null
+    const compatibilityRun = run ?? gatewaySnapshotToConsoleState(this.options.gateway.snapshot()).runs.find(
       (candidate) => candidate.runId === runId,
     )
-    if (!run) throw new GatewayHttpError(404, `Unknown run: ${runId}`)
-    if (sessionId && run.sessionId !== sessionId) {
+    if (!compatibilityRun) throw new GatewayHttpError(404, `Unknown run: ${runId}`)
+    if (sessionId && compatibilityRun.sessionId !== sessionId) {
       throw new GatewayHttpError(404, `Run ${runId} does not belong to session ${sessionId}.`)
     }
   }

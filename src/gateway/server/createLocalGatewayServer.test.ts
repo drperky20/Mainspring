@@ -1737,6 +1737,120 @@ describe('LocalGatewayHttpServer', () => {
     }
   }, 30_000)
 
+  it('issues hosted browser stream tickets for canonical RunLog runs without compatibility state', async () => {
+    const root = makeTempRoot('mainspring-gateway-hosted-runlog-browser-access-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider([]),
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'canonical-browser-access-session',
+      workspace: { root: workspaceRoot },
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([]),
+      agent: {
+        agentId: 'canonical-browser-access-agent',
+        instructions: 'Keep browser access scoped to this canonical run.',
+        capabilities: ['provider'],
+      },
+      approvalReceiptKey: 'canonical-browser-access-test-key',
+    })
+    const run = runLog.runs.start({
+      sessionId: session.record.sessionId,
+      input: 'This RunLog run must not need a compatibility mirror.',
+      workspaceRoot,
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
+    const server = createLocalGatewayServer({
+      gateway,
+      host: '127.0.0.1',
+      port: 0,
+      auth: { mode: 'hosted' },
+    })
+
+    try {
+      const started = await server.start()
+      const bootstrap = await fetch(`${started.url}/auth/bootstrap`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Admin', password: 'CanonicalPass123' }),
+      })
+      expect(bootstrap.status).toBe(201)
+      const login = await fetch(`${started.url}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Admin', password: 'CanonicalPass123' }),
+      })
+      const sessionToken = login.headers.get('x-mainspring-auth-token')
+      expect(login.status).toBe(200)
+      expect(sessionToken).toMatch(/^[a-f0-9]{64}$/)
+
+      const browserAccess = await fetch(`${started.url}/auth/browser-access`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          kind: 'event-stream',
+          sessionId: session.record.sessionId,
+          runId: run.record.runId,
+        }),
+      })
+      const browserAccessBody = await browserAccess.json() as { kind: string; url: string }
+      const mismatchedSession = await fetch(`${started.url}/auth/browser-access`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          kind: 'event-stream',
+          sessionId: 'other-canonical-session',
+          runId: run.record.runId,
+        }),
+      })
+      const mismatchedSessionBody = await mismatchedSession.json()
+
+      expect(browserAccess.status).toBe(201)
+      expect(browserAccessBody).toMatchObject({ kind: 'event-stream' })
+      expect(browserAccessBody.url).toContain(`/events/stream?sessionId=${session.record.sessionId}`)
+      expect(browserAccessBody.url).toContain(`runId=${run.record.runId}`)
+      expect(browserAccessBody.url).toContain('ticket=')
+      expect(browserAccessBody.url).not.toContain(sessionToken ?? '')
+      expect(mismatchedSession.status).toBe(404)
+      expect(mismatchedSessionBody).toEqual({
+        error: `Run ${run.record.runId} does not belong to session other-canonical-session.`,
+      })
+
+      const controller = new AbortController()
+      try {
+        const ticketedStream = await fetch(browserAccessBody.url, { signal: controller.signal })
+        expect(ticketedStream.status).toBe(200)
+        expect(ticketedStream.headers.get('content-type')).toContain('text/event-stream')
+
+        const wrongScope = new URL(browserAccessBody.url)
+        wrongScope.searchParams.set('sessionId', 'other-canonical-session')
+        expect((await fetch(wrongScope)).status).toBe(401)
+      } finally {
+        controller.abort()
+      }
+    } finally {
+      await server.stop()
+      runLog.close()
+      appState.close()
+      await runtime.stop()
+    }
+  })
+
   it('serves sanitized health and snapshot routes for browser clients', async () => {
     const root = makeTempRoot('mainspring-gateway-server-snapshot-')
     const sessionsRoot = path.join(root, 'sessions')
