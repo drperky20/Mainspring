@@ -228,6 +228,21 @@ export interface LocalGatewayAuditEventRecord {
   metadata?: Record<string, unknown>
 }
 
+/** Stable reverse-chronological cursor for bounded audit history. */
+export interface LocalGatewayAuditEventCursor {
+  createdAt: string
+  eventId: string
+}
+
+export interface LocalGatewayAuditEventListInput {
+  runId?: string
+  category?: string
+  /** Return rows strictly older than this reverse-chronological cursor. */
+  before?: LocalGatewayAuditEventCursor
+  limit?: number
+  order?: 'asc' | 'desc'
+}
+
 export interface LocalGatewayToolCallRecord {
   toolCallId: string
   runId: string
@@ -706,7 +721,7 @@ export interface LocalGatewayAppStateStore {
   auditEvents: {
     create(input: CreateLocalGatewayAuditEventInput): LocalGatewayAuditEventRecord
     get(eventId: string): LocalGatewayAuditEventRecord | null
-    list(input?: { runId?: string; category?: string }): LocalGatewayAuditEventRecord[]
+    list(input?: LocalGatewayAuditEventListInput): LocalGatewayAuditEventRecord[]
   }
   toolCalls: {
     upsert(input: UpsertLocalGatewayToolCallInput): LocalGatewayToolCallRecord
@@ -947,6 +962,8 @@ CREATE TABLE IF NOT EXISTS gateway_audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_gateway_audit_run ON gateway_audit_events(run_id);
 CREATE INDEX IF NOT EXISTS idx_gateway_audit_category ON gateway_audit_events(category);
+CREATE INDEX IF NOT EXISTS idx_gateway_audit_activity
+  ON gateway_audit_events(created_at DESC, event_id DESC);
 
 CREATE TABLE IF NOT EXISTS gateway_tool_calls (
   tool_call_id TEXT PRIMARY KEY,
@@ -2854,31 +2871,29 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
       const row = this.db.prepare('SELECT * FROM gateway_audit_events WHERE event_id = ?').get(eventId)
       return row ? auditEventFromRow(row) : null
     },
-    list: (input: { runId?: string; category?: string } = {}) => {
-      if (input.runId && input.category) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_audit_events
-           WHERE run_id = ? AND category = ?
-           ORDER BY created_at ASC, event_id ASC`,
-        ).all(input.runId, input.category) as unknown[]).map(auditEventFromRow)
-      }
+    list: (input: LocalGatewayAuditEventListInput = {}) => {
+      const clauses: string[] = []
+      const params: unknown[] = []
       if (input.runId) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_audit_events
-           WHERE run_id = ?
-           ORDER BY created_at ASC, event_id ASC`,
-        ).all(input.runId) as unknown[]).map(auditEventFromRow)
+        clauses.push('run_id = ?')
+        params.push(input.runId)
       }
       if (input.category) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_audit_events
-           WHERE category = ?
-           ORDER BY created_at ASC, event_id ASC`,
-        ).all(input.category) as unknown[]).map(auditEventFromRow)
+        clauses.push('category = ?')
+        params.push(input.category)
       }
+      if (input.before) {
+        clauses.push('(created_at < ? OR (created_at = ? AND event_id < ?))')
+        params.push(input.before.createdAt, input.before.createdAt, input.before.eventId)
+      }
+      const order = input.order === 'desc' ? 'DESC' : 'ASC'
+      const limit = input.limit === undefined ? '' : ' LIMIT ?'
+      if (input.limit !== undefined) params.push(input.limit)
+      const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : ''
       return (this.db.prepare(
-        'SELECT * FROM gateway_audit_events ORDER BY created_at ASC, event_id ASC',
-      ).all() as unknown[]).map(auditEventFromRow)
+        `SELECT * FROM gateway_audit_events${where}
+         ORDER BY created_at ${order}, event_id ${order}${limit}`,
+      ).all(...params) as unknown[]).map(auditEventFromRow)
     },
   }
 

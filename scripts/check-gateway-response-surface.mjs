@@ -260,6 +260,25 @@ async function main() {
       'browser-surface-usage-private-sentinel',
     ])
 
+    appState.auditEvents.create({
+      eventId: 'audit_browser_surface',
+      category: 'gateway artifactPath=C:/browser-surface-hidden/audit-category.json',
+      action: 'client.updated workspaceRoot=E:/Mainspring/browser-surface-hidden-audit',
+      actor: 'operator filePath=/srv/browser-surface-hidden/audit-actor.txt',
+      targetType: 'client',
+      targetId: 'client_browser_surface_audit',
+      runId: 'run_browser_surface_audit',
+      sessionId,
+      metadata: { internalAuditContext: 'browser-surface-audit-private-sentinel' },
+    })
+    const auditHistory = await requestJson(`${started.url}/audit-history?limit=1`)
+    assert(auditHistory.events?.[0]?.eventId === 'audit_browser_surface', 'audit history did not include audit event')
+    assert(auditHistory.events?.[0]?.metadata === undefined, 'audit history exposed event metadata')
+    assertNoBrowserLeak('audit history response', auditHistory, [
+      root.replaceAll('\\', '\\\\'),
+      'browser-surface-audit-private-sentinel',
+    ])
+
     const cellStatus = await requestJson(`${started.url}/cells/status`)
     assert(typeof cellStatus.cellStatus?.enabled === 'boolean', 'cell status did not include enabled flag')
     assertNoBrowserLeak('cell status response', cellStatus, [root.replaceAll('\\', '\\\\')])

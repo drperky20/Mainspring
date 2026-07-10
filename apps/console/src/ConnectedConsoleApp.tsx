@@ -28,6 +28,7 @@ import { useRunLogActivityPage } from './useRunLogActivityPage'
 import { useRunLogTracePage } from './useRunLogTracePage'
 import { useUsageHistoryPage } from './useUsageHistoryPage'
 import { useArtifactHistoryPage } from './useArtifactHistoryPage'
+import { useAuditHistoryPage } from './useAuditHistoryPage'
 import {
   createChatMessage,
   createScopedRunUiState,
@@ -50,6 +51,7 @@ import {
 import {
   ApprovalsScreen,
   ArtifactsScreen,
+  AuditScreen,
   ConnectionNotice,
   ConsoleConnectionScreen,
   OverviewScreen,
@@ -207,6 +209,13 @@ export function ConnectedConsoleApp() {
   const artifactHistoryEnabled = screen === 'activity' && activityTab === 'artifacts'
   const artifactHistory = useArtifactHistoryPage({
     enabled: artifactHistoryEnabled,
+    gatewayClient,
+    revision: snapshot?.generatedAt,
+    limit: 25,
+  })
+  const auditHistoryEnabled = screen === 'activity' && activityTab === 'audit'
+  const auditHistory = useAuditHistoryPage({
+    enabled: auditHistoryEnabled,
     gatewayClient,
     revision: snapshot?.generatedAt,
     limit: 25,
@@ -832,13 +841,21 @@ export function ConnectedConsoleApp() {
                 model={operatorModel}
                 onLoadMore={() => void usageHistory.loadMore()}
               />
-            ) : (
+            ) : activityTab === 'artifacts' ? (
               <ArtifactsScreen
                 artifacts={artifactHistory.artifacts}
                 error={artifactHistoryEnabled ? artifactHistory.error : undefined}
                 hasMore={artifactHistoryEnabled && Boolean(artifactHistory.nextCursor)}
                 loading={artifactHistoryEnabled && artifactHistory.loading}
                 onLoadMore={() => void artifactHistory.loadMore()}
+              />
+            ) : (
+              <AuditScreen
+                error={auditHistoryEnabled ? auditHistory.error : undefined}
+                events={auditHistory.events}
+                hasMore={auditHistoryEnabled && Boolean(auditHistory.nextCursor)}
+                loading={auditHistoryEnabled && auditHistory.loading}
+                onLoadMore={() => void auditHistory.loadMore()}
               />
             )}
           </>

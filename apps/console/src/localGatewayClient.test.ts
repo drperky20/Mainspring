@@ -206,6 +206,37 @@ describe('createLocalGatewayClient', () => {
     })
   })
 
+  it('requests bounded audit history with an opaque cursor', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('http://127.0.0.1:8787/audit-history?cursor=audit_cursor_1&limit=25')
+      expect(init?.headers).toEqual({ authorization: 'Bearer hosted_token_1' })
+      return new Response(
+        JSON.stringify({
+          events: [{
+            eventId: 'audit_1',
+            category: 'gateway',
+            action: 'client.updated',
+            actor: 'operator',
+            targetType: 'client',
+            targetId: 'client_1',
+            runId: 'run_1',
+            sessionId: 'session_1',
+            createdAt: '2026-07-10T00:00:00.000Z',
+          }],
+          nextCursor: 'audit_cursor_2',
+        }),
+        { status: 200 },
+      )
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+    client.setSessionToken('hosted_token_1')
+
+    await expect(client.auditHistory({ cursor: 'audit_cursor_1', limit: 25 })).resolves.toMatchObject({
+      events: [expect.objectContaining({ eventId: 'audit_1', action: 'client.updated' })],
+      nextCursor: 'audit_cursor_2',
+    })
+  })
+
   it('fetches snapshot, run events, run start, and approval resolution through the expected routes', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

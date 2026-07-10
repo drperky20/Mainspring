@@ -94,12 +94,19 @@ and provider/model breakdown data.
 artifact rows with the same default and maximum limits. It requires the gateway
 app-state store, omits durable paths and persistence metadata, and does not
 grant file access; artifact content still requires the existing scoped
-browser-access route. Audit and memory histories still await dedicated pages.
+browser-access route.
+
+`GET /audit-history` returns a browser-safe, reverse-cursor page of local
+audit rows with the same limits. It requires the gateway app-state store and
+omits durable event metadata while returning sanitized category, action, actor,
+target, and optional run/session linkage fields. Memory history still awaits a
+dedicated page.
 
 The console fetches these routes only while the related Activity surface is
 open: Runs loads the two activity pages, Approvals loads approval history, and
 a selected RunLog detail loads its public trace page; Usage loads detailed
-ledger history; Artifacts loads the bounded inventory.
+ledger history; Artifacts loads the bounded inventory; Audit loads the bounded
+authority trail.
 
 When a gateway has a RunLog host, cron tick and run-now dispatch create ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events. Provider-only cron schedules queue normally; side-effecting schedules fail closed unless their metadata carries a scoped, unexpired cron grant. Operators can call `GET /cron/:scheduleId/grant` to preview the current grant decision and `POST /cron/:scheduleId/grant` to create an expiring scoped grant derived from the current schedule. The React console also exposes review/create controls that display the grant state without raw prompt hashes or secret refs. Gateways without a RunLog host keep the mailbox-compatible cron path for older embedders and migration verifiers.
 

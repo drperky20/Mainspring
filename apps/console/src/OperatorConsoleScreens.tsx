@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type {
   ConsoleGatewayArtifact,
+  ConsoleGatewayAuditEvent,
   ConsoleGatewayRunEvent,
   ConsoleGatewayUsageLedgerEntry,
 } from 'mainspring/gateway'
@@ -717,6 +718,74 @@ export function ArtifactsScreen({
             onClick={onLoadMore}
           >
             {loading ? 'Loading artifacts...' : 'Load more artifacts'}
+          </button>
+        ) : null}
+      </section>
+    </section>
+  )
+}
+
+export function AuditScreen({
+  error,
+  events = [],
+  hasMore = false,
+  loading = false,
+  onLoadMore,
+}: {
+  error?: string
+  events?: ConsoleGatewayAuditEvent[]
+  hasMore?: boolean
+  loading?: boolean
+  onLoadMore?: () => void
+}) {
+  return (
+    <section className="control-screen audit-screen" aria-labelledby="audit-title">
+      <header className="control-screen-header">
+        <div>
+          <p className="control-kicker">Authority trail</p>
+          <h1 id="audit-title">Audit</h1>
+          <p>Browser-safe local mutation and decision records. Event metadata remains host-side.</p>
+        </div>
+        <div className="control-header-stat">
+          <strong>{events.length}</strong>
+          <span>visible events</span>
+        </div>
+      </header>
+
+      <section className="control-panel control-history-panel">
+        <PanelHeader title="Recent audit events" meta={loading ? 'loading' : `${events.length} visible`} />
+        {error ? <InlineError message={error} /> : null}
+        {loading && events.length === 0 ? (
+          <div className="control-skeleton-list" role="status" aria-label="Loading audit history">
+            <span /><span /><span />
+          </div>
+        ) : events.length === 0 ? (
+          <CompactEmptyState title="No audit events recorded" detail="Local gateway mutations and decisions will appear here." />
+        ) : (
+          <div className="control-row-list">
+            {events.map((event) => (
+              <div className="control-data-row static" key={event.eventId}>
+                <StatusDot status="neutral" />
+                <span>
+                  <strong>{event.category} | {event.action}</strong>
+                  <small>{event.actor} | {event.targetType}</small>
+                </span>
+                <span className="control-row-meta">
+                  <strong>{shortId(event.targetId)}</strong>
+                  <small>{formatDateTime(event.createdAt)}</small>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {hasMore ? (
+          <button
+            className="simple-secondary control-run-load-more"
+            disabled={loading}
+            type="button"
+            onClick={onLoadMore}
+          >
+            {loading ? 'Loading audit events...' : 'Load more audit events'}
           </button>
         ) : null}
       </section>

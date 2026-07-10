@@ -13,6 +13,7 @@ import {
   readRunLogTracePage,
 } from '../RunLogActivityPage.js'
 import { listArtifactHistoryPage } from '../ArtifactHistoryPage.js'
+import { listAuditHistoryPage } from '../AuditHistoryPage.js'
 import { listUsageHistoryPage } from '../UsageHistoryPage.js'
 import {
   consoleAgent,
@@ -45,6 +46,7 @@ import type { LocalMainspringGateway } from '../LocalGateway.js'
 import type {
   LocalGatewayAuthUserRecord,
   LocalGatewayArtifactCursor,
+  LocalGatewayAuditEventCursor,
   LocalGatewayUsageLedgerCursor,
 } from '../AppStateStore.js'
 import type { RunEvent } from '../../contracts/runtime.js'
@@ -154,6 +156,8 @@ const DEFAULT_USAGE_HISTORY_PAGE_LIMIT = 25
 const MAX_USAGE_HISTORY_PAGE_LIMIT = 100
 const DEFAULT_ARTIFACT_HISTORY_PAGE_LIMIT = 25
 const MAX_ARTIFACT_HISTORY_PAGE_LIMIT = 100
+const DEFAULT_AUDIT_HISTORY_PAGE_LIMIT = 25
+const MAX_AUDIT_HISTORY_PAGE_LIMIT = 100
 
 export async function readBoundedGatewayJson(
   request: AsyncIterable<Buffer | Uint8Array | string> & { headers?: IncomingMessage['headers'] },
@@ -502,6 +506,11 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'GET' && path === '/artifact-history') {
         this.writeArtifactHistoryPage(response, url)
+        return
+      }
+
+      if (request.method === 'GET' && path === '/audit-history') {
+        this.writeAuditHistoryPage(response, url)
         return
       }
 
@@ -1722,6 +1731,32 @@ export class LocalGatewayHttpServer {
     }))
   }
 
+  /**
+   * Cursor-paginated audit rows for the visible operator Activity view. The
+   * durable event metadata remains app-state-only; this route returns only the
+   * sanitized stable audit fields required for operational review.
+   */
+  private writeAuditHistoryPage(response: ServerResponse, url: URL): void {
+    const appState = this.options.gateway.appState
+    if (!appState) {
+      throw new GatewayHttpError(
+        501,
+        'Audit history pagination requires the gateway app-state store.',
+      )
+    }
+    const limit = auditHistoryPageLimit(url.searchParams.get('limit'))
+    const before = parseAuditHistoryCursor(url.searchParams.get('cursor'))
+    const page = listAuditHistoryPage({
+      source: appState,
+      limit,
+      ...(before ? { before } : {}),
+    })
+    this.writeJson(response, 200, sanitizeGatewayResponse({
+      events: page.events,
+      ...(page.nextCursor ? { nextCursor: encodeAuditHistoryCursor(page.nextCursor) } : {}),
+    }))
+  }
+
   private async writeArtifact(
     response: ServerResponse,
     artifactId: string,
@@ -1968,6 +2003,18 @@ function artifactHistoryPageLimit(value: string | null): number {
   return parsed
 }
 
+function auditHistoryPageLimit(value: string | null): number {
+  if (!value) return DEFAULT_AUDIT_HISTORY_PAGE_LIMIT
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_AUDIT_HISTORY_PAGE_LIMIT) {
+    throw new GatewayHttpError(
+      400,
+      `Audit history limit must be an integer from 1 to ${MAX_AUDIT_HISTORY_PAGE_LIMIT}.`,
+    )
+  }
+  return parsed
+}
+
 function encodeRunLogActivityCursor(run: Pick<RunLogRunRecord, 'createdAt' | 'runId'>): string {
   return Buffer.from(JSON.stringify({ createdAt: run.createdAt, runId: run.runId }), 'utf8')
     .toString('base64url')
@@ -2079,6 +2126,32 @@ function parseArtifactHistoryCursor(value: string | null): LocalGatewayArtifactC
     return { createdAt, artifactId }
   } catch {
     throw new GatewayHttpError(400, 'Artifact history cursor is invalid.')
+  }
+}
+
+function encodeAuditHistoryCursor(
+  record: Pick<LocalGatewayAuditEventCursor, 'createdAt' | 'eventId'>,
+): string {
+  return Buffer.from(
+    JSON.stringify({ createdAt: record.createdAt, eventId: record.eventId }),
+    'utf8',
+  ).toString('base64url')
+}
+
+function parseAuditHistoryCursor(value: string | null): LocalGatewayAuditEventCursor | undefined {
+  if (!value) return undefined
+  if (value.length > 256) throw new GatewayHttpError(400, 'Audit history cursor is invalid.')
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8')
+    const parsed = JSON.parse(decoded) as Record<string, unknown>
+    const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt.trim() : ''
+    const eventId = typeof parsed.eventId === 'string' ? parsed.eventId.trim() : ''
+    if (!createdAt || !eventId || createdAt.length > 64 || eventId.length > 160) {
+      throw new Error('invalid audit history cursor fields')
+    }
+    return { createdAt, eventId }
+  } catch {
+    throw new GatewayHttpError(400, 'Audit history cursor is invalid.')
   }
 }
 

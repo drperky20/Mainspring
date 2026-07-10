@@ -1708,7 +1708,7 @@ function consoleBudgetEvaluation(
   }
 }
 
-function consoleAuditEvent(record: LocalGatewayAuditEventRecord): ConsoleGatewayAuditEvent {
+export function consoleAuditEvent(record: LocalGatewayAuditEventRecord): ConsoleGatewayAuditEvent {
   return {
     eventId: record.eventId,
     category: browserSafePreviewText(record.category),

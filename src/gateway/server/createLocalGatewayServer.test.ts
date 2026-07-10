@@ -932,6 +932,104 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('serves cursor-paginated audit history without rebuilding the broad snapshot', async () => {
+    const root = makeTempRoot('mainspring-gateway-audit-history-page-')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    for (const eventId of ['audit_1', 'audit_2', 'audit_3']) {
+      appState.auditEvents.create({
+        eventId,
+        category: `gateway artifactPath=${path.join(root, 'private-audit', `${eventId}.json`)}`,
+        action: `client.updated workspaceRoot=${path.join(root, 'private-audit')}`,
+        actor: `operator filePath=${path.join(root, 'private-audit', 'actor.txt')}`,
+        targetType: 'client',
+        targetId: `client_${eventId}`,
+        runId: `run_${eventId}`,
+        sessionId: 'session_audit_history',
+        metadata: { privateDecisionSnapshot: 'must-not-cross-the-browser-boundary' },
+      })
+    }
+    const gateway = createLocalMainspringGateway({ runtime, appState })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const first = await fetch(`${started.url}/audit-history?limit=2`)
+      expect(first.status).toBe(200)
+      const firstBody = await first.json() as {
+        events: Array<{ eventId: string; metadata?: unknown }>
+        nextCursor?: string
+      }
+      expect(firstBody.events).toHaveLength(2)
+      expect(firstBody.nextCursor).toEqual(expect.any(String))
+      expect(firstBody.events.every((event) => event.metadata === undefined)).toBe(true)
+      expect(JSON.stringify(firstBody)).not.toContain('must-not-cross-the-browser-boundary')
+      expect(JSON.stringify(firstBody)).not.toContain('private-audit')
+      expect(snapshotCalls).toBe(0)
+
+      const second = await fetch(
+        `${started.url}/audit-history?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? '')}`,
+      )
+      expect(second.status).toBe(200)
+      const secondBody = await second.json() as { events: Array<{ eventId: string }>; nextCursor?: string }
+      expect(secondBody.events).toHaveLength(1)
+      expect(secondBody.nextCursor).toBeUndefined()
+      expect(new Set([...firstBody.events, ...secondBody.events].map((event) => event.eventId))).toEqual(
+        new Set(['audit_1', 'audit_2', 'audit_3']),
+      )
+      expect(snapshotCalls).toBe(0)
+
+      const invalidCursor = await fetch(`${started.url}/audit-history?cursor=not-a-valid-cursor`)
+      expect(invalidCursor.status).toBe(400)
+      const invalidLimit = await fetch(`${started.url}/audit-history?limit=101`)
+      expect(invalidLimit.status).toBe(400)
+    } finally {
+      await server.stop()
+      appState.close()
+      await runtime.stop()
+    }
+  })
+
+  it('keeps audit history bounded by requiring app-state metadata', async () => {
+    const root = makeTempRoot('mainspring-gateway-audit-history-no-app-state-')
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const gateway = createLocalMainspringGateway({ runtime })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const response = await fetch(`${started.url}/audit-history`)
+      expect(response.status).toBe(501)
+      expect(await response.json()).toMatchObject({
+        error: 'Audit history pagination requires the gateway app-state store.',
+      })
+      expect(snapshotCalls).toBe(0)
+    } finally {
+      await server.stop()
+      await runtime.stop()
+    }
+  })
+
   it('serves cursor-paginated compatibility runs without materializing the broad snapshot', async () => {
     const root = makeTempRoot('mainspring-gateway-compatibility-run-page-')
     const appState = createSqliteLocalGatewayAppStateStore({
