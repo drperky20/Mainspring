@@ -68,13 +68,15 @@ refreshed at most every 30 seconds for legacy external writers. The console
 merges both pages into one Activity timeline. Older/no-app-state embedders
 retain the compatible `/snapshot` path.
 
-`GET /approval-history` requires the gateway app-state store and pages its
-compatibility approval metadata together with canonical RunLog approval
-summaries, preferring the RunLog source when both have a mirrored approval ID.
-It returns only identifiers, status, safe target labels, timestamps, and
-client/agent linkage fields—not private tool input, receipt data, workspace
-paths, hashes, or signing material. Older/no-app-state embedders retain the
-compatible `/snapshot` path.
+`GET /approval-history` delegates to `ApprovalHistoryPage`, requires the
+gateway app-state store, and pages its compatibility approval metadata together
+with canonical RunLog approval summaries, preferring the RunLog source when
+both have a mirrored approval ID. It returns only identifiers, status, safe
+target labels, timestamps, and client/agent linkage fields—not private tool
+input, receipt data, workspace paths, hashes, or signing material. Because the
+compatibility store has no cancelled state, a `status=cancelled` page contains
+only canonical RunLog rows. Older/no-app-state embedders retain the compatible
+`/snapshot` path.
 
 `GET /runlog/runs/:runId/trace` returns public events in reverse-cursor pages
 and sends each page in chronological order for display. Sensitive and
