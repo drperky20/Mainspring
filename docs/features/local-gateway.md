@@ -59,12 +59,14 @@ a bounded 64-event projection tail.
 `GET /compatibility/runs` supplies the matching cursor-paginated mailbox
 compatibility history. It requires the gateway app-state store and queries only
 the metadata rows and session mailboxes represented by its page; canonical
-RunLog records are excluded. An app-state-scoped cache retains at most 64
-session projections without calling the broad snapshot revision. Each entry
-invalidates immediately for its own process-local mailbox mutation; a
-per-session database/WAL fingerprint is refreshed at most every 30 seconds for
-legacy external writers. The console merges both pages into one Activity
-timeline. Older/no-app-state embedders retain the compatible `/snapshot` path.
+RunLog records are excluded. `CompatibilityRunPageReader` owns this bounded
+read model behind the stable `LocalGateway.compatibilityRuns` facade. Its
+app-state-scoped cache retains at most 64 session projections without calling
+the broad snapshot revision. Each entry invalidates immediately for its own
+process-local mailbox mutation; a per-session database/WAL fingerprint is
+refreshed at most every 30 seconds for legacy external writers. The console
+merges both pages into one Activity timeline. Older/no-app-state embedders
+retain the compatible `/snapshot` path.
 
 `GET /approval-history` requires the gateway app-state store and pages its
 compatibility approval metadata together with canonical RunLog approval
