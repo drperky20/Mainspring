@@ -825,6 +825,11 @@ describe('LocalGatewayHttpServer', () => {
       })
       const loginBody = await loginResponse.json()
       const sessionToken = loginResponse.headers.get('x-mainspring-auth-token')
+      const unknownUserLogin = await fetch(`${started.url}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'unknown-user', password: 'wrong-password' }),
+      })
       const authorizedSnapshot = await fetch(`${started.url}/snapshot`, {
         headers: { authorization: `Bearer ${sessionToken}` },
       })
@@ -973,6 +978,7 @@ describe('LocalGatewayHttpServer', () => {
       })
       expect(loginBody).not.toHaveProperty('sessionToken')
       expect(sessionToken).toMatch(/^[a-f0-9]{64}$/)
+      expect(unknownUserLogin.status).toBe(401)
       expect(authorizedSnapshot.status).toBe(200)
       expect(authorizedSnapshotBody.counts.clients).toBe(1)
       expect(queryTokenSnapshot.status).toBe(401)

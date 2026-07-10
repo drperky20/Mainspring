@@ -32,6 +32,9 @@ const MAX_FAILED_LOGIN_ATTEMPTS = 5
 const LOGIN_ATTEMPT_WINDOW_MS = 1000 * 60 * 15
 const LOGIN_LOCKOUT_MS = 1000 * 60 * 15
 const MAX_TRACKED_LOGIN_IDENTITIES = 2_048
+const DUMMY_PASSWORD_SALT = 'mainspring-hosted-auth-dummy-salt'
+const DUMMY_PASSWORD_HASH = scryptSync('mainspring-hosted-auth-dummy-password', DUMMY_PASSWORD_SALT, PASSWORD_KEYLEN)
+  .toString('hex')
 
 type FailedLoginState = {
   attempts: number
@@ -117,22 +120,19 @@ export class HostedGatewayAuthManager {
     const nowMs = now.getTime()
     this.assertLoginAllowed(username, nowMs)
     const user = this.appState.authUsers.getByUsername(username)
-    if (!user || user.status !== 'active') {
-      this.recordFailedLogin(username, nowMs)
-      throw new Error('Invalid username or password.')
-    }
+    const activeUser = user?.status === 'active' ? user : undefined
     let passwordMatches = false
     try {
       passwordMatches = verifyHostedPassword({
         password: input.password,
-        passwordSalt: user.passwordSalt,
-        passwordHash: user.passwordHash,
+        passwordSalt: activeUser?.passwordSalt ?? DUMMY_PASSWORD_SALT,
+        passwordHash: activeUser?.passwordHash ?? DUMMY_PASSWORD_HASH,
       })
     } catch {
       // Treat malformed credentials exactly like an invalid password.
       passwordMatches = false
     }
-    if (!passwordMatches) {
+    if (!activeUser || !passwordMatches) {
       this.recordFailedLogin(username, nowMs)
       throw new Error('Invalid username or password.')
     }
@@ -140,14 +140,14 @@ export class HostedGatewayAuthManager {
     const expiresAt = new Date(now.getTime() + this.sessionTtlMs).toISOString()
     const sessionToken = randomBytes(SESSION_TOKEN_BYTES).toString('hex')
     const session = this.appState.authSessions.create({
-      userId: user.userId,
+      userId: activeUser.userId,
       tokenHash: tokenHash(sessionToken),
       expiresAt,
       status: 'active',
       lastUsedAt: now.toISOString(),
     })
     const updatedUser = this.appState.authUsers.update({
-      userId: user.userId,
+      userId: activeUser.userId,
       lastLoginAt: now.toISOString(),
     })
     return { sessionToken, session, user: updatedUser }
