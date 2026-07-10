@@ -126,11 +126,11 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Browser lease adapter with Playwright trace/artifact capture.
 - Browser/page multimodal context and provider-specific content-part adapters.
 - Complete per-tool/per-provider/usage projections beyond the current persisted run-summary cursor.
-- Remote skill marketplace trust, signed catalog distribution, and third-party reputation.
+- Remote skill marketplace trust, hosted key revocation/discovery, payments, and third-party reputation. Signed remote template catalog distribution is implemented separately with explicit publisher/key pins.
 - General checkpoint replay/retry controls beyond the implemented approval-resume continuation.
 - Remote child-run/subagent dispatch, identity, and trust boundaries beyond the local attenuating child-run SDK helper.
 - Hosted or remote provenance review trust beyond the local staged review queue.
-- Not implemented: hosted multi-tenant auth, real billing, remote marketplace trust, VM isolation, secure desktop credential vault, or packaged updater publishing.
+- Not implemented: hosted multi-tenant auth, real billing, paid marketplace/reputation services, VM isolation, secure desktop credential vault, or packaged updater publishing.
 
 ## Runtime Seams To Preserve During Migration
 
@@ -152,7 +152,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Provider keys must not be stored in renderer localStorage.
 - Process execution must not be marketed as secure containment.
 - Hosted gateway sessions now enforce persisted admin/operator/viewer roles before route body parsing. This is local route authorization, not tenant isolation or enterprise identity.
-- Do not claim HyperCells, VM isolation, provider-side budget reservation, billing, marketplace trust, tenant isolation, or secure desktop secrets exist unless implementation proves them.
+- Do not claim HyperCells, VM isolation, provider-side budget reservation, billing, hosted marketplace reputation/payments, tenant isolation, or secure desktop secrets exist unless implementation proves them.
 
 ## Current Verification
 

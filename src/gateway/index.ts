@@ -47,6 +47,13 @@ export {
   runExecutionCellId,
   runExecutionLeaseId,
 } from './HyperCellScheduler.js'
+export {
+  canonicalRemoteMarketplacePayload,
+  fetchVerifiedRemoteMarketplaceCatalog,
+  installVerifiedRemoteMarketplaceTemplate,
+  RemoteMarketplaceRegistry,
+  verifyRemoteMarketplaceCatalog,
+} from './RemoteMarketplace.js'
 export type { GatewayRouteContext } from './GatewayRouteContext.js'
 export type {
   AcquiredHyperCellRunLease,
@@ -54,6 +61,12 @@ export type {
   HyperCellSchedulerOptions,
   PlannedHyperCellRunLease,
 } from './HyperCellScheduler.js'
+export type {
+  RemoteMarketplaceFetchOptions,
+  RemoteMarketplacePayload,
+  RemoteMarketplaceSource,
+  VerifiedRemoteMarketplaceTemplate,
+} from './RemoteMarketplace.js'
 export type {
   GatewaySessionContext,
   GatewaySessionContextValue,

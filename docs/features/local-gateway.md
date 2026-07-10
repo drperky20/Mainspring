@@ -15,6 +15,7 @@ It provides:
 - usage and budget rows
 - cron schedules
 - trusted local template installs
+- pinned signed remote template catalog sync and text-only installs
 - deployment target/run metadata
 - optional hosted-auth mode
 - hosted admin/operator/viewer authorization
@@ -33,7 +34,9 @@ Staged memory/skill provenance reviews are exposed through local gateway routes:
 - `POST /provenance-reviews/:reviewId/decision`
 - `POST /provenance-reviews/:reviewId/apply`
 
-These routes read the workspace-local `.mainspring/provenance-review.jsonl` queue, return sanitized browser DTOs, and apply only previously approved staged memory/skill mutations. The React console has matching controls to load the queue, approve/reject a pending item, and apply an approved item. This is local operator review, not remote marketplace trust.
+These routes read the workspace-local `.mainspring/provenance-review.jsonl` queue, return sanitized browser DTOs, and apply only previously approved staged memory/skill mutations. The React console has matching controls to load the queue, approve/reject a pending item, and apply an approved item. This is local operator review, not a remote skill reputation service.
+
+Optional remote template sources are configured host-side with a catalog URL, publisher ID, key ID, and Ed25519 public key. Admins can call `POST /marketplace/remotes/sync`; verified templates then appear in `GET /marketplace/templates` with signed publisher provenance and can use the existing admin-only install route. Catalog/file content and source URLs are not returned to the browser. This is pinned template distribution, not a remote skill reputation or paid marketplace service.
 
 Gateway RunLog routes are local development surfaces. They do not create a hosted worker
 pool, do not change host execution limits, and do not create a multi-tenant control plane.
@@ -58,7 +61,7 @@ Admins can manage hosted users through `GET /auth/users`, `POST /auth/users`, an
 - It does not accept arbitrary browser origins for hosted-auth bootstrap/login.
 - It does not make the local-dev RunLog approval receipt key suitable for non-local deployments.
 - It does not execute tools or providers outside the runtime.
-- It does not prove remote skill marketplace trust or third-party reputation.
+- It does not prove remote skill publisher reputation, key revocation, or third-party quality.
 - Browser DTO sanitization is not a replacement for gateway-side auth, OS permissions, or artifact access checks.
 - Console response guards are regression tripwires, not the primary security boundary.
 

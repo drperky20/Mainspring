@@ -38,7 +38,7 @@ The older legacy mailbox and `RuntimeKernel` path still exists as compatibility 
 - Local gateway development host with RunLog-backed run creation, app-state SQLite for clients, workspaces, agents, provider profiles, budgets, usage, cron, marketplace templates, deployments, and audit rows.
 - Vite operator console for the live local gateway: setup, overview metrics, client/workspace and agent management, durable run inspection and cancellation, approval review, usage and budget views, provider settings, client-scoped chat testing, and visual automation test runs.
 - Experimental Electron shell for the console, with verified Windows packaging.
-- Runnable example agents and a trusted local template catalog.
+- Runnable example agents, a trusted local template catalog, and pinned Ed25519-signed remote template catalogs.
 - Docker runtime image and local release verification scripts.
 
 Mainspring is local-first open-source infrastructure with a SaaS-shaped local console. It is not a hosted multi-tenant control plane, not a secure VM pool, not a payment marketplace, and not a replacement for a real process/container/VM security boundary.

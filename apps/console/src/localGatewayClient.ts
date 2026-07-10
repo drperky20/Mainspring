@@ -192,7 +192,11 @@ export interface LocalGatewayClient {
       label: string
       description: string
       trusted: true
-      provenance: 'repo-examples'
+      provenance: 'repo-examples' | 'signed-remote'
+      publisherId?: string
+      keyId?: string
+      catalogHash?: string
+      provenanceScanStatus?: 'pass' | 'review' | 'block'
       providerId?: string
       modelId?: string
       runtimeProfile?: string
@@ -200,6 +204,7 @@ export interface LocalGatewayClient {
       approvalMode?: string
     }>
   }>
+  syncRemoteMarketplace(): Promise<Awaited<ReturnType<LocalGatewayClient['marketplaceTemplates']>>>
   installMarketplaceTemplate(input: {
     templateId: string
     workspaceRoot: string
@@ -578,6 +583,11 @@ export function createLocalGatewayClient(
       }),
     marketplaceTemplates: () =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/marketplace/templates`, {
+        headers: authHeaders(),
+      }),
+    syncRemoteMarketplace: () =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/marketplace/remotes/sync`, {
+        method: 'POST',
         headers: authHeaders(),
       }),
     installMarketplaceTemplate: ({ templateId, ...input }) =>

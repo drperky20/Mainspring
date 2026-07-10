@@ -83,4 +83,5 @@ Scale adapters can replace pieces independently:
 - Browser/localStorage provider auth is prototype-only until replaced.
 - Process execution must not be marketed as secure containment.
 - Hosted gateway admin/operator/viewer roles are a local HTTP authorization boundary; they are not tenant isolation or enterprise identity.
-- HyperCells, VM pools, billing, marketplace trust, tenant isolation, and secure desktop secrets should not be claimed unless backed by implementation.
+- Signed remote template catalogs provide pinned publisher integrity, not hosted reputation, payments, or remote skill trust.
+- HyperCells, VM pools, billing, hosted marketplace reputation/payments, tenant isolation, and secure desktop secrets should not be claimed unless backed by implementation.

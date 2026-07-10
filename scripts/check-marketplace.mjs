@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -7,6 +8,7 @@ import {
   createMainspring,
   createSqliteLocalGatewayAppStateStore,
   EchoProvider,
+  canonicalRemoteMarketplacePayload,
 } from '../dist/index.js'
 
 function assert(condition, message) {
@@ -38,10 +40,55 @@ async function main() {
       provider: new EchoProvider(),
       pollIntervalMs: 10,
     })
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+    const remoteContent = '# Verified remote marketplace template\n'
+    const remotePayload = {
+      schemaVersion: 1,
+      publisherId: 'marketplace-check-publisher',
+      keyId: 'marketplace-check-key',
+      issuedAt: '2026-07-10T00:00:00.000Z',
+      expiresAt: '2026-07-20T00:00:00.000Z',
+      templates: [{
+        templateId: 'verified-remote-template',
+        label: 'Verified Remote Template',
+        description: 'Signed release-check catalog entry.',
+        allowedTools: ['file.read'],
+        defaults: {
+          clientName: 'Remote Client',
+          workspaceName: 'Remote Workspace',
+          agentName: 'Remote Agent',
+          outcome: 'Use signed source material.',
+          voice: 'Concise',
+          instructions: 'Read the signed guide.',
+        },
+        files: [{
+          destination: 'guides/remote.md',
+          content: remoteContent,
+          sha256: createHash('sha256').update(remoteContent).digest('hex'),
+        }],
+      }],
+    }
+    const remoteCatalog = JSON.stringify({
+      payload: remotePayload,
+      signature: sign(null, Buffer.from(canonicalRemoteMarketplacePayload(remotePayload)), privateKey).toString('base64'),
+    })
     const gateway = createLocalMainspringGateway({
       runtime,
       appState,
-      marketplace: { repoRoot: process.cwd() },
+      marketplace: {
+        repoRoot: process.cwd(),
+        remote: {
+          sources: [{
+            catalogUrl: 'https://marketplace-check.example/catalog.json',
+            publisherId: remotePayload.publisherId,
+            keyId: remotePayload.keyId,
+            publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+          }],
+          fetchImpl: async () => new Response(remoteCatalog, { headers: { 'content-type': 'application/json' } }),
+          assertNetworkTarget: async () => {},
+          now: () => new Date('2026-07-11T00:00:00.000Z'),
+        },
+      },
     })
     server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
 
@@ -113,6 +160,26 @@ async function main() {
           && event.targetId === 'coding-agent',
       ),
       'marketplace install audit event was not persisted',
+    )
+
+    const synced = await requestJson(`${started.url}/marketplace/remotes/sync`, { method: 'POST' })
+    const remoteTemplate = synced.templates?.find((template) => template.templateId === 'verified-remote-template')
+    assert(remoteTemplate?.provenance === 'signed-remote', 'signed remote template was not synced')
+    assert(remoteTemplate?.publisherId === remotePayload.publisherId, 'remote publisher pin was not projected')
+    assert(!JSON.stringify(synced).includes(remoteContent), 'remote catalog sync exposed signed file content')
+    const remoteInstallRoot = path.join(root, 'installed-remote-template')
+    const remoteInstalled = await requestJson(
+      `${started.url}/marketplace/templates/verified-remote-template/install`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceRoot: remoteInstallRoot }),
+      },
+    )
+    assert(remoteInstalled.template?.provenance === 'signed-remote', 'remote install lost signed provenance')
+    assert(
+      fs.readFileSync(path.join(remoteInstallRoot, 'guides', 'remote.md'), 'utf8') === remoteContent,
+      'remote install did not write the verified content',
     )
 
     const badRepoRoot = path.join(root, 'bad-repo')

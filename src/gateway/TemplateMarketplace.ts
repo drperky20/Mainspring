@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
 import { MainspringRuntimeProfileIdSchema } from '#protocol'
+import type { VerifiedRemoteMarketplaceTemplate } from './RemoteMarketplace.js'
 
 const TemplateSeedFileSchema = z.object({
   source: z.string().trim().min(1),
@@ -51,6 +52,8 @@ export interface LocalMarketplaceTemplateRecord {
   defaults: z.infer<typeof TemplateDefaultsSchema>
   seedFiles: Array<{ source: string; destination: string }>
 }
+
+export type MarketplaceTemplateRecord = LocalMarketplaceTemplateRecord | VerifiedRemoteMarketplaceTemplate
 
 export interface InstallLocalMarketplaceTemplateResult {
   template: LocalMarketplaceTemplateRecord
@@ -140,7 +143,15 @@ export function installLocalMarketplaceTemplate(input: {
     const destinationPath = path.resolve(workspaceRoot, seedFile.destination)
     assertContained(exampleRoot, sourcePath, 'Template source path escapes the example root.')
     assertContained(workspaceRoot, destinationPath, 'Template destination escapes the workspace root.')
+    assertNoSymlinkSegments(exampleRoot, sourcePath, 'Template source traverses a symbolic link.')
+    assertContained(
+      fs.realpathSync.native(exampleRoot),
+      fs.realpathSync.native(sourcePath),
+      'Template source resolves outside the example root.',
+    )
+    assertNoSymlinkSegments(workspaceRoot, destinationPath, 'Template destination traverses a symbolic link.')
     fs.mkdirSync(path.dirname(destinationPath), { recursive: true })
+    assertNoSymlinkSegments(workspaceRoot, destinationPath, 'Template destination traverses a symbolic link.')
     fs.copyFileSync(sourcePath, destinationPath)
     installedFiles.push(seedFile.destination.replace(/\\/g, '/'))
   }
@@ -168,9 +179,15 @@ export function consoleApprovalMode(input: string | undefined): string | undefin
 }
 
 function safeExampleRoot(repoRoot: string, exampleDir: string): string {
-  const root = path.resolve(repoRoot, 'examples', safeRelativeTemplatePath(exampleDir))
-  assertContained(path.resolve(repoRoot, 'examples'), root, 'Template example dir escapes examples/.')
+  const examplesRoot = path.resolve(repoRoot, 'examples')
+  const root = path.resolve(examplesRoot, safeRelativeTemplatePath(exampleDir))
+  assertContained(examplesRoot, root, 'Template example dir escapes examples/.')
   if (!fs.existsSync(root)) throw new Error(`Template example dir not found: ${exampleDir}`)
+  assertContained(
+    fs.realpathSync.native(examplesRoot),
+    fs.realpathSync.native(root),
+    'Template example dir resolves outside examples/.',
+  )
   return root
 }
 
@@ -200,6 +217,15 @@ function nearestExistingPath(target: string): string | null {
     const parent = path.dirname(current)
     if (parent === current) return null
     current = parent
+  }
+}
+
+function assertNoSymlinkSegments(root: string, target: string, message: string): void {
+  const relative = path.relative(root, target)
+  let current = root
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment)
+    if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) throw new Error(message)
   }
 }
 

@@ -32,6 +32,7 @@ Mainspring treats agents as untrusted workers.
 - local-agent security regression corpus for shell, filesystem, browser/fetch, memory, skill, bridge, and cron policy boundaries
 - repo-local red-team matrix that maps each tested or deferred failure class to evidence and remaining work
 - memory, skill, and local template provenance scanner with staged JSONL review records
+- pinned Ed25519 remote template catalogs with bounded HTTPS retrieval, redirect target revalidation, expiry checks, per-file hashes, deterministic provenance scanning, text-only payloads, collision rejection, and pre-existing symlink traversal rejection
 
 ## Hard Truths
 
@@ -48,6 +49,7 @@ Mainspring treats agents as untrusted workers.
 - RunLog local-dev approval receipt fallback is for examples/tests/local development only.
 - Local budget enforcement is not payment billing.
 - RunLog cron grants are scheduling authority checks, not process containment.
+- Signed template catalogs establish integrity from a configured key pin; they do not establish publisher reputation, key revocation, or content quality.
 
 ## Required Practice
 

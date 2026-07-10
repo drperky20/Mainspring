@@ -54,10 +54,10 @@ Warnings route to review. Block findings fail closed.
 
 ## Limits
 
-- This is local provenance and review plumbing, not a remote marketplace trust service.
+- This is local skill provenance and review plumbing, not a remote skill reputation service. Signed remote template catalogs use a separate text-only path.
 - It does not prove that a reviewed skill is harmless.
 - It does not run third-party code analysis beyond deterministic text and manifest checks.
-- It does not add hosted identity, reputation, signing, or paid marketplace trust.
+- It does not add hosted identity, reputation, remote skill signing, revocation, or paid marketplace trust.
 - Taint metadata is advisory context for policy and context assembly; it is not proof that content is safe.
 - Host shell execution remains unsafe host execution even when a skill, memory item, or template is reviewed.
 

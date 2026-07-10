@@ -287,6 +287,7 @@ export function scanTemplateCatalogEntry(input: {
   description: string
   allowedTools: readonly string[]
   seedFiles: readonly { source: string; destination: string }[]
+  content?: readonly string[]
 }): ProvenanceScanResult {
   const findings: ProvenanceFinding[] = []
   scanText({ text: input.label, findings, label: 'template label' })
@@ -302,6 +303,9 @@ export function scanTemplateCatalogEntry(input: {
         })
       }
     }
+  }
+  for (const content of input.content ?? []) {
+    scanText({ text: content, findings, label: 'template file content' })
   }
   for (const tool of input.allowedTools) {
     if (tool === 'shell.exec' || tool === 'terminal.start') {

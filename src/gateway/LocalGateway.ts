@@ -81,8 +81,14 @@ import {
   installLocalMarketplaceTemplate,
   listLocalMarketplaceTemplates,
   skillFlagsFromAllowedTools,
-  type LocalMarketplaceTemplateRecord,
+  type MarketplaceTemplateRecord,
 } from './TemplateMarketplace.js'
+import {
+  installVerifiedRemoteMarketplaceTemplate,
+  RemoteMarketplaceRegistry,
+  type RemoteMarketplaceFetchOptions,
+  type RemoteMarketplaceSource,
+} from './RemoteMarketplace.js'
 import {
   applyApprovedMemoryReview,
   applyApprovedSkillReview,
@@ -147,6 +153,12 @@ export interface CreateLocalMainspringGatewayOptions {
   }
   marketplace?: {
     repoRoot?: string
+    remote?: {
+      sources: RemoteMarketplaceSource[]
+      fetchImpl?: RemoteMarketplaceFetchOptions['fetchImpl']
+      assertNetworkTarget?: RemoteMarketplaceFetchOptions['assertNetworkTarget']
+      now?: RemoteMarketplaceFetchOptions['now']
+    }
   }
   runtimeProfiles?: {
     profiles?: MainspringRuntimeProfileRegistration[]
@@ -439,7 +451,7 @@ export interface InstallLocalMarketplaceTemplateInput {
 }
 
 export interface InstallLocalMarketplaceTemplateResult {
-  template: LocalMarketplaceTemplateRecord
+  template: MarketplaceTemplateRecord
   client: LocalGatewayClientRecord
   workspace?: LocalGatewayWorkspaceRecord
   session?: LocalGatewaySessionProjection
@@ -1061,6 +1073,7 @@ export class LocalMainspringGateway {
   private readonly deploymentDrivers: DeploymentDriverRegistry
   private readonly inspectExecutionBackends: () => ExecutionBackendInventory
   private readonly marketplaceRepoRoot: string
+  private readonly remoteMarketplace: RemoteMarketplaceRegistry | null
   private readonly workspaceBaseRoot: string
   private readonly runtimeProfiles: LocalGatewayRuntimeProfileRegistry
   private readonly pricingCatalog: readonly ModelPricing[]
@@ -1086,6 +1099,15 @@ export class LocalMainspringGateway {
     this.deploymentDrivers = createDeploymentDriverRegistry(options.deployments?.drivers)
     this.inspectExecutionBackends = options.cells?.inspectBackends ?? (() => inspectExecutionBackends())
     this.marketplaceRepoRoot = options.marketplace?.repoRoot ?? process.cwd()
+    this.remoteMarketplace = options.marketplace?.remote
+      ? new RemoteMarketplaceRegistry(options.marketplace.remote.sources, {
+          ...(options.marketplace.remote.fetchImpl ? { fetchImpl: options.marketplace.remote.fetchImpl } : {}),
+          ...(options.marketplace.remote.assertNetworkTarget
+            ? { assertNetworkTarget: options.marketplace.remote.assertNetworkTarget }
+            : {}),
+          ...(options.marketplace.remote.now ? { now: options.marketplace.remote.now } : {}),
+        })
+      : null
     this.runtimeProfiles = new LocalGatewayRuntimeProfileRegistry(options.runtimeProfiles?.profiles)
     this.workspaceBaseRoot = path.resolve(
       options.workspaceBaseRoot
@@ -1251,8 +1273,16 @@ export class LocalMainspringGateway {
   }
 
   readonly marketplace = {
-    listTemplates: (): LocalMarketplaceTemplateRecord[] =>
-      listLocalMarketplaceTemplates(this.marketplaceRepoRoot),
+    listTemplates: (): MarketplaceTemplateRecord[] => [
+      ...listLocalMarketplaceTemplates(this.marketplaceRepoRoot),
+      ...(this.remoteMarketplace?.list() ?? []),
+    ],
+    syncRemoteCatalogs: async (): Promise<MarketplaceTemplateRecord[]> => {
+      if (!this.remoteMarketplace) return this.marketplace.listTemplates()
+      const localIds = new Set(listLocalMarketplaceTemplates(this.marketplaceRepoRoot).map((template) => template.templateId))
+      await this.remoteMarketplace.sync(localIds)
+      return this.marketplace.listTemplates()
+    },
     installTemplate: (
       input: InstallLocalMarketplaceTemplateInput,
     ): InstallLocalMarketplaceTemplateResult => this.installMarketplaceTemplate(input),
@@ -3205,12 +3235,22 @@ export class LocalMainspringGateway {
       input.workspaceRoot,
       'Marketplace workspace root',
     )
-    const installed = installLocalMarketplaceTemplate({
-      repoRoot: this.marketplaceRepoRoot,
-      templateId: input.templateId,
-      workspaceRoot,
-      workspaceBaseRoot: this.workspaceBaseRoot,
-    })
+    const remoteTemplate = this.remoteMarketplace?.get(input.templateId)
+    const installed: { template: MarketplaceTemplateRecord; installedFiles: string[] } = remoteTemplate
+      ? {
+          template: remoteTemplate,
+          installedFiles: installVerifiedRemoteMarketplaceTemplate({
+            template: remoteTemplate,
+            workspaceRoot,
+            workspaceBaseRoot: this.workspaceBaseRoot,
+          }),
+        }
+      : installLocalMarketplaceTemplate({
+          repoRoot: this.marketplaceRepoRoot,
+          templateId: input.templateId,
+          workspaceRoot,
+          workspaceBaseRoot: this.workspaceBaseRoot,
+        })
     const created = this.createClientWorkspace({
       name: input.clientName?.trim() || installed.template.defaults.clientName,
       workspaceRoot,
@@ -3218,6 +3258,7 @@ export class LocalMainspringGateway {
       metadata: {
         templateId: installed.template.templateId,
         templateProvenance: installed.template.provenance,
+        ...('publisherId' in installed.template ? { templatePublisherId: installed.template.publisherId } : {}),
       },
     })
     if (!created.workspace) {
@@ -3237,6 +3278,7 @@ export class LocalMainspringGateway {
       metadata: {
         templateId: installed.template.templateId,
         templateProvenance: installed.template.provenance,
+        ...('publisherId' in installed.template ? { templatePublisherId: installed.template.publisherId } : {}),
         allowedTools: installed.template.allowedTools,
         ...(installed.template.runtimeProfile
           ? { runtimeProfile: this.runtimeProfiles.assertRegistered(installed.template.runtimeProfile) }

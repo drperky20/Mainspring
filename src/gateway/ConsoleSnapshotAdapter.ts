@@ -21,7 +21,7 @@ import type {
   LocalGatewaySessionProjection,
 } from './LocalGateway.js'
 import { deploymentTargetSupport } from './DeploymentWizard.js'
-import type { LocalMarketplaceTemplateRecord } from './TemplateMarketplace.js'
+import type { MarketplaceTemplateRecord } from './TemplateMarketplace.js'
 import type {
   LocalGatewayAgentRecord,
   LocalGatewayApprovalMetadataRecord,
@@ -613,7 +613,11 @@ export interface ConsoleGatewayMarketplaceTemplate {
   label: string
   description: string
   trusted: true
-  provenance: 'repo-examples'
+  provenance: 'repo-examples' | 'signed-remote'
+  publisherId?: string
+  keyId?: string
+  catalogHash?: string
+  provenanceScanStatus?: 'pass' | 'review' | 'block'
   providerId?: string
   modelId?: string
   runtimeProfile?: string
@@ -1125,7 +1129,7 @@ export function consoleMarketplaceInstall(
 }
 
 export function consoleMarketplaceTemplate(
-  template: LocalMarketplaceTemplateRecord,
+  template: MarketplaceTemplateRecord,
 ): ConsoleGatewayMarketplaceTemplate {
   return {
     templateId: template.templateId,
@@ -1133,6 +1137,10 @@ export function consoleMarketplaceTemplate(
     description: browserSafePreviewText(template.description),
     trusted: true,
     provenance: template.provenance,
+    ...('publisherId' in template ? { publisherId: browserSafePreviewText(template.publisherId) } : {}),
+    ...('keyId' in template ? { keyId: browserSafePreviewText(template.keyId) } : {}),
+    ...('catalogHash' in template ? { catalogHash: template.catalogHash } : {}),
+    ...('scan' in template ? { provenanceScanStatus: template.scan.status } : {}),
     ...(template.providerId ? { providerId: browserSafePreviewText(template.providerId) } : {}),
     ...(template.modelId ? { modelId: browserSafePreviewText(template.modelId) } : {}),
     ...(template.runtimeProfile ? { runtimeProfile: template.runtimeProfile } : {}),

@@ -320,6 +320,26 @@ describe('createLocalGatewayClient', () => {
           { status: 200 },
         )
       }
+      if (url.endsWith('/marketplace/remotes/sync')) {
+        expect(init?.method).toBe('POST')
+        expect(init?.headers).toMatchObject({ authorization: 'Bearer hosted_token_1' })
+        return new Response(
+          JSON.stringify({
+            templates: [{
+              templateId: 'remote-support',
+              label: 'Remote Support',
+              description: 'Signed remote template.',
+              trusted: true,
+              provenance: 'signed-remote',
+              publisherId: 'publisher.example',
+              keyId: 'release-2026',
+              catalogHash: 'a'.repeat(64),
+              allowedTools: ['file.read'],
+            }],
+          }),
+          { status: 200 },
+        )
+      }
       if (url.endsWith('/marketplace/templates/coding-agent/install')) {
         expect(init?.method).toBe('POST')
         expect(init?.headers).toMatchObject({ authorization: 'Bearer hosted_token_1' })
@@ -1043,6 +1063,13 @@ describe('createLocalGatewayClient', () => {
     })
     expect(JSON.stringify(templates)).not.toContain('defaults')
     expect(JSON.stringify(templates)).not.toContain('seedFiles')
+    await expect(client.syncRemoteMarketplace()).resolves.toMatchObject({
+      templates: [expect.objectContaining({
+        templateId: 'remote-support',
+        provenance: 'signed-remote',
+        publisherId: 'publisher.example',
+      })],
+    })
     await expect(
       client.installMarketplaceTemplate({
         templateId: 'coding-agent',

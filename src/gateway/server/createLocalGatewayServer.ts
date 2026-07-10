@@ -530,6 +530,24 @@ export class LocalGatewayHttpServer {
         return
       }
 
+      if (request.method === 'POST' && path === '/marketplace/remotes/sync') {
+        const templates = await this.options.gateway.marketplace.syncRemoteCatalogs()
+        this.options.gateway.appState?.auditEvents.create({
+          category: 'marketplace',
+          action: 'remote-catalogs.synced',
+          actor: principal?.actor ?? 'local-gateway',
+          targetType: 'remote-marketplace',
+          targetId: 'configured-catalogs',
+          metadata: {
+            templateCount: templates.filter((template) => template.provenance === 'signed-remote').length,
+          },
+        })
+        this.writeJson(response, 200, {
+          templates: templates.map(consoleMarketplaceTemplate),
+        })
+        return
+      }
+
       if (request.method === 'GET' && path === '/provenance-reviews') {
         const workspaceId = url.searchParams.get('workspaceId')?.trim()
         const status = url.searchParams.get('status')?.trim()
