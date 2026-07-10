@@ -1,3 +1,4 @@
+import { useEffect, useId, useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { ConsoleGatewayRunEvent } from 'mainspring/gateway'
 import type { LastRunState } from './useConsoleRunActivity'
@@ -71,17 +72,92 @@ export function Dialog({
   onClose: () => void
   title: string
 }) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const returnFocusRef = useRef<HTMLElement | null>(null)
+  const onCloseRef = useRef(onClose)
+  const titleId = useId()
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    const previousFocus = document.activeElement
+    returnFocusRef.current = previousFocus instanceof HTMLElement ? previousFocus : null
+    const focusInitialControl = () => closeButtonRef.current?.focus()
+    const animationFrame = window.requestAnimationFrame(focusInitialControl)
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const dialog = dialogRef.current
+      if (!dialog) return
+      const focusable = listDialogFocusableElements(dialog)
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.cancelAnimationFrame(animationFrame)
+      document.removeEventListener('keydown', onKeyDown)
+      const returnFocus = returnFocusRef.current
+      if (returnFocus?.isConnected && !returnFocus.matches(':disabled')) returnFocus.focus()
+    }
+  }, [])
+
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="dialog-card" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="dialog-card"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <div className="mini-head">
-          <h2>{title}</h2>
-          <button className="icon-button" type="button" aria-label="Close" onClick={onClose}>x</button>
+          <h2 id={titleId}>{title}</h2>
+          <button
+            aria-label="Close"
+            className="icon-button"
+            ref={closeButtonRef}
+            type="button"
+            onClick={onClose}
+          >
+            x
+          </button>
         </div>
         {children}
       </section>
     </div>
   )
+}
+
+function listDialogFocusableElements(container: HTMLElement): HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>([
+    'a[href]',
+    'button:not([disabled])',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(','))].filter((element) => !element.hasAttribute('aria-hidden'))
 }
 
 export function ToolToggle({

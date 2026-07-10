@@ -126,9 +126,11 @@ row and executable regression or an explicit limitation.
 | Inspect outcomes | Runs, artifacts, tool rows, checkpoints, usage, and trace panels exist. | Usage/artifact/audit/memory histories still arrive through the aggregate. | Public RunLog trace pages are bounded; progressively disclose the remaining read models. |
 | Offline/stale behavior | Loading, offline, stale, and unauthorized states exist. | Full snapshots are still expensive when state changes. | Complete visibility-aware, abortable, non-overlapping revalidation with bounded backoff. |
 
-Accessibility posture is solid in individual component conventions but needs
-explicit regression coverage for keyboard navigation, dialogs, narrow viewports,
-and status announcements after the shell is decomposed.
+The shared dialog now has a labelled focus target, local Tab cycling, Escape
+dismissal, and opener-focus restoration; narrow client tabs form a two-column
+grid at phone widths, verified against a temporary 390px browser session.
+Permanent regression coverage for broader keyboard navigation and status
+announcements remains a P2 follow-up after the shell is decomposed further.
 
 ## External comparison matrix
 
