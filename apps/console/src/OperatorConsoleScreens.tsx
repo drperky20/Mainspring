@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { ConsoleGatewayRunEvent } from 'mainspring/gateway'
+import type { ConsoleGatewayRunEvent, ConsoleGatewayUsageLedgerEntry } from 'mainspring/gateway'
 import type {
   OperatorApprovalRow,
   OperatorConsoleViewModel,
@@ -537,7 +537,21 @@ export function ApprovalsScreen({
   )
 }
 
-export function UsageScreen({ model }: { model: OperatorConsoleViewModel }) {
+export function UsageScreen({
+  entries = [],
+  error,
+  hasMore = false,
+  loading = false,
+  model,
+  onLoadMore,
+}: {
+  entries?: ConsoleGatewayUsageLedgerEntry[]
+  error?: string
+  hasMore?: boolean
+  loading?: boolean
+  model: OperatorConsoleViewModel
+  onLoadMore?: () => void
+}) {
   return (
     <section className="control-screen usage-screen" aria-labelledby="usage-title">
       <header className="control-screen-header">
@@ -563,6 +577,44 @@ export function UsageScreen({ model }: { model: OperatorConsoleViewModel }) {
         <UsageBreakdown title="By provider" rows={model.usage.providers} />
         <UsageBreakdown title="By model" rows={model.usage.models} />
       </div>
+
+      <section className="control-panel control-history-panel">
+        <PanelHeader title="Recent ledger entries" meta={loading ? 'loading' : `${entries.length} visible`} />
+        {error ? <InlineError message={error} /> : null}
+        {loading && entries.length === 0 ? (
+          <div className="control-skeleton-list" role="status" aria-label="Loading usage history">
+            <span /><span /><span />
+          </div>
+        ) : entries.length === 0 ? (
+          <CompactEmptyState title="No detailed usage entries yet" detail="Provider reports will appear here as durable ledger rows." />
+        ) : (
+          <div className="control-row-list">
+            {entries.map((entry) => (
+              <div className="control-data-row static" key={entry.entryId}>
+                <StatusDot status={entry.estimatedCostUsd === undefined ? 'warn' : 'completed'} />
+                <span>
+                  <strong>{entry.modelId ?? entry.providerId ?? 'Provider usage'}</strong>
+                  <small>{entry.providerId ?? 'Unassigned provider'} | {formatTokens(entry.totalTokens ?? 0)}</small>
+                </span>
+                <span className="control-row-meta">
+                  <strong>{entry.estimatedCostUsd === undefined ? 'Unpriced' : formatMoney(entry.estimatedCostUsd)}</strong>
+                  <small>{formatDateTime(entry.createdAt)}</small>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {hasMore ? (
+          <button
+            className="simple-secondary control-run-load-more"
+            disabled={loading}
+            type="button"
+            onClick={onLoadMore}
+          >
+            {loading ? 'Loading usage...' : 'Load more usage'}
+          </button>
+        ) : null}
+      </section>
 
       <section className="control-panel control-budget-panel">
         <PanelHeader title="Budget guardrails" meta={`${model.budgets.length} active`} />

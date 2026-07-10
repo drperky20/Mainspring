@@ -88,6 +88,8 @@ export type GatewayApprovalHistoryItem = ConsoleGatewaySnapshot['approvalMetadat
   source: 'compatibility' | 'runlog'
 }
 
+export type GatewayUsageHistoryItem = ConsoleGatewaySnapshot['usageLedger'][number]
+
 export interface LocalGatewayClient {
   health(input?: { signal?: AbortSignal }): Promise<{
     mode: string
@@ -289,6 +291,11 @@ export interface LocalGatewayClient {
     }
   }>
   usageStatus(): Promise<{ usageStatus: NonNullable<ConsoleGatewaySnapshot['usageStatus']> }>
+  usageHistory(input?: {
+    cursor?: string
+    limit?: number
+    signal?: AbortSignal
+  }): Promise<{ entries: GatewayUsageHistoryItem[]; nextCursor?: string }>
   cronStatus(): Promise<{
     cron: { enabled: boolean; running: boolean; pollIntervalMs: number; lastTickAt?: string; lastError?: string }
   }>
@@ -717,6 +724,14 @@ export function createLocalGatewayClient(
     budgets: () => requestJson(fetchImpl, `${normalizedBaseUrl}/budgets`, { headers: authHeaders() }),
     budgetStatus: () => requestJson(fetchImpl, `${normalizedBaseUrl}/budgets/status`, { headers: authHeaders() }),
     usageStatus: () => requestJson(fetchImpl, `${normalizedBaseUrl}/usage/status`, { headers: authHeaders() }),
+    usageHistory: (input = {}) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/usage-history${queryString({
+        cursor: input.cursor,
+        limit: input.limit === undefined ? undefined : String(input.limit),
+      })}`, {
+        headers: authHeaders(),
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
     cronStatus: () => requestJson(fetchImpl, `${normalizedBaseUrl}/cron/status`, { headers: authHeaders() }),
     deleteClient: ({ clientId }) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/clients/${encodeURIComponent(clientId)}`, {

@@ -26,6 +26,7 @@ import { useApprovalHistoryPage } from './useApprovalHistoryPage'
 import { useCompatibilityRunPage } from './useCompatibilityRunPage'
 import { useRunLogActivityPage } from './useRunLogActivityPage'
 import { useRunLogTracePage } from './useRunLogTracePage'
+import { useUsageHistoryPage } from './useUsageHistoryPage'
 import {
   createChatMessage,
   createScopedRunUiState,
@@ -190,6 +191,13 @@ export function ConnectedConsoleApp() {
   const approvalHistoryEnabled = screen === 'activity' && activityTab === 'approvals'
   const approvalHistory = useApprovalHistoryPage({
     enabled: approvalHistoryEnabled,
+    gatewayClient,
+    revision: snapshot?.generatedAt,
+    limit: 25,
+  })
+  const usageHistoryEnabled = screen === 'activity' && activityTab === 'usage'
+  const usageHistory = useUsageHistoryPage({
+    enabled: usageHistoryEnabled,
     gatewayClient,
     revision: snapshot?.generatedAt,
     limit: 25,
@@ -807,7 +815,14 @@ export function ConnectedConsoleApp() {
                 }}
               />
             ) : (
-              <UsageScreen model={operatorModel} />
+              <UsageScreen
+                entries={usageHistory.entries}
+                error={usageHistoryEnabled ? usageHistory.error : undefined}
+                hasMore={usageHistoryEnabled && Boolean(usageHistory.nextCursor)}
+                loading={usageHistoryEnabled && usageHistory.loading}
+                model={operatorModel}
+                onLoadMore={() => void usageHistory.loadMore()}
+              />
             )}
           </>
         ) : screen === 'settings' ? (

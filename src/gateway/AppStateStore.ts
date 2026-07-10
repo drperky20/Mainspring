@@ -146,6 +146,20 @@ export interface LocalGatewayUsageLedgerEntryRecord {
   metadata?: Record<string, unknown>
 }
 
+/** Stable reverse-chronological cursor for bounded usage-ledger history. */
+export interface LocalGatewayUsageLedgerCursor {
+  createdAt: string
+  entryId: string
+}
+
+export interface LocalGatewayUsageLedgerListInput {
+  runId?: string
+  /** Return rows strictly older than this reverse-chronological cursor. */
+  before?: LocalGatewayUsageLedgerCursor
+  limit?: number
+  order?: 'asc' | 'desc'
+}
+
 export type LocalGatewayBudgetScope = 'client' | 'workspace' | 'agent'
 
 export interface LocalGatewayBudgetRecord {
@@ -644,7 +658,7 @@ export interface LocalGatewayAppStateStore {
   usageLedger: {
     create(input: CreateLocalGatewayUsageLedgerEntryInput): LocalGatewayUsageLedgerEntryRecord
     get(entryId: string): LocalGatewayUsageLedgerEntryRecord | null
-    list(input?: { runId?: string }): LocalGatewayUsageLedgerEntryRecord[]
+    list(input?: LocalGatewayUsageLedgerListInput): LocalGatewayUsageLedgerEntryRecord[]
   }
   budgets: {
     create(input: CreateLocalGatewayBudgetInput): LocalGatewayBudgetRecord
@@ -855,6 +869,8 @@ CREATE TABLE IF NOT EXISTS gateway_usage_ledger_entries (
   metadata_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_gateway_usage_run ON gateway_usage_ledger_entries(run_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_usage_activity
+  ON gateway_usage_ledger_entries(created_at DESC, entry_id DESC);
 
 CREATE TABLE IF NOT EXISTS gateway_budgets (
   budget_id TEXT PRIMARY KEY,
@@ -2398,17 +2414,25 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
       ).get(entryId)
       return row ? usageLedgerEntryFromRow(row) : null
     },
-    list: (input: { runId?: string } = {}) => {
+    list: (input: LocalGatewayUsageLedgerListInput = {}) => {
+      const clauses: string[] = []
+      const params: unknown[] = []
       if (input.runId) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_usage_ledger_entries
-           WHERE run_id = ?
-           ORDER BY created_at ASC, entry_id ASC`,
-        ).all(input.runId) as unknown[]).map(usageLedgerEntryFromRow)
+        clauses.push('run_id = ?')
+        params.push(input.runId)
       }
+      if (input.before) {
+        clauses.push('(created_at < ? OR (created_at = ? AND entry_id < ?))')
+        params.push(input.before.createdAt, input.before.createdAt, input.before.entryId)
+      }
+      const order = input.order === 'desc' ? 'DESC' : 'ASC'
+      const limit = input.limit === undefined ? '' : ' LIMIT ?'
+      if (input.limit !== undefined) params.push(input.limit)
+      const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : ''
       return (this.db.prepare(
-        'SELECT * FROM gateway_usage_ledger_entries ORDER BY created_at ASC, entry_id ASC',
-      ).all() as unknown[]).map(usageLedgerEntryFromRow)
+        `SELECT * FROM gateway_usage_ledger_entries${where}
+         ORDER BY created_at ${order}, entry_id ${order}${limit}`,
+      ).all(...params) as unknown[]).map(usageLedgerEntryFromRow)
     },
   }
 

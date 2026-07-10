@@ -12,6 +12,7 @@ import {
   publicRunLogEvent,
   readRunLogTracePage,
 } from '../RunLogActivityPage.js'
+import { listUsageHistoryPage } from '../UsageHistoryPage.js'
 import {
   consoleAgent,
   consoleBudget,
@@ -40,7 +41,10 @@ import {
   type LocalGatewayEventListInput,
 } from '../index.js'
 import type { LocalMainspringGateway } from '../LocalGateway.js'
-import type { LocalGatewayAuthUserRecord } from '../AppStateStore.js'
+import type {
+  LocalGatewayAuthUserRecord,
+  LocalGatewayUsageLedgerCursor,
+} from '../AppStateStore.js'
 import type { RunEvent } from '../../contracts/runtime.js'
 import type {
   RunListCursor,
@@ -144,6 +148,8 @@ const DEFAULT_APPROVAL_HISTORY_PAGE_LIMIT = 25
 const MAX_APPROVAL_HISTORY_PAGE_LIMIT = 100
 const DEFAULT_COMPATIBILITY_RUN_PAGE_LIMIT = 25
 const MAX_COMPATIBILITY_RUN_PAGE_LIMIT = 100
+const DEFAULT_USAGE_HISTORY_PAGE_LIMIT = 25
+const MAX_USAGE_HISTORY_PAGE_LIMIT = 100
 
 export async function readBoundedGatewayJson(
   request: AsyncIterable<Buffer | Uint8Array | string> & { headers?: IncomingMessage['headers'] },
@@ -482,6 +488,11 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'GET' && path === '/usage/status') {
         this.writeJson(response, 200, { usageStatus: consoleUsageStatus(this.options.gateway.usage.status()) })
+        return
+      }
+
+      if (request.method === 'GET' && path === '/usage-history') {
+        this.writeUsageHistoryPage(response, url)
         return
       }
 
@@ -1641,6 +1652,31 @@ export class LocalGatewayHttpServer {
     }))
   }
 
+  /**
+   * Cursor-paginated detailed ledger for the visible Usage Activity view. It
+   * is deliberately distinct from the compatible snapshot aggregate.
+   */
+  private writeUsageHistoryPage(response: ServerResponse, url: URL): void {
+    const appState = this.options.gateway.appState
+    if (!appState) {
+      throw new GatewayHttpError(
+        501,
+        'Usage history pagination requires the gateway app-state store.',
+      )
+    }
+    const limit = usageHistoryPageLimit(url.searchParams.get('limit'))
+    const before = parseUsageHistoryCursor(url.searchParams.get('cursor'))
+    const page = listUsageHistoryPage({
+      source: appState,
+      limit,
+      ...(before ? { before } : {}),
+    })
+    this.writeJson(response, 200, sanitizeGatewayResponse({
+      entries: page.entries,
+      ...(page.nextCursor ? { nextCursor: encodeUsageHistoryCursor(page.nextCursor) } : {}),
+    }))
+  }
+
   private async writeArtifact(
     response: ServerResponse,
     artifactId: string,
@@ -1863,6 +1899,18 @@ function compatibilityRunPageLimit(value: string | null): number {
   return parsed
 }
 
+function usageHistoryPageLimit(value: string | null): number {
+  if (!value) return DEFAULT_USAGE_HISTORY_PAGE_LIMIT
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_USAGE_HISTORY_PAGE_LIMIT) {
+    throw new GatewayHttpError(
+      400,
+      `Usage history limit must be an integer from 1 to ${MAX_USAGE_HISTORY_PAGE_LIMIT}.`,
+    )
+  }
+  return parsed
+}
+
 function encodeRunLogActivityCursor(run: Pick<RunLogRunRecord, 'createdAt' | 'runId'>): string {
   return Buffer.from(JSON.stringify({ createdAt: run.createdAt, runId: run.runId }), 'utf8')
     .toString('base64url')
@@ -1922,6 +1970,32 @@ function parseRunLogTraceCursor(value: string | null): number | undefined {
     return seq as number
   } catch {
     throw new GatewayHttpError(400, 'RunLog trace cursor is invalid.')
+  }
+}
+
+function encodeUsageHistoryCursor(
+  record: Pick<LocalGatewayUsageLedgerCursor, 'createdAt' | 'entryId'>,
+): string {
+  return Buffer.from(
+    JSON.stringify({ createdAt: record.createdAt, entryId: record.entryId }),
+    'utf8',
+  ).toString('base64url')
+}
+
+function parseUsageHistoryCursor(value: string | null): LocalGatewayUsageLedgerCursor | undefined {
+  if (!value) return undefined
+  if (value.length > 256) throw new GatewayHttpError(400, 'Usage history cursor is invalid.')
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8')
+    const parsed = JSON.parse(decoded) as Record<string, unknown>
+    const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt.trim() : ''
+    const entryId = typeof parsed.entryId === 'string' ? parsed.entryId.trim() : ''
+    if (!createdAt || !entryId || createdAt.length > 64 || entryId.length > 160) {
+      throw new Error('invalid usage history cursor fields')
+    }
+    return { createdAt, entryId }
+  } catch {
+    throw new GatewayHttpError(400, 'Usage history cursor is invalid.')
   }
 }
 

@@ -146,6 +146,36 @@ describe('createLocalGatewayClient', () => {
     })
   })
 
+  it('requests bounded usage history with an opaque cursor', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('http://127.0.0.1:8787/usage-history?cursor=usage_cursor_1&limit=25')
+      expect(init?.headers).toEqual({ authorization: 'Bearer hosted_token_1' })
+      return new Response(
+        JSON.stringify({
+          entries: [{
+            entryId: 'usage_1',
+            runId: 'run_usage_1',
+            sessionId: 'session_usage_1',
+            providerId: 'openrouter',
+            modelId: 'openrouter/auto',
+            totalTokens: 14,
+            estimatedCostUsd: 0.001,
+            createdAt: '2026-07-10T00:00:00.000Z',
+          }],
+          nextCursor: 'usage_cursor_2',
+        }),
+        { status: 200 },
+      )
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+    client.setSessionToken('hosted_token_1')
+
+    await expect(client.usageHistory({ cursor: 'usage_cursor_1', limit: 25 })).resolves.toMatchObject({
+      entries: [expect.objectContaining({ entryId: 'usage_1', totalTokens: 14 })],
+      nextCursor: 'usage_cursor_2',
+    })
+  })
+
   it('fetches snapshot, run events, run start, and approval resolution through the expected routes', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

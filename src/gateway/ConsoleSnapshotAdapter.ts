@@ -1586,7 +1586,8 @@ function browserSafeJsonValue(value: unknown): unknown {
   )
 }
 
-function consoleUsageLedgerEntry(
+/** Projects one usage row for snapshot and bounded history DTOs. */
+export function consoleUsageLedgerEntry(
   record: LocalGatewayUsageLedgerEntryRecord,
 ): ConsoleGatewayUsageLedgerEntry {
   return {

@@ -230,6 +230,27 @@ async function main() {
     assert(usageStatus.usageStatus?.total?.scopeType === 'total', 'usage status did not include total rollup')
     assertNoBrowserLeak('usage status response', usageStatus, [root.replaceAll('\\', '\\\\')])
 
+    appState.usageLedger.create({
+      entryId: 'usage_browser_surface',
+      runId: 'run_browser_surface_usage',
+      sessionId,
+      workspaceId,
+      providerId: 'openrouter workspaceRoot=E:/Mainspring/browser-surface-hidden-provider',
+      modelId: 'openrouter/free filePath=/srv/browser-surface-hidden/model.txt',
+      inputTokens: 10,
+      outputTokens: 4,
+      totalTokens: 14,
+      estimatedCostUsd: 0.001,
+      metadata: { internalUsageSource: 'browser-surface-usage-private-sentinel' },
+    })
+    const usageHistory = await requestJson(`${started.url}/usage-history?limit=1`)
+    assert(usageHistory.entries?.[0]?.entryId === 'usage_browser_surface', 'usage history did not include ledger entry')
+    assert(usageHistory.entries?.[0]?.metadata === undefined, 'usage history exposed ledger metadata')
+    assertNoBrowserLeak('usage history response', usageHistory, [
+      root.replaceAll('\\', '\\\\'),
+      'browser-surface-usage-private-sentinel',
+    ])
+
     const cellStatus = await requestJson(`${started.url}/cells/status`)
     assert(typeof cellStatus.cellStatus?.enabled === 'boolean', 'cell status did not include enabled flag')
     assertNoBrowserLeak('cell status response', cellStatus, [root.replaceAll('\\', '\\\\')])
