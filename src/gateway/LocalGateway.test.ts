@@ -371,11 +371,27 @@ describe('LocalMainspringGateway', () => {
             action: 'provider-profile.created',
             targetType: 'provider-profile',
             targetId: created.profileId,
+            metadata: {
+              decisionRecord: expect.objectContaining({
+                surface: 'provider_config',
+                operation: 'provider_config.write',
+                state: 'allow',
+                targetKey: 'openrouter',
+              }),
+            },
           }),
           expect.objectContaining({
             action: 'provider-profile.updated',
             targetType: 'provider-profile',
             targetId: created.profileId,
+            metadata: {
+              decisionRecord: expect.objectContaining({
+                surface: 'provider_config',
+                operation: 'provider_config.write',
+                state: 'allow',
+                targetKey: created.profileId,
+              }),
+            },
           }),
         ]),
       )

@@ -250,6 +250,23 @@ describe('RunLogMainspring SDK host', () => {
       input: 'Child work',
       metadata: { purpose: 'summarize' },
     })
+    const childDecision = parent.projection().policyDecisions.find(
+      (decision) => decision.operation === 'subagent.create',
+    )
+    expect(childDecision).toMatchObject({
+      runId: parent.record.runId,
+      sessionId: parent.record.sessionId,
+      surface: 'subagent',
+      operation: 'subagent.create',
+      targetKey: child.record.runId,
+      state: 'allow',
+      approved: true,
+      metadata: {
+        childRunId: child.record.runId,
+        parentRunId: parent.record.runId,
+        authority: 'inherited',
+      },
+    })
     expect(() => app.runs.startChild({ parentRunId: 'missing', input: 'No parent' })).toThrow(
       'Unknown parent RunLog run: missing',
     )

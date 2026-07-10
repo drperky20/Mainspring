@@ -27,6 +27,12 @@ export type DecisionRecordSurface =
   | 'mcp'
   | 'unknown'
 
+type HostDecisionSurfaceOperation =
+  | { surface: 'subagent'; operation: 'subagent.create' }
+  | { surface: 'provider_config'; operation: 'provider_config.write' }
+  | { surface: 'artifact'; operation: 'artifact.publish' }
+  | { surface: 'channel'; operation: 'channel.send' }
+
 export interface DecisionRecord {
   decisionId: string
   runId: string
@@ -107,6 +113,43 @@ export function createDecisionRecord(input: {
     inputHash: hashApprovalInput(input.toolInput),
     manifestHash: hashApprovalInput(input.manifest),
     policyHash: hashApprovalInput(input.policy),
+    createdAt: new Date().toISOString(),
+    ...(input.metadata ? { metadata: input.metadata } : {}),
+  }
+}
+
+/**
+ * Creates the same durable decision shape for host surfaces that do not have a
+ * ToolManifest. The caller must persist this record before or alongside the
+ * authorized mutation; raw input is represented only by a deterministic hash.
+ */
+export function createHostDecisionRecord(input: {
+  runId: string
+  sessionId?: string
+  targetKey: string
+  state: DecisionRecordState
+  reasons: string[]
+  permissionCategories?: string[]
+  input?: unknown
+  approved?: boolean
+  metadata?: Record<string, unknown>
+} & HostDecisionSurfaceOperation): DecisionRecord {
+  const permissionCategories = input.permissionCategories ?? []
+  return {
+    decisionId: `dr_${randomUUID()}`,
+    runId: input.runId,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    surface: input.surface,
+    operation: input.operation,
+    targetKey: input.targetKey,
+    state: input.state,
+    reasons: [...input.reasons],
+    permissionCategories: [...permissionCategories],
+    approved: input.approved ?? input.state === 'allow',
+    hardBlocked: input.state === 'hard_block',
+    inputHash: hashApprovalInput(input.input),
+    manifestHash: hashApprovalInput({ surface: input.surface, targetKey: input.targetKey }),
+    policyHash: hashApprovalInput({ authority: 'host-decision-adapter', version: 1 }),
     createdAt: new Date().toISOString(),
     ...(input.metadata ? { metadata: input.metadata } : {}),
   }

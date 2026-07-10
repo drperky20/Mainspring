@@ -30,7 +30,7 @@ import type {
   RunRecord as RunLogRunRecord,
 } from '../core/types.js'
 import type { RunLogRunProjection } from '../hosts/runlog/RunLogProjection.js'
-import type { DecisionRecord } from '../policy/DecisionRecord.js'
+import { createHostDecisionRecord, type DecisionRecord } from '../policy/DecisionRecord.js'
 import { estimateUsageCost } from '../usage/UsageAccounting.js'
 import {
   describeModelPricingCatalog,
@@ -4024,6 +4024,17 @@ export class LocalMainspringGateway {
     input: CreateLocalGatewayProviderProfileInput,
   ): LocalGatewayProviderProfileRecord {
     const appState = this.requireAppState()
+    const decision = createHostDecisionRecord({
+      runId: 'gateway-control-plane',
+      surface: 'provider_config',
+      operation: 'provider_config.write',
+      targetKey: input.providerId,
+      state: 'allow',
+      reasons: ['Trusted local gateway operator requested provider profile creation.'],
+      permissionCategories: ['provider-config', 'secrets'],
+      input,
+      metadata: { mutation: 'create' },
+    })
     const profile = appState.providerProfiles.create(input)
     appState.auditEvents.create({
       category: 'gateway',
@@ -4031,6 +4042,7 @@ export class LocalMainspringGateway {
       actor: 'local-gateway',
       targetType: 'provider-profile',
       targetId: profile.profileId,
+      metadata: { decisionRecord: decision },
     })
     return profile
   }
@@ -4039,6 +4051,17 @@ export class LocalMainspringGateway {
     input: UpdateLocalGatewayProviderProfileInput,
   ): LocalGatewayProviderProfileRecord {
     const appState = this.requireAppState()
+    const decision = createHostDecisionRecord({
+      runId: 'gateway-control-plane',
+      surface: 'provider_config',
+      operation: 'provider_config.write',
+      targetKey: input.profileId,
+      state: 'allow',
+      reasons: ['Trusted local gateway operator requested provider profile mutation.'],
+      permissionCategories: ['provider-config', 'secrets'],
+      input,
+      metadata: { mutation: 'update' },
+    })
     const profile = appState.providerProfiles.update(input)
     appState.auditEvents.create({
       category: 'gateway',
@@ -4046,6 +4069,7 @@ export class LocalMainspringGateway {
       actor: 'local-gateway',
       targetType: 'provider-profile',
       targetId: profile.profileId,
+      metadata: { decisionRecord: decision },
     })
     return profile
   }

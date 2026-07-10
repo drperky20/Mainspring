@@ -76,6 +76,11 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - decision states are `allow`, `deny`, `clarify`, `requires_approval`, `stage_for_review`, and `hard_block`.
   - tool completion, approval, and block events carry the related `decisionId`.
   - hard-block shell patterns such as catastrophic wipes, fork bombs, credential dumping, Git remote/hook mutation, approval disabling, and network-to-shell execution cannot be approved by a receipt.
+- Non-tool authority decisions use the same durable `DecisionRecord` shape:
+  - attenuated child-run creation appends a public `subagent.create` decision to the parent RunLog before creating the child; the decision binds the generated child run id and records inherited authority without exposing credentials or workspace roots.
+  - local gateway provider-profile create/update mutations store a `provider_config.write` decision inside the corresponding audit row; mutation input is represented only by its hash.
+  - artifact handling in the gateway is read-only indexing of runtime-created artifacts; the gateway has no artifact-publish mutation surface.
+  - channel sends remain explicitly on the legacy mailbox compatibility path and are not presented as RunLog-native authority.
 - RunLog cron rows now fail closed at the schedule-to-run boundary:
   - side-effecting headless schedules deny by default without queueing work.
   - scoped cron grants bind agent, prompt hash, schedule hash, allowed tools, expiration, and execution count.
@@ -104,10 +109,10 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 ## Prototype Or Migration Surfaces
 
 - The old mailbox/runtime path is still present and still important for existing `createMainspring` SDK/gateway behavior.
-- The compatibility runner resolves each mailbox session to its persisted SDK workspace record. Metadata-free legacy/channel sessions receive an isolated per-session workspace beneath `MAINSPRING_WORKSPACE_ROOT`; the runner no longer shares one workspace root across all sessions.
+- The compatibility runner resolves each mailbox session to its persisted SDK workspace record. Metadata-free legacy/channel sessions receive separate per-session workspace directories beneath `MAINSPRING_WORKSPACE_ROOT`; this path separation is not a sandbox, and the runner no longer shares one workspace root across all sessions.
 - All runnable examples now exercise the RunLog SDK host; the old mailbox/runtime path remains for legacy `createMainspring` SDK/gateway compatibility and tests.
 - The default gateway `/runs/start` route is RunLog-backed in the local dev server and in gateways configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways constructed without a RunLog host remain mailbox-compatible for migration tests and older embedders.
-- Non-tool host surfaces such as channel sends, provider config mutation, artifact publish, and future subagent creation still need explicit `DecisionRecord` adapters as those surfaces become RunLog-native.
+- New non-tool mutation surfaces must use `createHostDecisionRecord`; the existing channel bridge remains compatibility-only until it gains a RunLog-native identity model.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
 - Contributor, governance, operations, and security guidance now describe RunLog Fabric as canonical while keeping the mailbox/`RuntimeKernel` path compatibility-only.

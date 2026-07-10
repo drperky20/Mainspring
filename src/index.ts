@@ -287,6 +287,7 @@ export {
 export type { ApprovalReceipt } from './policy/ApprovalReceipt.js'
 export {
   createDecisionRecord,
+  createHostDecisionRecord,
   decisionStateForPolicyDecision,
   decisionSurfaceForManifest,
 } from './policy/DecisionRecord.js'

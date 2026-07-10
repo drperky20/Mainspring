@@ -25,6 +25,8 @@ import type { AgentProvider } from '../providers/types.js'
 import type { RuntimeSecretResolver } from '../providers/types.js'
 import { createDefaultRuntimeTools } from '../runtime/defaultTools.js'
 import type { RuntimeTool } from '../tools/ToolRegistry.js'
+import { createRunLogId } from '../core/ids.js'
+import { createHostDecisionRecord } from '../policy/DecisionRecord.js'
 
 const DEFAULT_AGENT_ID = 'agent_default'
 
@@ -179,8 +181,37 @@ export class RunLogMainspring {
     startChild: (input: StartChildRunLogInput): RunLogMainspringRunHandle => {
       const parent = this.store.getRun(input.parentRunId)
       if (!parent) throw new Error(`Unknown parent RunLog run: ${input.parentRunId}`)
+      const childRunId = input.runId ?? createRunLogId('run')
+      if (this.store.getRun(childRunId)) throw new Error(`Run already exists: ${childRunId}`)
+      const decision = createHostDecisionRecord({
+        runId: parent.runId,
+        sessionId: parent.sessionId,
+        surface: 'subagent',
+        operation: 'subagent.create',
+        targetKey: childRunId,
+        state: 'allow',
+        reasons: ['Child run authority is attenuated to the parent execution scope.'],
+        permissionCategories: ['subagent', 'authority-attenuation'],
+        input: {
+          childRunId,
+          parentRunId: parent.runId,
+          agentId: parent.agentId,
+          workspaceId: parent.workspaceId,
+          computerId: parent.computerId,
+          providerId: parent.providerId,
+          modelId: parent.modelId,
+          allowedTools: parent.allowedTools,
+        },
+        metadata: { childRunId, parentRunId: parent.runId, authority: 'inherited' },
+      })
+      this.store.appendEvent({
+        runId: parent.runId,
+        type: 'policy.decision.recorded',
+        visibility: 'public',
+        payload: decision,
+      })
       const run = this.kernel.startRun({
-        runId: input.runId,
+        runId: childRunId,
         parentRunId: parent.runId,
         agentId: parent.agentId,
         sessionId: parent.sessionId,
