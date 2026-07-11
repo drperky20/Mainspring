@@ -19,6 +19,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - `GatewayProjectionSynchronizer` now owns restart-safe catch-up of approval,
   usage, tool-call, artifact, execution-cell, and terminal-lease projections;
   `LocalGateway` supplies read-only runtime readers and keeps the public facade.
+- `GatewayRunInputResolver` now owns the shared session, workspace/client,
+  agent, provider-profile, and runtime-profile binding checks used by gateway
+  and RunLog ingress plus cron preparation.
 - `ConsoleClientWorkspaceFrame` now owns the selected-client header, workspace
   context, client tabs, and two-column shell while the connected app retains
   feature state and command orchestration.

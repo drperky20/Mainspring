@@ -127,6 +127,7 @@ import {
 import { GatewayTopologyControl } from './GatewayTopologyControl.js'
 import { GatewayMarketplaceControl } from './GatewayMarketplaceControl.js'
 import { GatewayRunControl } from './GatewayRunControl.js'
+import { GatewayRunInputResolver } from './GatewayRunInputResolver.js'
 import { GatewayArtifactAccess, type LocalGatewayArtifactFile } from './GatewayArtifactAccess.js'
 import { GatewayArtifactProjection } from './GatewayArtifactProjection.js'
 import { GatewayUsageProjection } from './GatewayUsageProjection.js'
@@ -899,6 +900,7 @@ export class LocalMainspringGateway {
   private readonly compatibilityRunPageReader: CompatibilityRunPageReader<LocalGatewayRunProjection>
   private readonly snapshotReader: GatewaySnapshotReader
   private readonly budgetEvaluator = new GatewayBudgetEvaluator()
+  private readonly runInputResolver?: GatewayRunInputResolver
   private readonly projectionSynchronizer?: GatewayProjectionSynchronizer<LocalGatewayBudgetEvaluation>
   private snapshotReadCache?: LocalGatewaySnapshotReadCache
   private cronTimer: NodeJS.Timeout | null = null
@@ -948,6 +950,13 @@ export class LocalMainspringGateway {
         })
       : null
     this.runtimeProfiles = new LocalGatewayRuntimeProfileRegistry(options.runtimeProfiles?.profiles)
+    this.runInputResolver = this.appState
+      ? new GatewayRunInputResolver({
+          appState: this.appState,
+          getSession: (sessionId) => this.runtime.storage.stateStore.getSession(sessionId),
+          assertRuntimeProfile: (profileId) => this.runtimeProfiles.assertRegistered(profileId),
+        })
+      : undefined
     this.workspaceBaseRoot = path.resolve(
       options.workspaceBaseRoot
         ?? (this.runtime.options.workspaceRoot
@@ -1967,6 +1976,13 @@ export class LocalMainspringGateway {
     return this.appState
   }
 
+  private requireRunInputResolver(): GatewayRunInputResolver {
+    if (!this.runInputResolver) {
+      throw new Error('Local gateway app state is not configured.')
+    }
+    return this.runInputResolver
+  }
+
   private budgetStatus(): LocalGatewayBudgetStatus {
     const appState = this.appState
     if (!appState) {
@@ -2047,118 +2063,7 @@ export class LocalMainspringGateway {
   }
 
   private resolveAppStateRunInput(input: LocalGatewayAppStateRunInput): LocalGatewayStartRunInput {
-    const appState = this.requireAppState()
-    const session = this.runtime.storage.stateStore.getSession(input.sessionId)
-    if (!session) throw new Error(`Unknown session: ${input.sessionId}`)
-
-    const sessionMetadata = recordValue(session.metadata) ?? {}
-    const sessionWorkspaceId = textValue(sessionMetadata.workspaceId)
-    const sessionWorkspace = this.resolveGatewayWorkspace(appState, sessionWorkspaceId)
-    const workspace = this.resolveGatewayWorkspace(appState, input.workspaceId)
-    const agent = this.resolveGatewayAgent(appState, input.agentId)
-    const providerProfile = this.resolveGatewayProviderProfile(appState, input.providerProfileId)
-
-    this.assertGatewayWorkspaceRunnable(appState, sessionWorkspace)
-    this.assertGatewayWorkspaceRunnable(appState, workspace)
-    this.assertGatewayAgentRunnable(agent)
-    this.assertGatewayProviderProfileRunnable(providerProfile)
-
-    if (
-      workspace &&
-      agent?.workspaceId &&
-      workspace.workspaceId !== agent.workspaceId
-    ) {
-      throw new Error(
-        `Agent ${agent.agentId} belongs to workspace ${agent.workspaceId}, not ${workspace.workspaceId}.`,
-      )
-    }
-
-    if (
-      sessionWorkspace &&
-      workspace &&
-      sessionWorkspace.workspaceId !== workspace.workspaceId
-    ) {
-      throw new Error(
-        `Session ${session.sessionId} belongs to workspace ${sessionWorkspace.workspaceId}, not ${workspace.workspaceId}.`,
-      )
-    }
-
-    if (
-      sessionWorkspace &&
-      agent?.workspaceId &&
-      sessionWorkspace.workspaceId !== agent.workspaceId
-    ) {
-      throw new Error(
-        `Session ${session.sessionId} belongs to workspace ${sessionWorkspace.workspaceId}, not agent ${agent.agentId}'s workspace ${agent.workspaceId}.`,
-      )
-    }
-
-    if (agent?.workspaceId && !workspace && !appState.workspaces.get(agent.workspaceId)) {
-      throw new Error(`Agent ${agent.agentId} references unknown workspace ${agent.workspaceId}.`)
-    }
-
-    if (
-      providerProfile &&
-      input.providerId &&
-      providerProfile.providerId !== input.providerId
-    ) {
-      throw new Error(
-        `Provider profile ${providerProfile.profileId} belongs to provider ${providerProfile.providerId}, not ${input.providerId}.`,
-      )
-    }
-
-    const { providerProfileId: _providerProfileId, ...runInput } = input
-    const workspaceId =
-      workspace?.workspaceId ?? sessionWorkspace?.workspaceId ?? agent?.workspaceId ?? runInput.workspaceId
-    const agentId = agent?.agentId ?? runInput.agentId
-    const providerId = runInput.providerId ?? providerProfile?.providerId
-    const modelId =
-      runInput.modelId ?? providerProfile?.defaultModelId ?? agent?.defaultModelId
-
-    return {
-      ...runInput,
-      ...(workspaceId ? { workspaceId } : {}),
-      ...(agentId ? { agentId } : {}),
-      ...(providerId ? { providerId } : {}),
-      ...(providerProfile?.secretRef ? { credentialRef: providerProfile.secretRef } : {}),
-      ...(modelId ? { modelId } : {}),
-    }
-  }
-
-  private assertGatewayWorkspaceRunnable(
-    appState: LocalGatewayAppStateStore,
-    workspace: LocalGatewayWorkspaceRecord | null,
-  ): void {
-    if (!workspace) return
-    if (workspace.status !== 'active') {
-      throw new Error(`Gateway workspace ${workspace.workspaceId} is archived and cannot run agents.`)
-    }
-    if (!workspace.clientId) return
-    const client = appState.clients.get(workspace.clientId)
-    if (!client) {
-      throw new Error(
-        `Gateway workspace ${workspace.workspaceId} references unknown client ${workspace.clientId}.`,
-      )
-    }
-    if (client.status !== 'active') {
-      throw new Error(
-        `Gateway workspace ${workspace.workspaceId} belongs to archived client ${client.clientId}.`,
-      )
-    }
-  }
-
-  private assertGatewayAgentRunnable(agent: LocalGatewayAgentRecord | null): void {
-    if (agent?.status === 'archived') {
-      throw new Error(`Gateway agent ${agent.agentId} is archived and cannot run.`)
-    }
-  }
-
-  private assertGatewayProviderProfileRunnable(
-    providerProfile: LocalGatewayProviderProfileRecord | null,
-  ): void {
-    if (providerProfile?.status === 'archived') {
-      throw new Error(`Gateway provider profile ${providerProfile.profileId} is archived and cannot run.`)
-    }
+    return this.requireRunInputResolver().resolve(input)
   }
 
   private validateBudgetScope(
@@ -2219,7 +2124,7 @@ export class LocalMainspringGateway {
       appState: this.requireAppState(),
       now: this.now,
       grantIntervalMs: gatewayCronPolicyIntervalMs,
-      validateSchedule: (input) => this.validateCronScheduleInput(this.requireAppState(), input),
+      validateSchedule: (input) => this.validateCronScheduleInput(input),
       computeNextRunAt: (input) => this.computeNextRunAt(input),
       prepareGrant: (schedule, now) => {
         const context = this.buildRunLogCronContext(schedule, now)
@@ -2749,7 +2654,6 @@ export class LocalMainspringGateway {
   }
 
   private validateCronScheduleInput(
-    appState: LocalGatewayAppStateStore,
     input: {
       sessionId: string
       workspaceId?: string
@@ -2769,9 +2673,10 @@ export class LocalMainspringGateway {
     requiredGatewayText(input.label, 'cron schedule label')
     requiredGatewayText(input.prompt, 'cron schedule prompt')
     parseCronExpression(input.cronExpr)
-    this.resolveGatewayWorkspace(appState, input.workspaceId)
-    this.resolveGatewayAgent(appState, input.agentId)
-    this.resolveGatewayProviderProfile(appState, input.providerProfileId)
+    const resolver = this.requireRunInputResolver()
+    resolver.resolveWorkspace(input.workspaceId)
+    resolver.resolveAgent(input.agentId)
+    resolver.resolveProviderProfile(input.providerProfileId)
     this.runtimeProfiles.assertRegistered(input.runtimeProfile)
   }
 
@@ -2788,37 +2693,6 @@ export class LocalMainspringGateway {
     return next?.toISOString()
   }
 
-  private resolveGatewayWorkspace(
-    appState: LocalGatewayAppStateStore,
-    workspaceId: string | undefined,
-  ): LocalGatewayWorkspaceRecord | null {
-    if (!workspaceId) return null
-    const workspace = appState.workspaces.get(workspaceId)
-    if (!workspace) throw new Error(`Unknown gateway workspace: ${workspaceId}`)
-    return workspace
-  }
-
-  private resolveGatewayAgent(
-    appState: LocalGatewayAppStateStore,
-    agentId: string | undefined,
-  ): LocalGatewayAgentRecord | null {
-    if (!agentId) return null
-    const agent = appState.agents.get(agentId)
-    if (!agent) throw new Error(`Unknown gateway agent: ${agentId}`)
-    return agent
-  }
-
-  private resolveGatewayProviderProfile(
-    appState: LocalGatewayAppStateStore,
-    providerProfileId: string | undefined,
-  ): LocalGatewayProviderProfileRecord | null {
-    if (!providerProfileId) return null
-    const providerProfile = appState.providerProfiles.get(providerProfileId)
-    if (!providerProfile) {
-      throw new Error(`Unknown gateway provider profile: ${providerProfileId}`)
-    }
-    return providerProfile
-  }
 }
 
 export function createLocalMainspringGateway(
