@@ -24,20 +24,9 @@ jobs:
         with:
           node-version: 22.12.0
       - run: corepack enable
+      - run: corepack prepare pnpm@9.15.4 --activate
       - run: pnpm install --frozen-lockfile
-      - run: pnpm verify
-      - run: pnpm gateway:systems:check
-      - run: pnpm gateway:dev:help
-      - run: pnpm run desktop:typecheck
-      - run: pnpm run desktop:build
-      - run: pnpm examples:smoke
-      - run: pnpm agentic:check
-      - run: pnpm release:workflow:check
-      - run: pnpm optional-verifiers:check
-      - run: pnpm package:check
-      - run: pnpm package:pack:check
-      - run: npm pack --dry-run
-      - run: node scripts/check-docker-compose-config.mjs
+      - run: pnpm release:check
   desktop-windows:
     runs-on: windows-latest
     timeout-minutes: 35
@@ -47,6 +36,7 @@ jobs:
         with:
           node-version: 22.12.0
       - run: corepack enable
+      - run: corepack prepare pnpm@9.15.4 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm run desktop:typecheck
       - run: pnpm run desktop:build
@@ -66,6 +56,7 @@ jobs:
         with:
           node-version: 22.12.0
       - run: corepack enable
+      - run: corepack prepare pnpm@9.15.4 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
       - run: pnpm run desktop:typecheck

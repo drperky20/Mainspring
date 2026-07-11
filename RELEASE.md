@@ -12,7 +12,10 @@ git status --short
 
 `release:check` runs verification, gateway systems, examples, desktop systems, workflow parity, package surface checks, package dry-runs, npm dry-run, and Docker Compose config validation.
 Desktop systems include a Windows-only packaging guard; Linux users run from source rather than a desktop installer lane.
-The GitHub release-check workflow should run on pull requests, pushes to `main`, and manual dispatch.
+The GitHub release-check workflow runs the same canonical `pnpm release:check`
+command on pull requests, pushes to `main`, and manual dispatch. Ordinary CI runs
+one cross-platform `pnpm verify` matrix plus a real Chromium console E2E job and
+retains failure traces, screenshots, video, and the Playwright HTML report.
 GitHub workflows should use read-only contents permissions, frozen pnpm installs, explicit job timeouts, and concurrency cancellation for superseded runs.
 
 ## Documentation

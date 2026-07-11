@@ -6,6 +6,10 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 
 ## [Unreleased]
 
+- Consolidated CI around one cross-platform verification matrix, a retained-artifact
+  Chromium console E2E lane, pinned pnpm activation, and the canonical local release
+  command so pull requests and release jobs exercise the same gates.
+
 ### Added
 - Runtime kernel, SQLite mailbox, SDK, provider registry, tool registry, policy guard, approval receipts, and event journal package surfaces.
 - Prototype founder-cockpit console with explicit localStorage honesty and development gateway fixture previews.
@@ -24,6 +28,7 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Bounded `GatewayTopologyControl` ownership for client/workspace/agent/session topology, with cross-client binding checks and pre-mutation authority records.
 - Bounded `GatewayMarketplaceControl` ownership for verified template file installation and client/workspace/agent provisioning.
 - Bounded `GatewayRunControl` ownership for run ingress and approval-response authority.
+- Explicit runtime projection writes for artifact and usage read models, with non-negative usage validation and root-contained, symlink-safe artifact download handles.
 
 ### Changed
 - Verification lane standardized around `pnpm verify`.
@@ -44,3 +49,5 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Pinned remote-catalog sync and verified local/signed-remote marketplace installs now persist hash-only `marketplace.catalog.sync`/`marketplace.install` authority before registry or file writes, propagate hosted identity through topology provisioning, and record failures without raw template content or workspace roots.
 - Gateway compatibility and RunLog ingress now persist hash-only `run.enqueue` authority before runtime enqueue, `run.cancel` before mailbox or RunLog cancellation, and `approval.resolve` before legacy lifecycle mutation or RunLog receipt creation; run/session bindings fail closed, outcome/failure rows retain decision links, and hosted principals replace browser attribution.
 - Gateway audit timestamps now advance past the latest durable row so same-tick authorization and outcome records retain observable insertion order.
+- Artifact downloads now resolve against the runtime artifact root after realpath validation and stream an already-open file handle; untrusted media types fall back to `application/octet-stream`.
+- App-state artifact and usage mutations are separated from their read surfaces through an explicit runtime projection namespace; invalid negative, fractional, non-finite, or oversized numeric values are rejected before ledger writes.

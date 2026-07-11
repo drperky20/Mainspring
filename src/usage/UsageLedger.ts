@@ -19,8 +19,8 @@ export interface UsageLedgerSummary {
   models: string[]
 }
 
-function addNumber(total: number, value: number | undefined): number {
-  return typeof value === 'number' && Number.isFinite(value) ? total + value : total
+function addNonNegativeNumber(total: number, value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? total + value : total
 }
 
 export function summarizeUsageLedger(
@@ -37,10 +37,14 @@ export function summarizeUsageLedger(
   for (const entry of entries) {
     if (entry.providerId) providers.add(entry.providerId)
     if (entry.modelId) models.add(entry.modelId)
-    inputTokens = addNumber(inputTokens, entry.inputTokens)
-    outputTokens = addNumber(outputTokens, entry.outputTokens)
-    totalTokens = addNumber(totalTokens, entry.totalTokens)
-    if (typeof entry.estimatedCostUsd === 'number' && Number.isFinite(entry.estimatedCostUsd)) {
+    inputTokens = addNonNegativeNumber(inputTokens, entry.inputTokens)
+    outputTokens = addNonNegativeNumber(outputTokens, entry.outputTokens)
+    totalTokens = addNonNegativeNumber(totalTokens, entry.totalTokens)
+    if (
+      typeof entry.estimatedCostUsd === 'number'
+      && Number.isFinite(entry.estimatedCostUsd)
+      && entry.estimatedCostUsd >= 0
+    ) {
       pricedEntries += 1
       estimatedCostUsd += entry.estimatedCostUsd
     }

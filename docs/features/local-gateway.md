@@ -98,7 +98,14 @@ and provider/model breakdown data.
 artifact rows with the same default and maximum limits. It requires the gateway
 app-state store, omits durable paths and persistence metadata, and does not
 grant file access; artifact content still requires the existing scoped
-browser-access route.
+browser-access route. Artifact and usage rows are read-only through the normal
+app-state interface; `GatewayArtifactProjection` and `GatewayUsageProjection`
+are the runtime-owned materialization seams. Before artifact bytes are served,
+`GatewayArtifactAccess` resolves the persisted path beneath the configured
+runtime artifact root after symlink resolution and opens the file handle. A
+row outside that root, a symlink escape, a missing/non-file target, or an
+unsafe media type fails closed rather than turning app-state metadata into an
+arbitrary host-file read.
 
 `GET /audit-history` returns a browser-safe, reverse-cursor page of local
 audit rows with the same limits. It requires the gateway app-state store and

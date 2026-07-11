@@ -12,29 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  source-matrix:
-    name: Source Check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.12.0
-      - run: corepack enable
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
-
   verify:
+    name: Verify (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -47,5 +26,31 @@ jobs:
         with:
           node-version: 22.12.0
       - run: corepack enable
+      - run: corepack prepare pnpm@9.15.4 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+
+  browser-e2e:
+    name: Browser E2E (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+      - run: corepack enable
+      - run: corepack prepare pnpm@9.15.4 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm console:e2e
+        env:
+          MAINSPRING_E2E_ARTIFACTS_DIR: output/playwright/ci
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainspring-browser-e2e-failure
+          path: output/playwright/ci
+          if-no-files-found: ignore
+          retention-days: 7

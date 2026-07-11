@@ -213,9 +213,12 @@ try {
     sessionId: authorizedClient.body.session.sessionId,
     workspaceId: authorizedClient.body.workspace?.workspaceId,
   })
-  const artifactPath = path.join(root, 'artifact-report.md')
+  // Artifact downloads are intentionally accepted only from the runtime artifact
+  // root. Keep this hosted-auth fixture on the same production-shaped boundary
+  // instead of granting the gateway an arbitrary temporary-file path.
+  const artifactPath = path.join(mainspring.storage.artifactStore.rootPath, 'auth_check_report')
   fs.writeFileSync(artifactPath, '# hosted artifact ticket check\n')
-  appState.artifacts.create({
+  appState.projections.artifacts.create({
     artifactId: 'auth_check_report',
     runId: 'auth_check_run',
     sessionId: authorizedClient.body.session.sessionId,

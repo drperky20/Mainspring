@@ -1915,27 +1915,39 @@ export class LocalGatewayHttpServer {
     artifactId: string,
     download = false,
   ): Promise<void> {
-    const artifact = this.options.gateway.appState?.artifacts.get(artifactId)
-    if (!artifact) {
+    const artifactFile = await this.options.gateway.resolveArtifactFile(artifactId)
+    if (!artifactFile) {
       throw new GatewayHttpError(404, `Unknown artifact: ${artifactId}`)
     }
-    const stat = await fs.promises.stat(artifact.path).catch(() => null)
-    if (!stat?.isFile()) {
-      throw new GatewayHttpError(404, `Artifact file unavailable: ${artifactId}`)
+    const { artifact, handle, sizeBytes } = artifactFile
+    try {
+      response.writeHead(200, {
+        'content-type': safeArtifactMediaType(artifact.mediaType),
+        'content-length': String(sizeBytes),
+        'content-disposition': `${download ? 'attachment' : 'inline'}; filename="${safeArtifactFilename(artifact)}"`,
+        'cache-control': 'no-store',
+      })
+      await new Promise<void>((resolve, reject) => {
+        const stream = handle.createReadStream()
+        const closeStream = (): void => {
+          if (!stream.destroyed) stream.destroy()
+        }
+        const cleanup = (): void => {
+          response.off('close', closeStream)
+        }
+        response.once('close', closeStream)
+        stream.on('error', reject)
+        stream.on('end', resolve)
+        stream.on('close', () => {
+          cleanup()
+          resolve()
+        })
+        void stream.pipe(response)
+      })
+    } catch (error) {
+      await handle.close().catch(() => undefined)
+      throw error
     }
-    response.writeHead(200, {
-      'content-type': artifact.mediaType ?? 'application/octet-stream',
-      'content-length': String(stat.size),
-      'content-disposition': `${download ? 'attachment' : 'inline'}; filename="${safeArtifactFilename(artifact)}"`,
-      'cache-control': 'no-store',
-    })
-    await new Promise<void>((resolve, reject) => {
-      const stream = fs.createReadStream(artifact.path)
-      stream.on('error', reject)
-      response.on('close', resolve)
-      stream.on('end', resolve)
-      stream.pipe(response)
-    })
   }
 
   private async handleEventStream(
@@ -2473,6 +2485,13 @@ function openRouterCatalogModel(value: unknown): OpenRouterCatalogModel | undefi
       ...(typeof pricing.request === 'string' ? { request: pricing.request } : {}),
     },
   }
+}
+
+function safeArtifactMediaType(value: string | undefined): string {
+  const mediaType = value?.trim()
+  return mediaType && /^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(mediaType)
+    ? mediaType
+    : 'application/octet-stream'
 }
 
 function safeArtifactFilename(artifact: { artifactId: string; label?: string; mediaType?: string }): string {

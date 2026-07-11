@@ -28,7 +28,7 @@ async function finishFirstRun(page: Page) {
 }
 
 test.describe('operator console', () => {
-  test('connects a first-run workspace and records a durable run to completion', async ({ page }) => {
+  test('connects a first-run workspace and records a durable run to completion', async ({ page }, testInfo) => {
     await finishFirstRun(page)
 
     await page.getByRole('button', { name: 'Workspaces', exact: true }).click()
@@ -66,6 +66,7 @@ test.describe('operator console', () => {
     await expect(runRow.getByText('completed', { exact: true })).toBeVisible({ timeout: 15_000 })
     await runRow.click()
     await expect(page.locator('code').getByText(startedRun.runId, { exact: true })).toBeVisible()
+    await page.screenshot({ path: testInfo.outputPath('desktop-run-detail.png') })
   })
 
   test('shows a clear offline state when the selected local gateway cannot be reached', async ({ page }) => {
@@ -74,7 +75,7 @@ test.describe('operator console', () => {
     await expect(page.getByRole('button', { name: 'Retry connection' })).toBeVisible()
   })
 
-  test('keeps Activity and dialog controls usable at a narrow viewport', async ({ page }) => {
+  test('keeps Activity and dialog controls usable at a narrow viewport', async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 844 })
     await finishFirstRun(page)
 
@@ -99,12 +100,16 @@ test.describe('operator console', () => {
 
     await page.getByRole('button', { name: 'Memory', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Memory', exact: true })).toBeVisible()
+    const setupToast = page.getByRole('status')
+    if (await setupToast.isVisible()) await setupToast.click()
 
     const correctMemory = page.getByRole('button', { name: 'Correct', exact: true })
     await correctMemory.click()
     const correctionDialog = page.getByRole('dialog', { name: 'Correct memory' })
     await expect(correctionDialog.getByRole('button', { name: 'Close' })).toBeFocused()
     await correctionDialog.getByRole('textbox').first().fill('Weekly intake handoff was completed.')
+    await page.waitForTimeout(250)
+    await page.screenshot({ path: testInfo.outputPath('phone-memory-dialog.png') })
     const corrected = page.waitForResponse((response) => {
       const url = new URL(response.url())
       return /\/memory-history\/memory_[A-Za-z0-9_-]+\/correct$/.test(url.pathname)

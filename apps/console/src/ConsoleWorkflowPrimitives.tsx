@@ -140,7 +140,7 @@ export function Dialog({
             type="button"
             onClick={onClose}
           >
-            x
+            ×
           </button>
         </div>
         {children}

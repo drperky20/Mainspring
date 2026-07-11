@@ -450,6 +450,31 @@ export interface CreateLocalGatewayUsageLedgerEntryInput {
   metadata?: Record<string, unknown>
 }
 
+export interface LocalGatewayArtifactReadStore {
+  get(artifactId: string): LocalGatewayArtifactRecord | null
+  list(input?: LocalGatewayArtifactListInput): LocalGatewayArtifactRecord[]
+}
+
+export interface LocalGatewayUsageLedgerReadStore {
+  get(entryId: string): LocalGatewayUsageLedgerEntryRecord | null
+  list(input?: LocalGatewayUsageLedgerListInput): LocalGatewayUsageLedgerEntryRecord[]
+}
+
+/**
+ * Runtime-owned writes for derived gateway read models. The public app-state
+ * interface exposes artifacts and usage as reads; only the gateway projection
+ * loop should use this namespace to materialize rows from durable runtime
+ * events.
+ */
+export interface LocalGatewayProjectionStore {
+  artifacts: {
+    create(input: CreateLocalGatewayArtifactInput): LocalGatewayArtifactRecord
+  }
+  usageLedger: {
+    create(input: CreateLocalGatewayUsageLedgerEntryInput): LocalGatewayUsageLedgerEntryRecord
+  }
+}
+
 export interface CreateLocalGatewayBudgetInput {
   budgetId?: string
   scopeType: LocalGatewayBudgetScope
@@ -679,16 +704,9 @@ export interface LocalGatewayAppStateStore {
     get(approvalId: string): LocalGatewayApprovalMetadataRecord | null
     list(input?: LocalGatewayApprovalListInput): LocalGatewayApprovalMetadataRecord[]
   }
-  artifacts: {
-    create(input: CreateLocalGatewayArtifactInput): LocalGatewayArtifactRecord
-    get(artifactId: string): LocalGatewayArtifactRecord | null
-    list(input?: LocalGatewayArtifactListInput): LocalGatewayArtifactRecord[]
-  }
-  usageLedger: {
-    create(input: CreateLocalGatewayUsageLedgerEntryInput): LocalGatewayUsageLedgerEntryRecord
-    get(entryId: string): LocalGatewayUsageLedgerEntryRecord | null
-    list(input?: LocalGatewayUsageLedgerListInput): LocalGatewayUsageLedgerEntryRecord[]
-  }
+  artifacts: LocalGatewayArtifactReadStore
+  usageLedger: LocalGatewayUsageLedgerReadStore
+  projections: LocalGatewayProjectionStore
   budgets: {
     create(input: CreateLocalGatewayBudgetInput): LocalGatewayBudgetRecord
     update(input: UpdateLocalGatewayBudgetInput): LocalGatewayBudgetRecord
@@ -1107,6 +1125,22 @@ function optionalText(value: string | undefined): string | undefined {
 function requiredUsdAmount(value: number | undefined, label: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     throw new Error(`${label} must be a non-negative number.`)
+  }
+  return value
+}
+
+function optionalNonNegativeInteger(value: number | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative safe integer.`)
+  }
+  return value
+}
+
+function optionalNonNegativeNumber(value: number | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a finite non-negative number.`)
   }
   return value
 }
@@ -2351,6 +2385,7 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
 
   readonly artifacts = {
     create: (input: CreateLocalGatewayArtifactInput): LocalGatewayArtifactRecord => {
+      const sizeBytes = optionalNonNegativeInteger(input.sizeBytes, 'artifact size bytes')
       const record: LocalGatewayArtifactRecord = {
         artifactId: optionalText(input.artifactId) ?? createMainspringRuntimeId('artifact'),
         runId: requiredText(input.runId, 'artifact run id'),
@@ -2360,7 +2395,7 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
         ...(optionalText(input.label) ? { label: optionalText(input.label) } : {}),
         path: path.resolve(requiredText(input.path, 'artifact path')),
         ...(optionalText(input.mediaType) ? { mediaType: optionalText(input.mediaType) } : {}),
-        ...(typeof input.sizeBytes === 'number' ? { sizeBytes: input.sizeBytes } : {}),
+        ...(sizeBytes !== undefined ? { sizeBytes } : {}),
         createdAt: currentIsoTimestamp(),
         ...(input.metadata ? { metadata: input.metadata } : {}),
       }
@@ -2412,6 +2447,13 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
 
   readonly usageLedger = {
     create: (input: CreateLocalGatewayUsageLedgerEntryInput): LocalGatewayUsageLedgerEntryRecord => {
+      const inputTokens = optionalNonNegativeInteger(input.inputTokens, 'usage input tokens')
+      const outputTokens = optionalNonNegativeInteger(input.outputTokens, 'usage output tokens')
+      const totalTokens = optionalNonNegativeInteger(input.totalTokens, 'usage total tokens')
+      const estimatedCostUsd = optionalNonNegativeNumber(
+        input.estimatedCostUsd,
+        'usage estimated cost usd',
+      )
       const record: LocalGatewayUsageLedgerEntryRecord = {
         entryId: optionalText(input.entryId) ?? createMainspringRuntimeId('usage'),
         runId: requiredText(input.runId, 'usage run id'),
@@ -2419,12 +2461,10 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
         ...(optionalText(input.workspaceId) ? { workspaceId: optionalText(input.workspaceId) } : {}),
         ...(optionalText(input.providerId) ? { providerId: optionalText(input.providerId) } : {}),
         ...(optionalText(input.modelId) ? { modelId: optionalText(input.modelId) } : {}),
-        ...(typeof input.inputTokens === 'number' ? { inputTokens: input.inputTokens } : {}),
-        ...(typeof input.outputTokens === 'number' ? { outputTokens: input.outputTokens } : {}),
-        ...(typeof input.totalTokens === 'number' ? { totalTokens: input.totalTokens } : {}),
-        ...(typeof input.estimatedCostUsd === 'number'
-          ? { estimatedCostUsd: input.estimatedCostUsd }
-          : {}),
+        ...(inputTokens !== undefined ? { inputTokens } : {}),
+        ...(outputTokens !== undefined ? { outputTokens } : {}),
+        ...(totalTokens !== undefined ? { totalTokens } : {}),
+        ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
         createdAt: currentIsoTimestamp(),
         ...(input.metadata ? { metadata: input.metadata } : {}),
       }
@@ -2475,6 +2515,20 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
         `SELECT * FROM gateway_usage_ledger_entries${where}
          ORDER BY created_at ${order}, entry_id ${order}${limit}`,
       ).all(...params) as unknown[]).map(usageLedgerEntryFromRow)
+    },
+  }
+
+  /**
+   * Explicit runtime projection seam. The read-model collections above are
+   * intentionally read-only through LocalGatewayAppStateStore; LocalGateway
+   * uses this namespace only while projecting authoritative runtime events.
+   */
+  readonly projections: LocalGatewayProjectionStore = {
+    artifacts: {
+      create: (input) => this.artifacts.create(input),
+    },
+    usageLedger: {
+      create: (input) => this.usageLedger.create(input),
     },
   }
 

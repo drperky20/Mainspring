@@ -1023,6 +1023,62 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('keeps artifact downloads inside the runtime root and sanitizes media types', async () => {
+    const root = makeTempRoot('mainspring-gateway-artifact-download-boundary-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const artifactRoot = path.join(root, 'artifacts')
+    const outsideRoot = path.join(root, 'outside')
+    fs.mkdirSync(artifactRoot, { recursive: true })
+    fs.mkdirSync(outsideRoot, { recursive: true })
+    const insidePath = path.join(artifactRoot, 'inside.bin')
+    const outsidePath = path.join(outsideRoot, 'secret.bin')
+    fs.writeFileSync(insidePath, 'inside artifact')
+    fs.writeFileSync(outsidePath, 'outside secret')
+
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider([]),
+    })
+    appState.artifacts.create({
+      artifactId: 'artifact_inside',
+      runId: 'run_artifact_boundary',
+      sessionId: 'session_artifact_boundary',
+      kind: 'file',
+      path: insidePath,
+      mediaType: 'application/octet-stream\r\nX-Injected: true',
+    })
+    appState.artifacts.create({
+      artifactId: 'artifact_outside',
+      runId: 'run_artifact_boundary',
+      sessionId: 'session_artifact_boundary',
+      kind: 'file',
+      path: outsidePath,
+      mediaType: 'application/octet-stream',
+    })
+    const gateway = createLocalMainspringGateway({ runtime, appState })
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+
+    await runtime.start()
+    try {
+      const started = await server.start()
+      const inside = await fetch(`${started.url}/artifacts/artifact_inside`)
+      const outside = await fetch(`${started.url}/artifacts/artifact_outside`)
+      expect(inside.status).toBe(200)
+      expect(inside.headers.get('content-type')).toBe('application/octet-stream')
+      expect(await inside.text()).toBe('inside artifact')
+      expect(outside.status).toBe(404)
+      await server.stop()
+    } finally {
+      appState.close()
+      await runtime.stop()
+    }
+  })
+
   it('keeps artifact history bounded by requiring app-state metadata', async () => {
     const root = makeTempRoot('mainspring-gateway-artifact-history-no-app-state-')
     const runtime = createMainspring({

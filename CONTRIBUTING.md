@@ -25,6 +25,22 @@ pnpm examples:smoke
 pnpm release:check
 ```
 
+For a substantial change, make a coherent implementation batch before repeatedly
+testing it. During the batch, use focused boundary tests and compilation only when
+needed to protect a critical contract. At the handoff or commit boundary, run one
+complete release pass. If it fails, preserve the exact failure as the next
+correction instead of hiding it behind repeated full-suite retries.
+
+Console changes also require a real terminal-driven browser pass:
+
+```bash
+MAINSPRING_E2E_ARTIFACTS_DIR=output/playwright/manual pnpm console:e2e
+```
+
+Watch gateway, Vite, and Playwright logs, inspect desktop and phone layouts, and
+retain screenshots or traces when visual, accessibility, or interaction behavior
+needs evidence.
+
 Desktop changes:
 
 ```bash
@@ -79,4 +95,5 @@ When behavior changes, update the relevant feature doc and verification command.
 - Tests cover success and fail-closed behavior.
 - Docs explain current behavior and limits.
 - Verification commands pass or blockers are documented accurately.
+- CI uses the canonical local commands and preserves browser failure evidence.
 - No local runtime artifacts, package tarballs, DBs, logs, caches, or secrets are staged.

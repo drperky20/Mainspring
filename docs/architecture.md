@@ -75,6 +75,10 @@ Scale adapters can replace pieces independently:
 - Cron is stored as due rows in the RunLog SQLite adapter and creates ordinary queued runs.
 - Subagents should be child runs with parent IDs, not permanent subprocesses.
 - Secrets belong in environment, local secret store, or an external secret adapter, never renderer localStorage.
+- Gateway artifacts and usage are runtime projections: ordinary app-state callers
+  receive read-only stores, while dedicated projection collaborators own writes.
+- Artifact downloads resolve an opaque row beneath the configured artifact root,
+  verify its real path, and open the file before the HTTP response is created.
 
 ## Security Truth
 

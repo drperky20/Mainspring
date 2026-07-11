@@ -109,7 +109,7 @@ describe('SqliteLocalGatewayAppStateStore', () => {
         targetKey: 'file.write',
         metadata: { review: 'needed' },
       })
-      const artifact = store.artifacts.create({
+      const artifact = store.projections.artifacts.create({
         artifactId: 'artifact_1',
         runId: runMetadata.runId,
         sessionId: runMetadata.sessionId,
@@ -120,7 +120,7 @@ describe('SqliteLocalGatewayAppStateStore', () => {
         mediaType: 'text/markdown',
         sizeBytes: 128,
       })
-      const usage = store.usageLedger.create({
+      const usage = store.projections.usageLedger.create({
         entryId: 'usage_1',
         runId: runMetadata.runId,
         sessionId: runMetadata.sessionId,
@@ -515,6 +515,39 @@ describe('SqliteLocalGatewayAppStateStore', () => {
       expect(journalMode(store.dbPath).toLowerCase()).toBe('wal')
       expect(store.schemaVersion).toBe(6)
       expect(userVersion(store.dbPath)).toBe(6)
+    } finally {
+      store.close()
+    }
+  })
+
+  it('rejects invalid artifact and usage projection values before persistence', () => {
+    const root = makeTempRoot('mainspring-gateway-projection-validation-')
+    const store = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    try {
+      expect(() => store.projections.artifacts.create({
+        runId: 'run_projection_validation',
+        sessionId: 'session_projection_validation',
+        kind: 'report',
+        path: path.join(root, 'artifact.md'),
+        sizeBytes: -1,
+      })).toThrow('artifact size bytes must be a non-negative safe integer')
+
+      expect(() => store.projections.usageLedger.create({
+        runId: 'run_projection_validation',
+        sessionId: 'session_projection_validation',
+        inputTokens: 1.5,
+      })).toThrow('usage input tokens must be a non-negative safe integer')
+
+      expect(() => store.projections.usageLedger.create({
+        runId: 'run_projection_validation',
+        sessionId: 'session_projection_validation',
+        estimatedCostUsd: -0.01,
+      })).toThrow('usage estimated cost usd must be a finite non-negative number')
+
+      expect(store.artifacts.list()).toEqual([])
+      expect(store.usageLedger.list()).toEqual([])
     } finally {
       store.close()
     }

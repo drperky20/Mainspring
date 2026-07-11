@@ -72,24 +72,13 @@ for (const [jobName, job] of Object.entries(jobs)) {
   requireJobCommand(jobName, job, 'uses: actions/setup-node@v4')
   requireJobCommand(jobName, job, 'node-version: 22.12.0')
   requireJobCommand(jobName, job, 'run: corepack enable')
+  requireJobCommand(jobName, job, 'run: corepack prepare pnpm@9.15.4 --activate')
   requireJobCommand(jobName, job, 'run: pnpm install --frozen-lockfile')
 }
 
 requireJobCommand('release-check', jobs['release-check'], 'runs-on: ubuntu-latest')
 requireJobCommand('release-check', jobs['release-check'], 'timeout-minutes: 35')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm verify')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm gateway:systems:check')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm gateway:dev:help')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm run desktop:typecheck')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm run desktop:build')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm examples:smoke')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm agentic:check')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm release:workflow:check')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm optional-verifiers:check')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm package:check')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm package:pack:check')
-requireJobCommand('release-check', jobs['release-check'], 'run: npm pack --dry-run')
-requireJobCommand('release-check', jobs['release-check'], 'run: node scripts/check-docker-compose-config.mjs')
+requireJobCommand('release-check', jobs['release-check'], 'run: pnpm release:check')
 
 requireGatewaySystemsCheck('scripts/check-execution-backends.mjs')
 
@@ -211,8 +200,28 @@ function requireCiWorkflow() {
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/setup-node@v4')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'node-version: 22.12.0')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: corepack enable')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: corepack prepare pnpm@9.15.4 --activate')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm install --frozen-lockfile')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm verify')
+
+  if (ciWorkflow.includes('  source-matrix:')) {
+    failures.push(`${ciWorkflowPath} must not duplicate the full source checks beside the verify matrix`)
+  }
+
+  const browserJob = requireWorkflowJob(ciWorkflowPath, ciWorkflow, 'browser-e2e')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'runs-on: ubuntu-latest')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'timeout-minutes: 25')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'uses: actions/checkout@v4')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'uses: actions/setup-node@v4')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'node-version: 22.12.0')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'run: corepack enable')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'run: corepack prepare pnpm@9.15.4 --activate')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'run: pnpm install --frozen-lockfile')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'run: pnpm exec playwright install --with-deps chromium')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'run: pnpm console:e2e')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'MAINSPRING_E2E_ARTIFACTS_DIR: output/playwright/ci')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'if: failure()')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'uses: actions/upload-artifact@v4')
 }
 
 function requireNoLinuxDesktopPackaging() {

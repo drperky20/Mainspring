@@ -238,10 +238,11 @@ async function main() {
     assert(snapshot.counts?.clients >= 1, 'snapshot response did not include client counts')
     assertNoBrowserLeak('snapshot response', snapshot, [root.replaceAll('\\', '\\\\')])
 
-    const artifactPath = path.join(root, 'artifact-output', 'browser-surface-artifact.md')
-    fs.mkdirSync(path.dirname(artifactPath), { recursive: true })
+    // Serve only a runtime-owned artifact path. The browser boundary must never
+    // treat arbitrary host files as artifact inventory, including in this fixture.
+    const artifactPath = path.join(runtime.storage.artifactStore.rootPath, 'artifact_browser_surface')
     fs.writeFileSync(artifactPath, '# browser-safe artifact content\n')
-    appState.artifacts.create({
+    appState.projections.artifacts.create({
       artifactId: 'artifact_browser_surface',
       runId: 'run_browser_surface_artifact',
       sessionId,

@@ -11,6 +11,10 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 const playwrightCli = require.resolve('@playwright/test/cli')
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-console-e2e-'))
+const configuredArtifactsDirectory = process.env.MAINSPRING_E2E_ARTIFACTS_DIR?.trim()
+const artifactsDirectory = configuredArtifactsDirectory
+  ? path.resolve(repositoryRoot, configuredArtifactsDirectory)
+  : path.join(temporaryRoot, 'playwright-artifacts')
 const pnpmExecutable = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const packageManagerEntryName = ['npm', 'execpath'].join('_')
 const packageManagerEntry = process.env[packageManagerEntryName]
@@ -121,6 +125,10 @@ async function stopChildren() {
 }
 
 async function main() {
+  if (configuredArtifactsDirectory) {
+    fs.rmSync(artifactsDirectory, { recursive: true, force: true })
+    fs.mkdirSync(artifactsDirectory, { recursive: true })
+  }
   const [gatewayPort, consolePort] = await Promise.all([reservePort(), reservePort()])
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}`
   const consoleUrl = `http://127.0.0.1:${consolePort}`
@@ -153,7 +161,8 @@ async function main() {
       ...process.env,
       MAINSPRING_E2E_CONSOLE_URL: consoleUrl,
       MAINSPRING_E2E_GATEWAY_URL: gatewayUrl,
-      MAINSPRING_E2E_ARTIFACTS_DIR: path.join(temporaryRoot, 'playwright-artifacts'),
+      MAINSPRING_E2E_ARTIFACTS_DIR: artifactsDirectory,
+      PLAYWRIGHT_HTML_OUTPUT_DIR: path.join(artifactsDirectory, 'html-report'),
     })
     test.once('error', reject)
     test.once('exit', (code) => resolve(code ?? 1))

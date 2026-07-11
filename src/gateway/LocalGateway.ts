@@ -5,7 +5,6 @@ import {
   type GatewayRunDispatch,
   type MainspringRuntimeProfile,
   type MainspringRuntimeProfileRegistration,
-  type ProviderUsage,
   type RuntimePolicy,
 } from '#protocol'
 import fs from 'node:fs'
@@ -37,7 +36,6 @@ import type {
 } from '../core/types.js'
 import type { RunLogRunProjection } from '../hosts/runlog/RunLogProjection.js'
 import type { DecisionRecord } from '../policy/DecisionRecord.js'
-import { estimateUsageCost } from '../usage/UsageAccounting.js'
 import {
   describeModelPricingCatalog,
   modelPricingCatalogFromEnv,
@@ -133,6 +131,9 @@ import {
 import { GatewayTopologyControl } from './GatewayTopologyControl.js'
 import { GatewayMarketplaceControl } from './GatewayMarketplaceControl.js'
 import { GatewayRunControl } from './GatewayRunControl.js'
+import { GatewayArtifactAccess, type LocalGatewayArtifactFile } from './GatewayArtifactAccess.js'
+import { GatewayArtifactProjection } from './GatewayArtifactProjection.js'
+import { GatewayUsageProjection } from './GatewayUsageProjection.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
@@ -872,60 +873,12 @@ function projectLocalRunLogRun(projection: RunLogRunProjection): LocalGatewayRun
   }
 }
 
-function usageEntryIdForEvent(event: RunEvent): string {
-  return `usage_${event.eventId}`
-}
-
-function usageEntryIdForRunLogEvent(event: RunLogEvent): string {
-  return `usage_runlog_${event.eventId}`
-}
-
-function providerUsageFromRunLogEvent(event: RunLogEvent): ProviderUsage | null {
-  if (event.type !== 'usage.reported') return null
-  const payload = recordValue(event.payload)
-  const usage = recordValue(payload?.usage)
-  if (!usage) return null
-
-  const result: ProviderUsage = {}
-  for (const key of ['provider', 'modelId', 'modelFamily', 'providerTransport'] as const) {
-    const value = textValue(usage[key])
-    if (value) result[key] = value
-  }
-  for (const key of [
-    'inputTokens',
-    'outputTokens',
-    'totalTokens',
-    'cacheReadTokens',
-    'cacheWriteTokens',
-    'reasoningTokens',
-  ] as const) {
-    const value = usage[key]
-    if (typeof value === 'number' && Number.isInteger(value) && value >= 0) result[key] = value
-  }
-  if (recordValue(usage.rateLimit)) {
-    result.rateLimit = usage.rateLimit as ProviderUsage['rateLimit']
-  }
-  return result
-}
-
 function executionCellId(workspaceId: string, backendKey: string): string {
   return `cell_exec_${workspaceId}_${backendKey}`.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
 function executionLeaseId(toolCallId: string, backendSessionId?: string): string {
   return `lease_exec_${(backendSessionId ?? toolCallId)}`.replace(/[^a-zA-Z0-9_-]/g, '_')
-}
-
-function artifactPathFromId(rootPath: string, artifactId: string): string | null {
-  const normalizedArtifactId = artifactId.trim()
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(normalizedArtifactId)) {
-    return null
-  }
-  const root = path.resolve(rootPath)
-  const candidate = path.resolve(root, normalizedArtifactId)
-  const relative = path.relative(root, candidate)
-  if (relative.startsWith('..') || path.isAbsolute(relative)) return null
-  return candidate
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -1041,6 +994,9 @@ export class LocalMainspringGateway {
   private readonly runtimeProfiles: LocalGatewayRuntimeProfileRegistry
   private readonly pricingCatalog: readonly ModelPricing[]
   private readonly pricingCatalogStatus: LocalGatewayPricingCatalogStatus
+  private readonly artifactAccess?: GatewayArtifactAccess
+  private readonly artifactProjection?: GatewayArtifactProjection
+  private readonly usageProjection?: GatewayUsageProjection<LocalGatewayBudgetEvaluation>
   private readonly budgetEvaluationStateById = new Map<string, LocalGatewayBudgetEvaluation['status']>()
   private readonly hyperCells?: HyperCellScheduler
   private compatibilityMailboxRevision?: { checkedAtMs: number; fingerprint: string }
@@ -1057,6 +1013,18 @@ export class LocalMainspringGateway {
   ) {
     this.runLogRuntime = options.runLog
     this.appState = options.appState
+    this.artifactAccess = this.appState
+      ? new GatewayArtifactAccess({
+          appState: this.appState,
+          rootPath: this.runtime.storage.artifactStore.rootPath,
+        })
+      : undefined
+    this.artifactProjection = this.appState
+      ? new GatewayArtifactProjection({
+          appState: this.appState,
+          rootPath: this.runtime.storage.artifactStore.rootPath,
+        })
+      : undefined
     this.compatibilityRunPageReader = new CompatibilityRunPageReader({
       appState: () => this.appState,
       getSession: (sessionId) => this.runtime.storage.stateStore.getSession(sessionId),
@@ -1103,6 +1071,18 @@ export class LocalMainspringGateway {
           ? modelPricingCatalogSourceLabel(envPricingCatalogPath)
           : undefined,
     })
+    const appState = this.appState
+    this.usageProjection = appState
+      ? new GatewayUsageProjection({
+          appState,
+          pricingCatalog: this.pricingCatalog,
+          evaluateBudgets: () => this.evaluateBudgets(appState),
+          recordBudgetTransitions: (input) => this.recordBudgetTransitions({
+            appState,
+            ...input,
+          }),
+        })
+      : undefined
     this.hyperCells = this.appState
       ? new HyperCellScheduler({
           appState: this.appState,
@@ -1123,6 +1103,15 @@ export class LocalMainspringGateway {
 
   private readonly runLogRuntime?: RunLogMainspring
   private runLogWorkerState: LocalGatewayRunLogWorkerStatus['state'] = 'stopped'
+
+  /**
+   * Resolve a browser-downloadable artifact without returning its host path
+   * through a browser DTO. The server owns the response stream; this gateway
+   * boundary owns root containment, symlink validation, and file opening.
+   */
+  async resolveArtifactFile(artifactId: string): Promise<LocalGatewayArtifactFile | null> {
+    return this.artifactAccess?.open(artifactId) ?? null
+  }
 
   readonly sessions = {
     list: (): LocalGatewaySessionProjection[] =>
@@ -2185,7 +2174,9 @@ export class LocalMainspringGateway {
   }
 
   private syncUsageLedger(): void {
-    if (!this.appState) return
+    const appState = this.appState
+    const projection = this.usageProjection
+    if (!appState || !projection) return
 
     for (const session of this.runtime.storage.stateStore.listSessions()) {
       const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
@@ -2195,84 +2186,14 @@ export class LocalMainspringGateway {
       )
 
       for (const event of usageEvents) {
-        const entryId = usageEntryIdForEvent(event)
-        if (this.appState.usageLedger.get(entryId)) continue
-
-        const budgetStatusBefore = new Map(
-          this.evaluateBudgets(this.appState).map((evaluation) => [evaluation.budgetId, evaluation] as const),
-        )
         const runMetadata = runMetadataByRunId.get(event.runId)
         const providerInitDetail = latestProviderInitDetailFromRunEvents(
           sessionEvents.filter((candidate) => candidate.runId === event.runId),
         )
-        const payload: UsageUpdatedRunEventPayload = {
-          ...providerInitDetail,
-          ...event.payload,
-          provider: event.payload.provider ?? providerInitDetail?.provider,
-          modelId: event.payload.modelId ?? providerInitDetail?.modelId,
-          modelFamily: event.payload.modelFamily ?? providerInitDetail?.modelFamily,
-          providerTransport:
-            event.payload.providerTransport ?? providerInitDetail?.providerTransport,
-          providerSessionId:
-            event.payload.providerSessionId ?? providerInitDetail?.providerSessionId,
-        }
-        const costEstimate = estimateUsageCost({ usage: payload, catalog: this.pricingCatalog })
-
-        this.appState.usageLedger.create({
-          entryId,
-          runId: event.runId,
-          sessionId: event.sessionId,
-          ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
-          ...(payload.provider ?? runMetadata?.providerId
-            ? { providerId: payload.provider ?? runMetadata?.providerId }
-            : {}),
-          ...(payload.modelId ?? runMetadata?.modelId
-            ? { modelId: payload.modelId ?? runMetadata?.modelId }
-            : {}),
-          ...(typeof payload.inputTokens === 'number'
-            ? { inputTokens: payload.inputTokens }
-            : {}),
-          ...(typeof payload.outputTokens === 'number'
-            ? { outputTokens: payload.outputTokens }
-            : {}),
-          ...(typeof payload.totalTokens === 'number'
-            ? { totalTokens: payload.totalTokens }
-            : {}),
-          ...(typeof costEstimate.estimatedCostUsd === 'number'
-            ? { estimatedCostUsd: costEstimate.estimatedCostUsd }
-            : {}),
-          metadata: {
-            sourceEventId: event.eventId,
-            sourceSeq: event.seq,
-            pricingStatus: costEstimate.pricingStatus,
-            ...(costEstimate.pricing
-              ? { pricingModelId: costEstimate.pricing.modelId }
-              : {}),
-            ...(payload.modelFamily ? { modelFamily: payload.modelFamily } : {}),
-            ...(payload.providerTransport
-              ? { providerTransport: payload.providerTransport }
-              : {}),
-            ...(payload.providerSessionId
-              ? { providerSessionId: payload.providerSessionId }
-              : {}),
-            ...(typeof payload.cacheReadTokens === 'number'
-              ? { cacheReadTokens: payload.cacheReadTokens }
-              : {}),
-            ...(typeof payload.cacheWriteTokens === 'number'
-              ? { cacheWriteTokens: payload.cacheWriteTokens }
-              : {}),
-            ...(typeof payload.reasoningTokens === 'number'
-              ? { reasoningTokens: payload.reasoningTokens }
-              : {}),
-            ...(payload.rateLimit ? { rateLimit: payload.rateLimit } : {}),
-          },
-        })
-        this.recordBudgetTransitions({
-          appState: this.appState,
-          runId: event.runId,
-          sessionId: event.sessionId,
-          entryId,
-          previousStatuses: budgetStatusBefore,
+        projection.projectNativeEvent({
+          event,
+          runMetadata,
+          ...(providerInitDetail ? { providerInitDetail } : {}),
         })
       }
     }
@@ -2282,10 +2203,12 @@ export class LocalMainspringGateway {
 
   private syncRunLogUsageLedger(): void {
     const runtime = this.runLogRuntime
-    if (!runtime || !this.appState) return
+    const appState = this.appState
+    const projection = this.usageProjection
+    if (!runtime || !appState || !projection) return
 
     for (const run of runtime.runs.list()) {
-      const runMetadata = this.appState.runs.get(run.runId)
+      const runMetadata = appState.runs.get(run.runId) ?? undefined
       const providerInit = runtime.store
         .listEvents({ runId: run.runId, types: ['provider.init'], limit: 500 })
         .at(-1)
@@ -2297,61 +2220,11 @@ export class LocalMainspringGateway {
       })
 
       for (const event of usageEvents) {
-        const entryId = usageEntryIdForRunLogEvent(event)
-        if (this.appState.usageLedger.get(entryId)) continue
-        const usage = providerUsageFromRunLogEvent(event)
-        if (!usage) continue
-
-        const budgetStatusBefore = new Map(
-          this.evaluateBudgets(this.appState).map((evaluation) => [evaluation.budgetId, evaluation] as const),
-        )
-        const providerSessionId = textValue(recordValue(event.payload)?.providerSessionId)
-        const providerId = usage.provider ?? textValue(providerInitPayload?.provider) ?? runMetadata?.providerId ?? run.providerId
-        const modelId = usage.modelId ?? textValue(providerInitPayload?.modelId) ?? runMetadata?.modelId ?? run.modelId
-        const costEstimate = estimateUsageCost({ usage, catalog: this.pricingCatalog })
-
-        this.appState.usageLedger.create({
-          entryId,
-          runId: run.runId,
-          sessionId: run.sessionId,
-          ...(runMetadata?.workspaceId ?? run.workspaceId
-            ? { workspaceId: runMetadata?.workspaceId ?? run.workspaceId }
-            : {}),
-          ...(providerId ? { providerId } : {}),
-          ...(modelId ? { modelId } : {}),
-          ...(typeof usage.inputTokens === 'number' ? { inputTokens: usage.inputTokens } : {}),
-          ...(typeof usage.outputTokens === 'number' ? { outputTokens: usage.outputTokens } : {}),
-          ...(typeof usage.totalTokens === 'number' ? { totalTokens: usage.totalTokens } : {}),
-          ...(typeof costEstimate.estimatedCostUsd === 'number'
-            ? { estimatedCostUsd: costEstimate.estimatedCostUsd }
-            : {}),
-          metadata: {
-            runtime: 'runlog',
-            sourceEventId: event.eventId,
-            sourceSeq: event.seq,
-            pricingStatus: costEstimate.pricingStatus,
-            ...(costEstimate.pricing ? { pricingModelId: costEstimate.pricing.modelId } : {}),
-            ...(usage.modelFamily ? { modelFamily: usage.modelFamily } : {}),
-            ...(usage.providerTransport ? { providerTransport: usage.providerTransport } : {}),
-            ...(providerSessionId ? { providerSessionId } : {}),
-            ...(typeof usage.cacheReadTokens === 'number'
-              ? { cacheReadTokens: usage.cacheReadTokens }
-              : {}),
-            ...(typeof usage.cacheWriteTokens === 'number'
-              ? { cacheWriteTokens: usage.cacheWriteTokens }
-              : {}),
-            ...(typeof usage.reasoningTokens === 'number'
-              ? { reasoningTokens: usage.reasoningTokens }
-              : {}),
-            ...(usage.rateLimit ? { rateLimit: usage.rateLimit } : {}),
-          },
-        })
-        this.recordBudgetTransitions({
-          appState: this.appState,
-          runId: run.runId,
-          sessionId: run.sessionId,
-          entryId,
-          previousStatuses: budgetStatusBefore,
+        projection.projectRunLogEvent({
+          event,
+          run,
+          runMetadata,
+          ...(providerInitPayload ? { providerInitPayload } : {}),
         })
       }
     }
@@ -2545,69 +2418,19 @@ export class LocalMainspringGateway {
   }
 
   private syncArtifacts(): void {
-    if (!this.appState) return
+    const projection = this.artifactProjection
+    if (!projection) return
 
     for (const session of this.runtime.storage.stateStore.listSessions()) {
       const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
       const rows = this.nativeMailboxEvents(session)
 
       for (const row of rows) {
-        const event = row.event
-        if (event.type === 'artifact.created') {
-          const artifactId = textValue(event.artifactId)
-          if (!artifactId || this.appState.artifacts.get(artifactId)) continue
-          const artifactPath = artifactPathFromId(this.runtime.storage.artifactStore.rootPath, artifactId)
-          if (!artifactPath) continue
-          const runMetadata = runMetadataByRunId.get(event.runId)
-          this.appState.artifacts.create({
-            artifactId,
-            runId: event.runId,
-            sessionId: row.sessionId,
-            ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
-            kind: event.kind,
-            path: artifactPath,
-            metadata: {
-              sourceEventId: `native:${row.seq}`,
-              sourceSeq: row.seq,
-              sourceType: event.type,
-            },
-          })
-          continue
-        }
-
-        if (event.type !== 'tool.result' || event.status !== 'completed') continue
-        const output = recordValue(event.output)
-        const artifactId = textValue(output?.artifactId) ?? textValue(output?.artifact)
-        if (!artifactId || this.appState.artifacts.get(artifactId)) continue
-        const artifactPath = artifactPathFromId(this.runtime.storage.artifactStore.rootPath, artifactId)
-        if (!artifactPath) continue
-
-        const runMetadata = runMetadataByRunId.get(event.runId)
-        const toolName = textValue(event.name) ?? 'runtime-artifact'
-        const artifactLabel = textValue(output?.artifactLabel)
-        const outputUrl = textValue(output?.url)
-        const kind = toolName === 'browser.screenshot' ? 'image' : 'file'
-        const mediaType =
-          toolName === 'browser.screenshot'
-            ? 'image/png'
-            : textValue(output?.mediaType)
-
-        this.appState.artifacts.create({
-          artifactId,
-          runId: event.runId,
-          sessionId: row.sessionId,
-          ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
-          kind,
-          ...(artifactLabel ? { label: artifactLabel } : {}),
-          path: artifactPath,
-          ...(mediaType ? { mediaType } : {}),
-          metadata: {
-            sourceEventId: `native:${row.seq}`,
-            sourceSeq: row.seq,
-            sourceType: event.type,
-            toolName,
-            ...(outputUrl ? { url: outputUrl } : {}),
-          },
+        projection.project({
+          row,
+          ...('runId' in row.event && row.event.runId
+            ? { runMetadata: runMetadataByRunId.get(row.event.runId) }
+            : {}),
         })
       }
     }

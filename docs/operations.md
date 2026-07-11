@@ -33,12 +33,21 @@ ports, then runs the Chromium operator workflow. It strips provider credentials 
 the gateway child environment and removes all generated sessions, workspaces, SQLite
 files, traces, and screenshots when it exits. Install the browser once with
 `pnpm exec playwright install chromium` if the local Playwright browser cache is empty.
+When `MAINSPRING_E2E_ARTIFACTS_DIR` is set, Playwright traces, failure screenshots,
+videos, and the HTML report are written there instead of the temporary root and are
+preserved for inspection. Gateway, Vite, and Playwright output is inherited by the
+calling terminal or CI job so the live run can be diagnosed without a hidden log file.
 It also runs `agentic:check`, which exercises examples plus denied approvals, provider errors, cancellation, replay, budgets, cron, marketplace, deployment, and execution backend verifiers through the built package.
 Desktop systems include `desktop:packaging:check`, which keeps Electron packaging Windows-only and rejects Linux desktop package targets while preserving source/dev and Docker usage.
 Gateway systems include `cells:check`, which verifies backend capability truth, unsafe host labeling, cell lease lifecycle, capacity blocking, expiry, and exact fail-closed status when no isolated-capable backend is available.
 It runs `package:check` before package validation so exported npm subpaths, the runtime binary, npm ignore hygiene, package metadata placeholders, package-visible Markdown placeholder tokens, and every package-visible Markdown link are checked against `dist` and the package file allowlist.
 It runs `docs:check` during `verify` so the rewritten docs index stays aligned with package-visible docs, the goal digest remains repo-local, and removed legacy docs do not return to the public docs surface.
 It runs `release:workflow:check` so GitHub workflows keep read-only contents permissions, frozen installs, job timeouts, concurrency cancellation, pull request / `main` push / manual release-check triggers, and expected release/package commands.
+The normal CI workflow has one cross-platform `pnpm verify` matrix and one Linux
+Chromium `pnpm console:e2e` job for every push and pull request. It retains browser
+failure evidence for seven days. The hosted release workflow invokes the canonical
+`pnpm release:check` package script directly, so local and GitHub release gates cannot
+silently diverge; pnpm `9.15.4` is activated explicitly before every frozen install.
 It runs `optional-verifiers:check` so optional verifier prerequisite diagnostics stay machine-readable without requiring live external services during `release:check`.
 
 `cells:check:integration` is intentionally not part of `release:check`; it requires a real WSL or Docker backend and rejects host execution. Missing prerequisites are reported with `MAINSPRING_CELLS_INTEGRATION_PREREQUISITES_BLOCKED`.

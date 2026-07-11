@@ -1,6 +1,6 @@
 # Mainspring Full Codebase Review
 
-Last reviewed: 2026-07-10. This review is evidence-led: implementation and
+Last reviewed: 2026-07-11. This review is evidence-led: implementation and
 tests are the source of truth, while product documentation is checked against
 them.
 
@@ -70,8 +70,9 @@ new product behavior from landing there without a compatibility reason.
   authority to `GatewayBudgetControl`, deployment target/driver authority to
   `GatewayDeploymentControl`, and client/workspace/agent/session topology authority
   to `GatewayTopologyControl`, while verified template file/provisioning authority
-  is delegated to `GatewayMarketplaceControl`, rather than being implemented in
-  the facade.
+  is delegated to `GatewayMarketplaceControl`. Artifact and usage projection
+  writes are restricted to `GatewayArtifactProjection` and `GatewayUsageProjection`;
+  `GatewayArtifactAccess` owns root-contained, realpath-verified file opening.
 - `AppStateStore` persists host/app metadata independently of RunLog execution.
   It must stay a read-model/metadata store rather than a second run truth.
 - `createLocalGatewayServer` authenticates/authorizes, validates input, calls
@@ -97,7 +98,7 @@ new product behavior from landing there without a compatibility reason.
 
 | Finding | Evidence | Impact | Decision |
 | --- | --- | --- | --- |
-| Broad gateway facade | `src/gateway/LocalGateway.ts` remains a large stable public facade. | Ownership is difficult to discover; snapshot/projection work is mixed with domain operations. | Keep the stable facade; `CompatibilityRunPageReader` owns the bounded compatibility page/cache path, `ApprovalHistoryPage` owns approval-history merging, `RunLogActivityPage` owns canonical activity/trace reads, `RunLogToolCallHistoryPage` owns canonical tool history, `GatewayMemoryControl` owns opaque-ID memory correction/deletion, `GatewayProvenanceReviewControl` owns staged review decisions plus replay-safe applies, `GatewayProviderProfileControl` owns provider configuration plus managed-secret authority, `GatewayCronControl` owns schedule/grant authority, `GatewayBudgetControl` owns budget configuration plus pre-enqueue warning/block authority, `GatewayDeploymentControl` owns target configuration plus confirmed driver execution and durable decision evidence, `GatewayTopologyControl` owns client/workspace/agent/session topology, cross-client binding, and deletion guards, `GatewayMarketplaceControl` owns verified template installation plus topology provisioning, and `GatewayRunControl` owns run ingress plus approval-response authority. Further internal collaborators remain a P2 refactor. |
+| Broad gateway facade | `src/gateway/LocalGateway.ts` remains a large stable public facade. | Ownership is difficult to discover even though domain operations are leaving the facade. | Keep the stable facade while delegating bounded pages and privileged mutations to existing controls. Artifact projection/access and usage projection are now dedicated collaborators, including pricing, idempotency, budget transitions, and path-safe file opening. Further internal collaborators remain a P2 refactor. |
 | Broad app-state store | `src/gateway/AppStateStore.ts` is 3,273 lines. | Repository methods, SQL mappings, schema, and migrations are co-located. | Preserve the interface; split only behind tested repository seams. |
 | Broad connected console | `apps/console/src/ConnectedConsoleApp.tsx` is now 1,538 lines. | Connection lifecycle, selection, commands, and remaining workspace panels still share one file. | Navigation, provider catalog/form, first-run setup, client editing, settings, and reusable workflow primitives are now extracted; split remaining client/workspace panels only behind stable props. |
 | Broad snapshot compatibility DTO | `/snapshot` still includes every app-state collection. | Fresh projection cost and unbounded growth pressure remain. | ETag transport, server-only sanitized cache, adaptive refresh, and cursor pages for canonical/compatibility runs, canonical tool calls, approvals, traces, detailed usage, artifacts, audit, and per-workspace memory are complete; the compatible aggregate still needs a future narrowing migration. |

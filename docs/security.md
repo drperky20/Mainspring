@@ -28,6 +28,7 @@ Mainspring treats agents as untrusted workers.
 - gateway-dev refuses an external `0.0.0.0` bind unless hosted auth/bootstrap credentials and a configured RunLog approval key are supplied
 - browser adapter public-target checks for initial opens plus adapter-reported current URLs after open and before/after page interaction/read actions
 - short-lived hosted browser-access tickets for local artifact and SSE reads, with scoped SSE targets bound to a matching canonical-or-compatibility run/session pair and auth-like query parameters rejected on ticketed URLs
+- projection-only artifact/usage writes, non-negative usage-ledger validation, and artifact downloads opened only after realpath verification beneath the runtime artifact root; out-of-root links and unsafe media types fail closed
 - console-side local gateway URL validation that rejects embedded `user:password@host` credentials
 - console-side response tripwires that reject browser-unsafe secret/path fields, common provider key environment markers, and common Windows drive-letter, UNC, and Unix host absolute paths in successful JSON responses
 - Docker runtime packaging guardrails
