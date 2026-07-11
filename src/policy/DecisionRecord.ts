@@ -55,6 +55,7 @@ type HostDecisionSurfaceOperation =
   | { surface: 'marketplace'; operation: 'marketplace.install' }
   | { surface: 'marketplace'; operation: 'marketplace.catalog.sync' }
   | { surface: 'run'; operation: 'run.enqueue' }
+  | { surface: 'run'; operation: 'run.cancel' }
   | { surface: 'approval'; operation: 'approval.resolve' }
 
 export interface DecisionRecord {

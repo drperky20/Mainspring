@@ -911,6 +911,57 @@ describe('LocalMainspringGateway', () => {
     ])
   })
 
+  it('binds compatibility cancellation to the run session before mailbox mutation', () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths('mainspring-gateway-cancel-')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })
+
+    try {
+      const session = mainspring.sessions.create({
+        sessionId: 'gateway-cancel-session',
+        workspace: { root: workspaceRoot },
+      })
+      const run = gateway.runs.start({
+        sessionId: session.record.sessionId,
+        input: 'Queue a run that should be cancelled.',
+        mode: 'chat',
+      })
+      gateway.runs.cancel(
+        session.record.sessionId,
+        run.runId,
+        'cancel reason with secretRef=env:CANCEL_SECRET',
+        'compatibility-operator',
+      )
+
+      const events = appState.auditEvents.list({ category: 'gateway' })
+      expect(events.map((event) => event.action)).toEqual([
+        'run.enqueued.authorized',
+        'run.enqueued',
+        'run.cancel.authorized',
+        'run.cancel.requested',
+      ])
+      expect(events.find((event) => event.action === 'run.cancel.authorized')).toMatchObject({
+        actor: 'compatibility-operator',
+        targetId: run.runId,
+      })
+      expect(events.find((event) => event.action === 'run.cancel.requested')).toMatchObject({
+        actor: 'compatibility-operator',
+        targetId: run.runId,
+      })
+      expect(JSON.stringify(events)).not.toContain('CANCEL_SECRET')
+    } finally {
+      appState.close()
+    }
+  })
+
   it('starts queued runs from app-state metadata without leaking provider secrets', () => {
     const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
       'mainspring-gateway-app-state-queued-',

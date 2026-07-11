@@ -972,9 +972,9 @@ export class LocalGatewayHttpServer {
           ? this.options.gateway.runLog.runs.list({ sessionId }).find((run) => run.runId === runId)
           : undefined
         if (runLogRun) {
-          this.options.gateway.runLog.runs.cancel(runId, reason)
+          this.options.gateway.runLog.runs.cancel(runId, reason, principal?.actor)
         } else {
-          this.options.gateway.runs.cancel(sessionId, runId, reason)
+          this.options.gateway.runs.cancel(sessionId, runId, reason, principal?.actor)
         }
         this.writeJson(response, 202, sanitizeGatewayResponse({ runId, sessionId, cancelled: true }))
         return

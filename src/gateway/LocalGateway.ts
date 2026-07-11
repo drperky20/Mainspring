@@ -1279,8 +1279,8 @@ export class LocalMainspringGateway {
         providerProfileId: input.providerProfileId,
       })
     },
-    cancel: (sessionId: string, runId: string, reason?: string): void => {
-      this.runtime.storage.commandStore.cancelRun(sessionId, runId, reason)
+    cancel: (sessionId: string, runId: string, reason?: string, actor?: string): void => {
+      this.cancelCompatibilityRun(sessionId, runId, reason, actor)
     },
   }
 
@@ -1428,8 +1428,26 @@ export class LocalMainspringGateway {
         limit?: number
       }): RunLogEvent[] =>
         this.requireRunLogRuntime().store.listEvents(input),
-      cancel: (runId: string, reason?: string): RunLogRunRecord =>
-        this.requireRunLogRuntime().runs.cancel(runId, reason),
+      cancel: (runId: string, reason?: string, actor?: string): RunLogRunRecord => {
+        const runtime = this.requireRunLogRuntime()
+        const existing = runtime.store.getRun(runId)
+        if (!existing) throw new Error(`Unknown RunLog run: ${runId}`)
+        const runControl = this.runControl()
+        const authorization = runControl?.authorizeCancel({
+          runId: existing.runId,
+          sessionId: existing.sessionId,
+          actor,
+          binding: { reason },
+        })
+        try {
+          const cancelled = runtime.runs.cancel(runId, reason)
+          if (authorization) runControl?.recordCancelOutcome({ authorization, runtime: 'runlog' })
+          return cancelled
+        } catch (error) {
+          if (authorization) runControl?.recordCancelFailure({ authorization })
+          throw error
+        }
+      },
     },
     startWorker: (): void => {
       const runtime = this.requireRunLogRuntime()
@@ -2036,6 +2054,43 @@ export class LocalMainspringGateway {
       if (authorization) runControl?.recordEnqueueFailure({ authorization })
       throw error
     }
+  }
+
+  private cancelCompatibilityRun(
+    sessionId: string,
+    runId: string,
+    reason?: string,
+    actor?: string,
+  ): void {
+    this.assertCompatibilityRunBinding(sessionId, runId)
+    const runControl = this.runControl()
+    const authorization = runControl?.authorizeCancel({
+      runId,
+      sessionId,
+      actor,
+      binding: { reason },
+    })
+    try {
+      this.runtime.storage.commandStore.cancelRun(sessionId, runId, reason)
+      if (authorization) runControl?.recordCancelOutcome({ authorization, runtime: 'compatibility' })
+    } catch (error) {
+      if (authorization) runControl?.recordCancelFailure({ authorization })
+      throw error
+    }
+  }
+
+  private assertCompatibilityRunBinding(sessionId: string, runId: string): void {
+    const session = this.runtime.storage.stateStore.getSession(sessionId)
+    if (!session) throw new Error(`Unknown session: ${sessionId}`)
+    const metadata = this.appState?.runs.get(runId)
+    if (metadata) {
+      if (metadata.sessionId !== sessionId) {
+        throw new Error(`Run ${runId} does not belong to the requested session.`)
+      }
+      return
+    }
+    const projection = this.listRuns(sessionId, session).find((candidate) => candidate.runId === runId)
+    if (!projection) throw new Error(`Unknown run: ${runId}`)
   }
 
   private persistRunMetadata(

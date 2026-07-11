@@ -19,6 +19,14 @@ export interface LocalGatewayApprovalResolutionAuthorization {
   decisionRecord: DecisionRecord
 }
 
+export interface LocalGatewayRunCancellationAuthorization {
+  runId: string
+  sessionId: string
+  actor: string
+  cancellationBindingHash: string
+  decision: DecisionRecord
+}
+
 export interface LocalGatewayRunExecutionEvidence {
   cellId?: string
   cellLeaseId?: string
@@ -132,6 +140,87 @@ export class GatewayRunControl {
       metadata: {
         decisionId: input.authorization.decision.decisionId,
         runBindingHash: input.authorization.runBindingHash,
+      },
+    })
+  }
+
+  authorizeCancel(input: {
+    runId: string
+    sessionId: string
+    actor?: string
+    binding: unknown
+  }): LocalGatewayRunCancellationAuthorization {
+    const runId = requiredText(input.runId, 'cancel run id')
+    const sessionId = requiredText(input.sessionId, 'cancel session id')
+    const cancellationBindingHash = hashApprovalInput(input.binding)
+    const decision = createHostDecisionRecord({
+      runId,
+      sessionId,
+      surface: 'run',
+      operation: 'run.cancel',
+      targetKey: runId,
+      state: 'allow',
+      reasons: ['Trusted gateway operator authorized run cancellation before lifecycle mutation.'],
+      permissionCategories: ['run', 'cancellation', 'operator-control-plane'],
+      input: {
+        runId,
+        sessionId,
+        cancellationBindingHash,
+      },
+      metadata: {
+        runId,
+        sessionId,
+        cancellationBindingHash,
+      },
+    })
+    const actor = actorFor(input.actor)
+    this.appState.auditEvents.create({
+      category: 'gateway',
+      action: 'run.cancel.authorized',
+      actor,
+      targetType: 'run',
+      targetId: runId,
+      runId,
+      sessionId,
+      metadata: { decisionRecord: decision },
+    })
+    return { runId, sessionId, actor, cancellationBindingHash, decision }
+  }
+
+  recordCancelOutcome(input: {
+    authorization: LocalGatewayRunCancellationAuthorization
+    runtime: 'compatibility' | 'runlog'
+  }): void {
+    this.appState.auditEvents.create({
+      category: 'gateway',
+      action: input.runtime === 'runlog' ? 'run.cancelled' : 'run.cancel.requested',
+      actor: input.authorization.actor,
+      targetType: 'run',
+      targetId: input.authorization.runId,
+      runId: input.authorization.runId,
+      sessionId: input.authorization.sessionId,
+      metadata: {
+        decisionId: input.authorization.decision.decisionId,
+        cancellationBindingHash: input.authorization.cancellationBindingHash,
+        runtime: input.runtime,
+      },
+    })
+  }
+
+  recordCancelFailure(input: {
+    authorization: LocalGatewayRunCancellationAuthorization
+  }): void {
+    this.appState.auditEvents.create({
+      category: 'gateway',
+      action: 'run.cancel.failed',
+      actor: input.authorization.actor,
+      targetType: 'run',
+      targetId: input.authorization.runId,
+      runId: input.authorization.runId,
+      sessionId: input.authorization.sessionId,
+      metadata: {
+        decisionId: input.authorization.decision.decisionId,
+        cancellationBindingHash: input.authorization.cancellationBindingHash,
       },
     })
   }

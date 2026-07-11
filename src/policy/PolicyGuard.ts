@@ -31,6 +31,7 @@ export type PolicyOperation =
   | 'marketplace.catalog.sync'
   | 'cron.trigger'
   | 'run.enqueue'
+  | 'run.cancel'
   | 'approval.resolve'
 
 export interface RuntimePolicyDefaults {

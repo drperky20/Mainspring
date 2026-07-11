@@ -3949,7 +3949,10 @@ describe('LocalGatewayHttpServer', () => {
       },
       approvalReceiptKey: 'gateway-runlog-cancel-route-key',
     })
-    const gateway = createLocalMainspringGateway({ runtime, runLog })
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
     const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
 
     const started = await server.start()
@@ -3962,6 +3965,7 @@ describe('LocalGatewayHttpServer', () => {
           input: 'Request an approval and then stop.',
           mode: 'chat',
           allowedTools: ['tool.reviewed'],
+          actor: 'browser-spoofed-run-operator',
         }),
       }).then((response) => response.json())
       const runId = startedRun.run.runId as string
@@ -3982,6 +3986,7 @@ describe('LocalGatewayHttpServer', () => {
         body: JSON.stringify({
           sessionId: session.record.sessionId,
           reason: 'operator stopped the run',
+          actor: 'browser-spoofed-cancel-operator',
         }),
       })
       expect(cancelled.status).toBe(202)
@@ -4008,9 +4013,21 @@ describe('LocalGatewayHttpServer', () => {
           }),
         ]),
       )
+      const gatewayEvents = appState.auditEvents.list({ category: 'gateway' })
+      expect(gatewayEvents.map((event) => event.action)).toEqual([
+        'run.enqueued.authorized',
+        'runlog.run.enqueued',
+        'run.cancel.authorized',
+        'run.cancelled',
+      ])
+      expect(gatewayEvents.every((event) => event.actor === 'local-gateway')).toBe(true)
+      expect(JSON.stringify(gatewayEvents)).not.toContain('browser-spoofed-run-operator')
+      expect(JSON.stringify(gatewayEvents)).not.toContain('browser-spoofed-cancel-operator')
+      expect(JSON.stringify(gatewayEvents)).not.toContain('operator stopped the run')
     } finally {
       await server.stop()
       runLog.close()
+      appState.close()
     }
   })
 

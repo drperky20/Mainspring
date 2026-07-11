@@ -35,7 +35,7 @@ Mainspring treats agents as untrusted workers.
 - unapprovable hard blocks for catastrophic shell, credential-disclosure, Git remote/hook mutation, approval-disabling, and network-to-shell patterns
 - RunLog cron/headless grant decisions before due runs are queued or failed
 - hash-only cron trigger authority before manual/due schedule cursor mutation or dispatch, with hosted-principal attribution
-- hash-only `run.enqueue` and `approval.resolve` authority before gateway run ingress or approval lifecycle mutation, with decision-linked outcome/failure rows and hosted-principal attribution
+- hash-only `run.enqueue`, `run.cancel`, and `approval.resolve` authority before gateway run ingress, cancellation, or approval lifecycle mutation, with fail-closed run/session binding, decision-linked outcome/failure rows, and hosted-principal attribution
 - local-agent security regression corpus for shell, filesystem, browser/fetch, memory, skill, bridge, and cron policy boundaries
 - repo-local red-team matrix that maps each tested or deferred failure class to evidence and remaining work
 - memory, skill, and local template provenance scanner with staged JSONL review records
