@@ -181,9 +181,14 @@ describe('RunLogMainspring SDK host', () => {
     const first = app.runs.start({ input: 'first', sessionId: 'session_discovery' })
     const second = app.runs.start({ input: 'second', sessionId: 'session_discovery' })
 
+    const expectedRunOrder = [first.record, second.record]
+      .sort((left, right) =>
+        right.createdAt.localeCompare(left.createdAt)
+        || right.runId.localeCompare(left.runId),
+      )
+      .map((run) => run.runId)
     expect(app.runs.list({ sessionId: 'session_discovery' }).map((run) => run.runId)).toEqual([
-      second.record.runId,
-      first.record.runId,
+      ...expectedRunOrder,
     ])
     const newestPage = app.runs.list({ sessionId: 'session_discovery', limit: 1 })
     const olderPage = app.runs.list({
