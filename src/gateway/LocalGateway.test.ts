@@ -2266,6 +2266,89 @@ describe('LocalMainspringGateway', () => {
     }
   }, 30_000)
 
+  it('bounds detailed history in aggregate snapshots while preserving indexed totals', () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-snapshot-history-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })
+
+    try {
+      const session = mainspring.sessions.create({
+        sessionId: 'gateway-snapshot-history-session',
+        workspace: { root: workspaceRoot },
+      })
+      for (let index = 0; index < 105; index += 1) {
+        const suffix = index.toString().padStart(3, '0')
+        const runId = `run_snapshot_history_${suffix}`
+        appState.projections.artifacts.create({
+          artifactId: `artifact_snapshot_history_${suffix}`,
+          runId,
+          sessionId: session.record.sessionId,
+          kind: 'file',
+          path: path.join(root, 'artifacts', `artifact-${index}.txt`),
+        })
+        appState.projections.usageLedger.create({
+          entryId: `usage_snapshot_history_${suffix}`,
+          runId,
+          sessionId: session.record.sessionId,
+          providerId: 'openrouter',
+          modelId: 'openrouter/free',
+          totalTokens: index,
+          estimatedCostUsd: 0,
+        })
+        appState.auditEvents.create({
+          eventId: `audit_snapshot_history_${suffix}`,
+          category: 'gateway',
+          action: 'snapshot.test',
+          actor: 'test',
+          targetType: 'run',
+          targetId: runId,
+        })
+        appState.toolCalls.upsert({
+          toolCallId: `tool_snapshot_history_${suffix}`,
+          runId,
+          sessionId: session.record.sessionId,
+          toolName: 'file.read',
+          status: 'completed',
+        })
+      }
+
+      const snapshot = gateway.snapshot()
+      expect(snapshot.appState.artifacts).toHaveLength(100)
+      expect(snapshot.appState.toolCalls).toHaveLength(100)
+      expect(snapshot.appState.usageLedger).toHaveLength(100)
+      expect(snapshot.appState.auditEvents).toHaveLength(100)
+      expect(snapshot.appState.historyCounts).toEqual({
+        artifacts: 105,
+        toolCalls: 105,
+        usageLedger: 105,
+        auditEvents: 105,
+      })
+      const consoleSnapshot = gatewaySnapshotToConsoleState(snapshot)
+      expect(consoleSnapshot.counts).toMatchObject({
+        artifacts: 105,
+        usageLedgerEntries: 105,
+        auditEvents: 105,
+      })
+      expect(consoleSnapshot.usageStatus?.breakdowns).toMatchObject({
+        providers: [expect.objectContaining({ id: 'openrouter', entries: 105 })],
+        models: [expect.objectContaining({ id: 'openrouter/free', entries: 105 })],
+      })
+      expect(snapshot.appState.artifacts[0]?.artifactId).toBe('artifact_snapshot_history_104')
+    } finally {
+      appState.close()
+    }
+  })
+
   it('discovers durable RunLog runs and projects their usage into the gateway ledger', async () => {
     const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
       'mainspring-gateway-runlog-usage-ledger-',

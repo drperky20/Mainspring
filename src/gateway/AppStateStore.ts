@@ -453,11 +453,13 @@ export interface CreateLocalGatewayUsageLedgerEntryInput {
 export interface LocalGatewayArtifactReadStore {
   get(artifactId: string): LocalGatewayArtifactRecord | null
   list(input?: LocalGatewayArtifactListInput): LocalGatewayArtifactRecord[]
+  count?(): number
 }
 
 export interface LocalGatewayUsageLedgerReadStore {
   get(entryId: string): LocalGatewayUsageLedgerEntryRecord | null
   list(input?: LocalGatewayUsageLedgerListInput): LocalGatewayUsageLedgerEntryRecord[]
+  count?(): number
 }
 
 /**
@@ -740,11 +742,18 @@ export interface LocalGatewayAppStateStore {
     create(input: CreateLocalGatewayAuditEventInput): LocalGatewayAuditEventRecord
     get(eventId: string): LocalGatewayAuditEventRecord | null
     list(input?: LocalGatewayAuditEventListInput): LocalGatewayAuditEventRecord[]
+    count?(): number
   }
   toolCalls: {
     upsert(input: UpsertLocalGatewayToolCallInput): LocalGatewayToolCallRecord
     get(toolCallId: string): LocalGatewayToolCallRecord | null
-    list(input?: { runId?: string; status?: LocalGatewayToolCallRecord['status'] }): LocalGatewayToolCallRecord[]
+    list(input?: {
+      runId?: string
+      status?: LocalGatewayToolCallRecord['status']
+      limit?: number
+      order?: 'asc' | 'desc'
+    }): LocalGatewayToolCallRecord[]
+    count?(): number
   }
   deploymentTargets: {
     create(input: CreateLocalGatewayDeploymentTargetInput): LocalGatewayDeploymentTargetRecord
@@ -2443,6 +2452,12 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
          ORDER BY created_at ${order}, artifact_id ${order}${limit}`,
       ).all(...params) as unknown[]).map(artifactFromRow)
     },
+    count: (): number => {
+      const row = this.db.prepare(
+        'SELECT COUNT(*) AS count FROM gateway_artifacts',
+      ).get() as { count?: number } | undefined
+      return typeof row?.count === 'number' ? row.count : 0
+    },
   }
 
   readonly usageLedger = {
@@ -2515,6 +2530,12 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
         `SELECT * FROM gateway_usage_ledger_entries${where}
          ORDER BY created_at ${order}, entry_id ${order}${limit}`,
       ).all(...params) as unknown[]).map(usageLedgerEntryFromRow)
+    },
+    count: (): number => {
+      const row = this.db.prepare(
+        'SELECT COUNT(*) AS count FROM gateway_usage_ledger_entries',
+      ).get() as { count?: number } | undefined
+      return typeof row?.count === 'number' ? row.count : 0
     },
   }
 
@@ -2950,6 +2971,12 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
          ORDER BY created_at ${order}, event_id ${order}${limit}`,
       ).all(...params) as unknown[]).map(auditEventFromRow)
     },
+    count: (): number => {
+      const row = this.db.prepare(
+        'SELECT COUNT(*) AS count FROM gateway_audit_events',
+      ).get() as { count?: number } | undefined
+      return typeof row?.count === 'number' ? row.count : 0
+    },
   }
 
   /**
@@ -3024,31 +3051,36 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
       const row = this.db.prepare('SELECT * FROM gateway_tool_calls WHERE tool_call_id = ?').get(toolCallId)
       return row ? toolCallFromRow(row) : null
     },
-    list: (input: { runId?: string; status?: LocalGatewayToolCallRecord['status'] } = {}) => {
-      if (input.runId && input.status) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_tool_calls
-           WHERE run_id = ? AND status = ?
-           ORDER BY created_at ASC, tool_call_id ASC`,
-        ).all(input.runId, input.status) as unknown[]).map(toolCallFromRow)
-      }
+    list: (input: {
+      runId?: string
+      status?: LocalGatewayToolCallRecord['status']
+      limit?: number
+      order?: 'asc' | 'desc'
+    } = {}) => {
+      const clauses: string[] = []
+      const params: unknown[] = []
       if (input.runId) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_tool_calls
-           WHERE run_id = ?
-           ORDER BY created_at ASC, tool_call_id ASC`,
-        ).all(input.runId) as unknown[]).map(toolCallFromRow)
+        clauses.push('run_id = ?')
+        params.push(input.runId)
       }
       if (input.status) {
-        return (this.db.prepare(
-          `SELECT * FROM gateway_tool_calls
-           WHERE status = ?
-           ORDER BY created_at ASC, tool_call_id ASC`,
-        ).all(input.status) as unknown[]).map(toolCallFromRow)
+        clauses.push('status = ?')
+        params.push(input.status)
       }
+      const order = input.order === 'desc' ? 'DESC' : 'ASC'
+      const limit = input.limit === undefined ? '' : ' LIMIT ?'
+      if (input.limit !== undefined) params.push(input.limit)
+      const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : ''
       return (this.db.prepare(
-        'SELECT * FROM gateway_tool_calls ORDER BY created_at ASC, tool_call_id ASC',
-      ).all() as unknown[]).map(toolCallFromRow)
+        `SELECT * FROM gateway_tool_calls${where}
+         ORDER BY created_at ${order}, tool_call_id ${order}${limit}`,
+      ).all(...params) as unknown[]).map(toolCallFromRow)
+    },
+    count: (): number => {
+      const row = this.db.prepare(
+        'SELECT COUNT(*) AS count FROM gateway_tool_calls',
+      ).get() as { count?: number } | undefined
+      return typeof row?.count === 'number' ? row.count : 0
     },
   }
 

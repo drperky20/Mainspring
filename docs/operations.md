@@ -51,6 +51,10 @@ silently diverge; pnpm `9.15.4` is activated explicitly before every frozen inst
 Hosted workflows use the current Node 24-compatible `actions/checkout@v7`,
 `actions/setup-node@v6`, and `actions/upload-artifact@v7` majors; the local workflow
 verifier checks those action versions so action-runtime drift fails before a push.
+Aggregate gateway snapshots retain a bounded newest-first tail of artifact, tool-call,
+usage, and audit rows. Exact history counts and provider/model usage rollups remain in
+the snapshot for operator metrics; the Activity detail routes continue to provide the
+full cursor-paginated history when a view is opened.
 The Windows verify leg preflights `Microsoft.PowerShell.Security` and pins the
 managed-secret integration to `pwsh`; local Windows hosts without PowerShell Core
 fall back to Windows PowerShell 5.1 through the runtime selector.

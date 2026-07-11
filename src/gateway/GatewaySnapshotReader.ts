@@ -28,6 +28,13 @@ import type {
   LocalGatewayUsageStatus,
 } from './LocalGateway.js'
 
+/**
+ * Broad snapshots are transport snapshots, not history APIs. Detailed rows
+ * remain available through their cursor-paginated routes; keep only a small
+ * newest-first tail here so refresh cost cannot grow with ledger history.
+ */
+export const GATEWAY_SNAPSHOT_HISTORY_LIMIT = 100
+
 export function projectLocalGatewayRunLogRun(projection: RunLogRunProjection): LocalGatewayRunLogRunProjection {
   return {
     runId: projection.run.runId,
@@ -102,6 +109,22 @@ export class GatewaySnapshotReader {
     this.options.syncDerivedAppState()
     const appState = this.options.appState
     const runs = sessions.flatMap((session) => this.options.listRuns(session.sessionId, session))
+    const artifacts = appState?.artifacts.list({
+      order: 'desc',
+      limit: GATEWAY_SNAPSHOT_HISTORY_LIMIT,
+    }) ?? []
+    const toolCalls = appState?.toolCalls.list({
+      order: 'desc',
+      limit: GATEWAY_SNAPSHOT_HISTORY_LIMIT,
+    }) ?? []
+    const usageLedger = appState?.usageLedger.list({
+      order: 'desc',
+      limit: GATEWAY_SNAPSHOT_HISTORY_LIMIT,
+    }) ?? []
+    const auditEvents = appState?.auditEvents.list({
+      order: 'desc',
+      limit: GATEWAY_SNAPSHOT_HISTORY_LIMIT,
+    }) ?? []
     return {
       generatedAt: new Date().toISOString(),
       health: this.options.runtime.health(),
@@ -113,8 +136,8 @@ export class GatewaySnapshotReader {
         providerProfiles: appState?.providerProfiles.list() ?? [],
         runs: appState?.runs.list() ?? [],
         approvals: appState?.approvals.list() ?? [],
-        artifacts: appState?.artifacts.list() ?? [],
-        toolCalls: appState?.toolCalls.list() ?? [],
+        artifacts,
+        toolCalls,
         deploymentTargets: appState?.deploymentTargets.list() ?? [],
         deploymentRuns: appState?.deploymentRuns.list() ?? [],
         cells: appState?.cells.list() ?? [],
@@ -122,8 +145,14 @@ export class GatewaySnapshotReader {
         cellSnapshots: appState?.cellSnapshots.list() ?? [],
         cronSchedules: appState?.cronSchedules.list() ?? [],
         budgets: appState?.budgets.list() ?? [],
-        usageLedger: appState?.usageLedger.list() ?? [],
-        auditEvents: appState?.auditEvents.list() ?? [],
+        usageLedger,
+        auditEvents,
+        historyCounts: {
+          artifacts: appState?.artifacts.count?.() ?? artifacts.length,
+          toolCalls: appState?.toolCalls.count?.() ?? toolCalls.length,
+          usageLedger: appState?.usageLedger.count?.() ?? usageLedger.length,
+          auditEvents: appState?.auditEvents.count?.() ?? auditEvents.length,
+        },
       },
       sessions,
       runs,

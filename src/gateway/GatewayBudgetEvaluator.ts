@@ -10,6 +10,7 @@ import type {
 } from './AppStateStore.js'
 import type {
   LocalGatewayBudgetEvaluation,
+  LocalGatewayUsageBreakdown,
   LocalGatewayUsageRollup,
   LocalGatewayUsageStatus,
 } from './LocalGateway.js'
@@ -28,6 +29,38 @@ function workspaceIdFor(entry: LocalGatewayUsageLedgerEntryRecord, context: Pick
 
 function rollup(scopeType: LocalGatewayUsageRollup['scopeType'], scopeId: string, scopeLabel: string, entries: LocalGatewayUsageLedgerEntryRecord[]): LocalGatewayUsageRollup {
   return { scopeType, scopeId, scopeLabel, summary: summarizeUsageLedger(entries) }
+}
+
+function breakdowns(
+  entries: readonly LocalGatewayUsageLedgerEntryRecord[],
+  field: 'providerId' | 'modelId',
+): LocalGatewayUsageBreakdown[] {
+  const groups = new Map<string, LocalGatewayUsageBreakdown>()
+  for (const entry of entries) {
+    const id = entry[field] ?? 'unassigned'
+    const current = groups.get(id) ?? {
+      id,
+      label: id,
+      entries: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      estimatedCostUsd: 0,
+      unpricedEntries: 0,
+    }
+    current.entries += 1
+    current.inputTokens += entry.inputTokens ?? 0
+    current.outputTokens += entry.outputTokens ?? 0
+    current.totalTokens += entry.totalTokens ?? (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0)
+    current.estimatedCostUsd += entry.estimatedCostUsd ?? 0
+    if (typeof entry.estimatedCostUsd !== 'number') current.unpricedEntries += 1
+    groups.set(id, current)
+  }
+  return [...groups.values()].sort((left, right) =>
+    right.estimatedCostUsd - left.estimatedCostUsd
+    || right.totalTokens - left.totalTokens
+    || left.label.localeCompare(right.label),
+  )
 }
 
 /** Read-only usage and budget derivation. It never writes authority or audit rows. */
@@ -71,6 +104,10 @@ export class GatewayBudgetEvaluator {
       unpricedEntries: total.summary.unpricedEntries,
       pricedEntries: total.summary.pricedEntries,
       estimatedCostUsd: total.summary.estimatedCostUsd,
+      breakdowns: {
+        providers: breakdowns(context.usageEntries, 'providerId'),
+        models: breakdowns(context.usageEntries, 'modelId'),
+      },
     }
   }
 

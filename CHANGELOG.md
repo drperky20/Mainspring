@@ -16,6 +16,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Updated hosted CI actions to the current Node 24-compatible checkout, setup-node,
   and artifact-upload majors, with the repository workflow verifier enforcing the
   same versions locally and in CI.
+- Bounded aggregate gateway snapshots to a newest-first history tail while retaining
+  indexed artifact/tool/usage/audit totals and provider/model usage breakdowns for
+  operator metrics; detailed history remains cursor-paginated.
 
 ### Added
 - `GatewayBudgetEvaluator` now owns read-only budget scope matching, usage rollups,

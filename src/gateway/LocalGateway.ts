@@ -458,6 +458,17 @@ export interface LocalGatewayUsageRollup {
   summary: UsageLedgerSummary
 }
 
+export interface LocalGatewayUsageBreakdown {
+  id: string
+  label: string
+  entries: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  estimatedCostUsd: number
+  unpricedEntries: number
+}
+
 export interface LocalGatewayUsageStatus {
   total: LocalGatewayUsageRollup
   clients: LocalGatewayUsageRollup[]
@@ -466,6 +477,10 @@ export interface LocalGatewayUsageStatus {
   unpricedEntries: number
   pricedEntries: number
   estimatedCostUsd: number
+  breakdowns?: {
+    providers: LocalGatewayUsageBreakdown[]
+    models: LocalGatewayUsageBreakdown[]
+  }
 }
 
 function runtimeBudgetPolicyFromEvaluations(
@@ -564,6 +579,12 @@ export interface LocalGatewaySnapshot {
     budgets?: LocalGatewayBudgetRecord[]
     usageLedger: LocalGatewayUsageLedgerEntryRecord[]
     auditEvents: LocalGatewayAuditEventRecord[]
+    historyCounts?: {
+      artifacts: number
+      toolCalls: number
+      usageLedger: number
+      auditEvents: number
+    }
   }
   sessions: LocalGatewaySessionProjection[]
   runs: LocalGatewayRunProjection[]

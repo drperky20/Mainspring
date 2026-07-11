@@ -416,9 +416,10 @@ export function projectConsoleDashboard(
     providerReady,
     providerState,
     counts,
-    artifactCount: snapshot.artifacts.length,
-    usageEntryCount: snapshot.usageLedger.length,
-    estimatedCostUsd: sumEstimatedCost(snapshot.usageLedger),
+    artifactCount: snapshot.counts.artifacts,
+    usageEntryCount: snapshot.counts.usageLedgerEntries,
+    estimatedCostUsd: snapshot.usageStatus?.total.summary.estimatedCostUsd
+      ?? sumEstimatedCost(snapshot.usageLedger),
     providers,
     clients,
     clientDetails,

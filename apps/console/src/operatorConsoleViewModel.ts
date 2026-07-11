@@ -228,7 +228,7 @@ export function buildOperatorConsoleViewModel(
       activeSessions: snapshot.health.activeSessions,
       activeRuns: activeRuns.length,
       pendingApprovals: pendingApprovals.length,
-      artifacts: snapshot.artifacts.length,
+       artifacts: snapshot.counts.artifacts,
     },
     runs,
     activeRuns,
@@ -452,8 +452,8 @@ function buildUsageView(snapshot: ConsoleGatewaySnapshot): OperatorConsoleViewMo
 
   return {
     ...total,
-    providers: aggregateUsage(snapshot, 'providerId'),
-    models: aggregateUsage(snapshot, 'modelId'),
+    providers: snapshot.usageStatus?.breakdowns?.providers ?? aggregateUsage(snapshot, 'providerId'),
+    models: snapshot.usageStatus?.breakdowns?.models ?? aggregateUsage(snapshot, 'modelId'),
   }
 }
 

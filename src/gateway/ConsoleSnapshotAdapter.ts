@@ -21,6 +21,7 @@ import type {
   LocalGatewayCronStatus,
   LocalGatewayDeploymentExecutionResult,
   LocalGatewayDeploymentPlan,
+  LocalGatewayUsageBreakdown,
   LocalGatewayUsageRollup,
   LocalGatewayUsageStatus,
   LocalGatewayRunProjection,
@@ -584,6 +585,17 @@ export interface ConsoleGatewayUsageRollup {
   summary: ConsoleGatewayUsageSummary
 }
 
+export interface ConsoleGatewayUsageBreakdown {
+  id: string
+  label: string
+  entries: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  estimatedCostUsd: number
+  unpricedEntries: number
+}
+
 export interface ConsoleGatewayUsageStatus {
   total: ConsoleGatewayUsageRollup
   clients: ConsoleGatewayUsageRollup[]
@@ -592,6 +604,10 @@ export interface ConsoleGatewayUsageStatus {
   unpricedEntries: number
   pricedEntries: number
   estimatedCostUsd: number
+  breakdowns?: {
+    providers: ConsoleGatewayUsageBreakdown[]
+    models: ConsoleGatewayUsageBreakdown[]
+  }
 }
 
 export interface ConsoleGatewayBudgetStatus {
@@ -725,6 +741,7 @@ export function gatewaySnapshotToConsoleState(
   const usageLedger = snapshot.appState.usageLedger.map(consoleUsageLedgerEntry)
   const auditEvents = snapshot.appState.auditEvents.map(consoleAuditEvent)
   const memoryEntries = consoleMemoryEntries(snapshot)
+  const historyCounts = snapshot.appState.historyCounts
 
   return {
     generatedAt: snapshot.generatedAt,
@@ -743,11 +760,11 @@ export function gatewaySnapshotToConsoleState(
       sessions: sessions.length,
       runs: runs.length,
       storedApprovals: approvalMetadata.length,
-      artifacts: artifacts.length,
+      artifacts: historyCounts?.artifacts ?? artifacts.length,
       cronSchedules: cronSchedules.length,
       budgets: budgets.length,
-      usageLedgerEntries: usageLedger.length,
-      auditEvents: auditEvents.length,
+      usageLedgerEntries: historyCounts?.usageLedger ?? usageLedger.length,
+      auditEvents: historyCounts?.auditEvents ?? auditEvents.length,
       memoryEntries: memoryEntries.length,
       pendingApprovals: approvals.filter((approval) => approval.status === 'pending').length,
       ...(runLog
@@ -1707,6 +1724,27 @@ export function consoleUsageStatus(
     unpricedEntries: status.unpricedEntries,
     pricedEntries: status.pricedEntries,
     estimatedCostUsd: status.estimatedCostUsd,
+    ...(status.breakdowns
+      ? {
+          breakdowns: {
+            providers: status.breakdowns.providers.map(consoleUsageBreakdown),
+            models: status.breakdowns.models.map(consoleUsageBreakdown),
+          },
+        }
+      : {}),
+  }
+}
+
+function consoleUsageBreakdown(record: LocalGatewayUsageBreakdown): ConsoleGatewayUsageBreakdown {
+  return {
+    id: browserSafePreviewText(record.id),
+    label: browserSafePreviewText(record.label),
+    entries: record.entries,
+    inputTokens: record.inputTokens,
+    outputTokens: record.outputTokens,
+    totalTokens: record.totalTokens,
+    estimatedCostUsd: record.estimatedCostUsd,
+    unpricedEntries: record.unpricedEntries,
   }
 }
 
