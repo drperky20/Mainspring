@@ -80,12 +80,22 @@ test.describe('operator console', () => {
 
     await page.getByRole('button', { name: 'Activity', exact: true }).click()
     const activityNavigation = page.getByRole('navigation', { name: 'Activity views' })
-    for (const name of ['Runs', 'Approvals', 'Usage', 'Artifacts', 'Audit', 'Memory']) {
+    for (const name of ['Runs', 'Tools', 'Approvals', 'Usage', 'Artifacts', 'Audit', 'Memory']) {
       await expect(activityNavigation.getByRole('button', { name, exact: true })).toBeVisible()
     }
     await expect.poll(() => page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
     )).toBe(false)
+
+    const toolHistory = page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === '/runlog/tool-calls'
+        && url.searchParams.get('limit') === '25'
+        && response.status() === 200
+    })
+    await page.getByRole('button', { name: 'Tools', exact: true }).click()
+    await toolHistory
+    await expect(page.getByRole('heading', { name: 'Tool calls', exact: true })).toBeVisible()
 
     await page.getByRole('button', { name: 'Memory', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Memory', exact: true })).toBeVisible()

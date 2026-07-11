@@ -2,6 +2,7 @@ import type {
   ConsoleExecutionBackendStatus,
   ConsoleGatewayRunEvent,
   ConsoleGatewayRunLogRun,
+  ConsoleGatewayRunLogToolCall,
   ConsoleGatewaySnapshot,
 } from 'mainspring/gateway'
 import {
@@ -95,6 +96,8 @@ export type GatewayArtifactHistoryItem = ConsoleGatewaySnapshot['artifacts'][num
 export type GatewayAuditHistoryItem = ConsoleGatewaySnapshot['auditEvents'][number]
 
 export type GatewayMemoryHistoryItem = ConsoleGatewaySnapshot['memoryEntries'][number]
+
+export type GatewayRunLogToolCallHistoryItem = ConsoleGatewayRunLogToolCall
 
 export interface LocalGatewayClient {
   health(input?: { signal?: AbortSignal }): Promise<{
@@ -539,6 +542,14 @@ export interface LocalGatewayClient {
     runs: ConsoleGatewayRunLogRun[]
     nextCursor?: string
   }>
+  runLogToolCallHistory(input?: {
+    cursor?: string
+    limit?: number
+    signal?: AbortSignal
+  }): Promise<{
+    toolCalls: GatewayRunLogToolCallHistoryItem[]
+    nextCursor?: string
+  }>
   runLogTrace(input: {
     runId: string
     cursor?: string
@@ -905,6 +916,14 @@ export function createLocalGatewayClient(
     runLogRuns: (input = {}) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/runlog/runs${queryString({
         sessionId: input.sessionId,
+        cursor: input.cursor,
+        limit: input.limit === undefined ? undefined : String(input.limit),
+      })}`, {
+        headers: authHeaders(),
+        ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    runLogToolCallHistory: (input = {}) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/runlog/tool-calls${queryString({
         cursor: input.cursor,
         limit: input.limit === undefined ? undefined : String(input.limit),
       })}`, {

@@ -93,6 +93,7 @@ export type RunLogEventType =
   | 'assistant.delta'
   | 'assistant.result'
   | 'tool.call.requested'
+  | 'tool.call.updated'
   | 'tool.call.completed'
   | 'tool.call.failed'
   | 'tool.call.blocked'
@@ -246,8 +247,48 @@ export interface RunLogRunSummary {
   updatedAt: string
 }
 
+/**
+ * The latest durable state for one canonical tool call. It intentionally
+ * excludes tool input, output, policy payloads, and error details so hosts can
+ * build a global operational read model without duplicating sensitive event
+ * payloads.
+ */
+export type RunLogToolCallStatus =
+  | 'requested'
+  | 'updated'
+  | 'completed'
+  | 'failed'
+  | 'blocked'
+
+export interface RunLogToolCallSummary {
+  runId: string
+  sessionId: string
+  agentId: string
+  workspaceId?: string
+  toolCallId: string
+  toolName?: string
+  status: RunLogToolCallStatus
+  createdAt: string
+  updatedAt: string
+  latestSeq: number
+}
+
+/** Stable reverse-chronological cursor for durable tool-call summaries. */
+export interface RunLogToolCallListCursor {
+  latestSeq: number
+}
+
+export interface ListRunLogToolCallSummariesInput {
+  runId?: string
+  sessionId?: string
+  workspaceId?: string
+  status?: RunLogToolCallStatus | RunLogToolCallStatus[]
+  before?: RunLogToolCallListCursor
+  limit?: number
+}
+
 export interface RunLogProjectionCatchupResult {
-  projectionName: 'run-summary-v1'
+  projectionName: 'run-summary-v1' | 'tool-call-summary-v1'
   processedEvents: number
   lastSeq: number
 }
@@ -396,6 +437,8 @@ export interface RunLogStore {
   latestEventSeq(runId: string): number
   catchUpRunProjection(input?: { limit?: number }): RunLogProjectionCatchupResult
   getRunProjectionSummary(runId: string): RunLogRunSummary | null
+  catchUpRunToolCallProjection(input?: { limit?: number }): RunLogProjectionCatchupResult
+  listRunToolCallSummaries(input?: ListRunLogToolCallSummariesInput): RunLogToolCallSummary[]
   appendCheckpoint(input: Omit<RunCheckpoint, 'checkpointId' | 'timestamp'>): RunCheckpoint
   appendCheckpointWithEvent(
     input: Omit<RunCheckpoint, 'checkpointId' | 'timestamp' | 'seq'>,

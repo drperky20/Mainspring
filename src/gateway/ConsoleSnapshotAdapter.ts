@@ -4,7 +4,10 @@ import type { RunEvent, RuntimeHealth } from '../contracts/runtime.js'
 import type { RunRecord } from '../contracts/runtime.js'
 import type { RunLogCronPolicyMetadata } from '../capabilities/cron/RunLogCron.js'
 import type { ProvenanceReviewItem } from '../provenance/ProvenanceReview.js'
-import type { RunRecord as RunLogRunRecord } from '../core/types.js'
+import type {
+  RunRecord as RunLogRunRecord,
+  RunLogToolCallSummary,
+} from '../core/types.js'
 import {
   listStoredMemoryEntries,
   type MemoryRecord,
@@ -155,7 +158,7 @@ export interface ConsoleGatewayRunLogRun {
   toolCalls: Array<{
     toolCallId?: string
     name?: string
-    status: 'requested' | 'completed' | 'failed' | 'blocked'
+    status: 'requested' | 'updated' | 'completed' | 'failed' | 'blocked'
   }>
   checkpoints: Array<{
     eventId: string
@@ -226,6 +229,23 @@ export interface ConsoleGatewayToolCall {
   status: LocalGatewayToolCallRecord['status']
   agentId?: string
   workspaceId?: string
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * Browser-safe canonical RunLog tool-call history. Its identifier is an opaque
+ * scoped digest rather than a provider-supplied tool call ID.
+ */
+export interface ConsoleGatewayRunLogToolCall {
+  source: 'runlog'
+  toolCallId: string
+  runId: string
+  sessionId: string
+  agentId: string
+  workspaceId?: string
+  toolName?: string
+  status: RunLogToolCallSummary['status']
   createdAt: string
   updatedAt: string
 }
@@ -1136,6 +1156,26 @@ function consoleToolCall(record: LocalGatewayToolCallRecord): ConsoleGatewayTool
     status: record.status,
     ...(record.agentId ? { agentId: record.agentId } : {}),
     ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  }
+}
+
+export function consoleRunLogToolCall(
+  record: RunLogToolCallSummary,
+): ConsoleGatewayRunLogToolCall {
+  return {
+    source: 'runlog',
+    toolCallId: `toolcall_${createHash('sha256')
+      .update(`runlog-tool-call-v1\u0000${record.runId}\u0000${record.toolCallId}`)
+      .digest('base64url')
+      .slice(0, 24)}`,
+    runId: record.runId,
+    sessionId: record.sessionId,
+    agentId: browserSafePreviewText(record.agentId),
+    ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+    ...(record.toolName ? { toolName: browserSafePreviewText(record.toolName) } : {}),
+    status: record.status,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   }

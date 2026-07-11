@@ -146,6 +146,46 @@ describe('createLocalGatewayClient', () => {
     })
   })
 
+  it('requests canonical RunLog tool-call history with its opaque cursor', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe(
+        'http://127.0.0.1:8787/runlog/tool-calls?cursor=tool_cursor_1&limit=25',
+      )
+      expect(init?.headers).toEqual({ authorization: 'Bearer hosted_token_1' })
+      return new Response(
+        JSON.stringify({
+          toolCalls: [{
+            source: 'runlog',
+            toolCallId: 'toolcall_opaque_1',
+            runId: 'run_tool_history_1',
+            sessionId: 'session_tool_history_1',
+            agentId: 'agent_tool_history',
+            toolName: 'file.write',
+            status: 'completed',
+            createdAt: '2026-07-10T00:00:00.000Z',
+            updatedAt: '2026-07-10T00:00:01.000Z',
+          }],
+          nextCursor: 'tool_cursor_2',
+        }),
+        { status: 200 },
+      )
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+    client.setSessionToken('hosted_token_1')
+
+    await expect(client.runLogToolCallHistory({
+      cursor: 'tool_cursor_1',
+      limit: 25,
+    })).resolves.toMatchObject({
+      toolCalls: [expect.objectContaining({
+        source: 'runlog',
+        toolCallId: 'toolcall_opaque_1',
+        status: 'completed',
+      })],
+      nextCursor: 'tool_cursor_2',
+    })
+  })
+
   it('requests bounded usage history with an opaque cursor', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('http://127.0.0.1:8787/usage-history?cursor=usage_cursor_1&limit=25')

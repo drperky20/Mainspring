@@ -12,6 +12,7 @@ import {
   publicRunLogEvent,
   readRunLogTracePage,
 } from '../RunLogActivityPage.js'
+import { listRunLogToolCallHistoryPage } from '../RunLogToolCallHistoryPage.js'
 import { listArtifactHistoryPage } from '../ArtifactHistoryPage.js'
 import { listAuditHistoryPage } from '../AuditHistoryPage.js'
 import {
@@ -58,6 +59,7 @@ import type {
   RunListCursor,
   RunLogEvent,
   RunRecord as RunLogRunRecord,
+  RunLogToolCallListCursor,
 } from '../../core/types.js'
 import type { RunLogRunProjection } from '../../hosts/runlog/RunLogProjection.js'
 import { GatewayHttpError, asGatewayHttpError } from './errors.js'
@@ -152,6 +154,8 @@ const DEFAULT_RUNLOG_ACTIVITY_PAGE_LIMIT = 25
 const MAX_RUNLOG_ACTIVITY_PAGE_LIMIT = 100
 const DEFAULT_RUNLOG_TRACE_PAGE_LIMIT = 80
 const MAX_RUNLOG_TRACE_PAGE_LIMIT = 200
+const DEFAULT_RUNLOG_TOOL_CALL_HISTORY_PAGE_LIMIT = 25
+const MAX_RUNLOG_TOOL_CALL_HISTORY_PAGE_LIMIT = 100
 const DEFAULT_APPROVAL_HISTORY_PAGE_LIMIT = 25
 const MAX_APPROVAL_HISTORY_PAGE_LIMIT = 100
 const DEFAULT_COMPATIBILITY_RUN_PAGE_LIMIT = 25
@@ -972,6 +976,11 @@ export class LocalGatewayHttpServer {
         return
       }
 
+      if (request.method === 'GET' && path === '/runlog/tool-calls') {
+        this.writeRunLogToolCallHistoryPage(response, url)
+        return
+      }
+
       if (request.method === 'GET' && path === '/compatibility/runs') {
         this.writeCompatibilityRunPage(response, url)
         return
@@ -1613,6 +1622,29 @@ export class LocalGatewayHttpServer {
   }
 
   /**
+   * Bounded canonical tool-call history. This route is intentionally separate
+   * from the mailbox compatibility tool-call inventory, which cannot represent
+   * all production RunLog calls.
+   */
+  private writeRunLogToolCallHistoryPage(response: ServerResponse, url: URL): void {
+    if (!this.options.gateway.runLog.available()) {
+      throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
+    }
+    const limit = runLogToolCallHistoryPageLimit(url.searchParams.get('limit'))
+    const before = parseRunLogToolCallHistoryCursor(url.searchParams.get('cursor'))
+    const page = listRunLogToolCallHistoryPage(this.options.gateway.runLog.toolCalls, {
+      ...(before ? { before } : {}),
+      limit,
+    })
+    this.writeJson(response, 200, sanitizeGatewayResponse({
+      toolCalls: page.toolCalls,
+      ...(page.nextCursor
+        ? { nextCursor: encodeRunLogToolCallHistoryCursor(page.nextCursor) }
+        : {}),
+    }))
+  }
+
+  /**
    * Cursor-paginated compatibility history. It queries only metadata-backed
    * compatibility rows and the sessions represented by this page; RunLog rows
    * remain on their canonical activity route.
@@ -1999,6 +2031,22 @@ function runLogTracePageLimit(value: string | null): number {
   return parsed
 }
 
+function runLogToolCallHistoryPageLimit(value: string | null): number {
+  if (!value) return DEFAULT_RUNLOG_TOOL_CALL_HISTORY_PAGE_LIMIT
+  const parsed = Number(value)
+  if (
+    !Number.isInteger(parsed)
+    || parsed < 1
+    || parsed > MAX_RUNLOG_TOOL_CALL_HISTORY_PAGE_LIMIT
+  ) {
+    throw new GatewayHttpError(
+      400,
+      `RunLog tool-call history limit must be an integer from 1 to ${MAX_RUNLOG_TOOL_CALL_HISTORY_PAGE_LIMIT}.`,
+    )
+  }
+  return parsed
+}
+
 function approvalHistoryPageLimit(value: string | null): number {
   if (!value) return DEFAULT_APPROVAL_HISTORY_PAGE_LIMIT
   const parsed = Number(value)
@@ -2097,6 +2145,26 @@ function parseRunLogActivityCursor(value: string | null): RunListCursor | undefi
     return { createdAt, runId }
   } catch {
     throw new GatewayHttpError(400, 'RunLog activity cursor is invalid.')
+  }
+}
+
+function encodeRunLogToolCallHistoryCursor(cursor: RunLogToolCallListCursor): string {
+  return Buffer.from(JSON.stringify({ latestSeq: cursor.latestSeq }), 'utf8').toString('base64url')
+}
+
+function parseRunLogToolCallHistoryCursor(value: string | null): RunLogToolCallListCursor | undefined {
+  if (!value) return undefined
+  if (value.length > 128) throw new GatewayHttpError(400, 'RunLog tool-call history cursor is invalid.')
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8')
+    const parsed = JSON.parse(decoded) as Record<string, unknown>
+    const latestSeq = parsed.latestSeq
+    if (!Number.isSafeInteger(latestSeq) || (latestSeq as number) < 1) {
+      throw new Error('invalid cursor sequence')
+    }
+    return { latestSeq: latestSeq as number }
+  } catch {
+    throw new GatewayHttpError(400, 'RunLog tool-call history cursor is invalid.')
   }
 }
 

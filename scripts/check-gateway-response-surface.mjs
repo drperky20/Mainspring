@@ -5,6 +5,7 @@ import {
   createLocalGatewayServer,
   createLocalMainspringGateway,
   createMainspring,
+  createRunLogMainspring,
   createSqliteLocalGatewayAppStateStore,
   EchoProvider,
 } from '../dist/index.js'
@@ -69,9 +70,20 @@ async function main() {
     provider: new EchoProvider(),
     pollIntervalMs: 10,
   })
+  const runLog = createRunLogMainspring({
+    rootPath: path.join(root, 'runlog'),
+    workspaceRoot: path.join(root, 'runlog-workspaces'),
+    provider: new EchoProvider(),
+    agent: {
+      agentId: 'browser_surface_tool_history_agent',
+      instructions: 'Keep browser-surface tool history compact.',
+      capabilities: ['provider', 'tools'],
+    },
+  })
   const gateway = createLocalMainspringGateway({
     runtime,
     appState,
+    runLog,
     marketplace: { repoRoot: process.cwd() },
   })
   const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
@@ -99,6 +111,48 @@ async function main() {
 
     const sessionId = createdClient.session.sessionId
     const workspaceId = createdClient.workspace.workspaceId
+
+    const runLogAgent = runLog.store.getAgent('browser_surface_tool_history_agent')
+    assert(runLogAgent, 'RunLog tool-history agent was not initialized')
+    const toolHistoryRun = runLog.store.createQueuedRun({
+      agentId: runLogAgent.agentId,
+      sessionId,
+      input: 'private browser-surface tool history input',
+      workspaceId,
+      workspaceRoot: clientWorkspaceRoot,
+    }, runLogAgent)
+    runLog.store.appendEvent({
+      runId: toolHistoryRun.runId,
+      type: 'tool.call.requested',
+      payload: {
+        toolCallId: 'browser-surface-provider-call filePath=/srv/browser-surface-hidden/tool-input.txt',
+        name: 'file.write secretRef=env:OPENAI_API_KEY',
+        input: { browserSurfaceToolInput: 'private-input-sentinel' },
+      },
+    })
+    runLog.store.appendEvent({
+      runId: toolHistoryRun.runId,
+      type: 'tool.call.completed',
+      payload: {
+        toolCallId: 'browser-surface-provider-call filePath=/srv/browser-surface-hidden/tool-input.txt',
+        name: 'file.write secretRef=env:OPENAI_API_KEY',
+        output: { browserSurfaceToolOutput: 'private-output-sentinel' },
+      },
+    })
+    const toolHistory = await requestJson(started.url + '/runlog/tool-calls?limit=1')
+    assert(
+      /^toolcall_[a-zA-Z0-9_-]{24}$/.test(toolHistory.toolCalls?.[0]?.toolCallId ?? ''),
+      'canonical tool-call history did not expose an opaque browser row ID',
+    )
+    assert(toolHistory.toolCalls?.[0]?.source === 'runlog', 'tool history did not identify canonical source')
+    assertNoBrowserLeak('canonical tool-call history response', toolHistory, [
+      root.replaceAll('\\', '\\\\'),
+      'browser-surface-provider-call',
+      'browserSurfaceToolInput',
+      'browserSurfaceToolOutput',
+      'private-input-sentinel',
+      'private-output-sentinel',
+    ])
 
     const unsafeArtifactAccess = await fetch(`${started.url}/auth/browser-access`, {
       method: 'POST',
@@ -404,7 +458,7 @@ async function main() {
     assert(startedRun.run?.input === undefined, 'run start response exposed raw input')
     assertNoBrowserLeak('run start response', startedRun)
     await waitFor(async () => {
-      const runs = await requestJson(`${started.url}/runs?sessionId=${encodeURIComponent(sessionId)}`)
+      const runs = await requestJson(`${started.url}/runlog/runs?sessionId=${encodeURIComponent(sessionId)}`)
       return runs.runs?.find((run) => run.runId === startedRun.run.runId && run.status === 'completed')
     }, 'browser surface run completion')
     const runEvents = await requestJson(
@@ -466,6 +520,7 @@ async function main() {
     console.log('MAINSPRING_GATEWAY_RESPONSE_SURFACE_CHECK_OK')
   } finally {
     await server.stop()
+    runLog.close()
     await runtime.stop()
     appState.close()
     fs.rmSync(root, { recursive: true, force: true })

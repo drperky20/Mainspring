@@ -26,6 +26,7 @@ import { useApprovalHistoryPage } from './useApprovalHistoryPage'
 import { useCompatibilityRunPage } from './useCompatibilityRunPage'
 import { useRunLogActivityPage } from './useRunLogActivityPage'
 import { useRunLogTracePage } from './useRunLogTracePage'
+import { useRunLogToolCallHistoryPage } from './useRunLogToolCallHistoryPage'
 import { useUsageHistoryPage } from './useUsageHistoryPage'
 import { useArtifactHistoryPage } from './useArtifactHistoryPage'
 import { useAuditHistoryPage } from './useAuditHistoryPage'
@@ -58,6 +59,7 @@ import {
   OverviewScreen,
   RunsScreen,
   MemoryScreen,
+  ToolCallsScreen,
   UsageScreen,
 } from './OperatorConsoleScreens'
 import { InfoRow, SettingsScreen } from './ConsoleSettings'
@@ -190,6 +192,15 @@ export function ConnectedConsoleApp() {
   })
   const compatibilityRunActivity = useCompatibilityRunPage({
     enabled: activityRunsEnabled && Boolean(snapshot),
+    gatewayClient,
+    revision: snapshot?.generatedAt,
+    limit: 25,
+  })
+  const runLogToolCallHistoryEnabled = screen === 'activity'
+    && activityTab === 'tools'
+    && snapshot?.runLog?.configured === true
+  const runLogToolCallHistory = useRunLogToolCallHistoryPage({
+    enabled: runLogToolCallHistoryEnabled,
     gatewayClient,
     revision: snapshot?.generatedAt,
     limit: 25,
@@ -831,6 +842,14 @@ export function ConnectedConsoleApp() {
                 }}
                 onReloadEvents={() => void reloadSelectedRunEvents()}
                 onSelectRun={setSelectedRunId}
+              />
+            ) : activityTab === 'tools' ? (
+              <ToolCallsScreen
+                error={runLogToolCallHistoryEnabled ? runLogToolCallHistory.error : undefined}
+                hasMore={runLogToolCallHistoryEnabled && Boolean(runLogToolCallHistory.nextCursor)}
+                loading={runLogToolCallHistoryEnabled && runLogToolCallHistory.loading}
+                toolCalls={runLogToolCallHistory.toolCalls}
+                onLoadMore={() => void runLogToolCallHistory.loadMore()}
               />
             ) : activityTab === 'approvals' ? (
               <ApprovalsScreen

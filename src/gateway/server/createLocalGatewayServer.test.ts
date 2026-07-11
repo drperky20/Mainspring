@@ -474,6 +474,125 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('serves bounded canonical tool-call history without exposing event payloads', async () => {
+    const root = makeTempRoot('mainspring-gateway-runlog-tool-call-page-')
+    const runtime = createMainspring({
+      sessionsRoot: path.join(root, 'sessions'),
+      workspaceRoot: path.join(root, 'workspace'),
+      provider: new MockProvider([]),
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'runlog-tool-call-page-session',
+      workspace: { root: path.join(root, 'workspace', 'tool-call-page') },
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([]),
+      agent: {
+        agentId: 'runlog-tool-call-page-agent',
+        instructions: 'Keep tool-call history compact.',
+        capabilities: ['provider', 'tools'],
+      },
+    })
+    const agent = runLog.store.getAgent('runlog-tool-call-page-agent')
+    if (!agent) throw new Error('RunLog tool-call page agent was not initialized.')
+    const run = runLog.store.createQueuedRun({
+      agentId: agent.agentId,
+      sessionId: session.record.sessionId,
+      input: 'private tool call page input',
+      workspaceId: 'workspace_tool_call_page',
+      workspaceRoot: path.join(root, 'private-workspace'),
+    }, agent)
+    runLog.store.appendEvent({
+      runId: run.runId,
+      type: 'tool.call.requested',
+      payload: {
+        toolCallId: 'provider-call filePath=/srv/private/tool-input.txt',
+        name: 'file.write secretRef=env:OPENAI_API_KEY',
+        input: { privateInput: 'must not cross the browser boundary' },
+      },
+    })
+    runLog.store.appendEvent({
+      runId: run.runId,
+      type: 'tool.call.blocked',
+      payload: {
+        toolCallId: 'tool_blocked',
+        name: 'shell.exec',
+        reasons: ['policy private reason'],
+      },
+    })
+    runLog.store.appendEvent({
+      runId: run.runId,
+      type: 'tool.call.completed',
+      payload: {
+        toolCallId: 'provider-call filePath=/srv/private/tool-input.txt',
+        name: 'file.write secretRef=env:OPENAI_API_KEY',
+        output: { privateOutput: 'must not cross the browser boundary' },
+      },
+    })
+    runLog.store.appendEvent({
+      runId: run.runId,
+      type: 'tool.call.requested',
+      payload: { toolCallId: 'tool_pending', name: 'browser.open' },
+    })
+
+    const gateway = createLocalMainspringGateway({ runtime, runLog })
+    const snapshot = gateway.snapshot.bind(gateway)
+    let snapshotCalls = 0
+    gateway.snapshot = () => {
+      snapshotCalls += 1
+      return snapshot()
+    }
+    const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    const started = await server.start()
+    try {
+      const first = await fetch(started.url + '/runlog/tool-calls?limit=2')
+      expect(first.status).toBe(200)
+      const firstBody = await first.json() as {
+        toolCalls: Array<{ toolCallId: string; status: string }>
+        nextCursor?: string
+      }
+      expect(firstBody.toolCalls).toHaveLength(2)
+      expect(firstBody.nextCursor).toEqual(expect.any(String))
+      expect(firstBody.toolCalls.every((toolCall) => /^toolcall_[a-zA-Z0-9_-]{24}$/.test(toolCall.toolCallId)))
+        .toBe(true)
+      expect(JSON.stringify(firstBody)).not.toContain('provider-call')
+      expect(JSON.stringify(firstBody)).not.toContain('privateInput')
+      expect(JSON.stringify(firstBody)).not.toContain('privateOutput')
+      expect(JSON.stringify(firstBody)).not.toContain('private-workspace')
+      expect(JSON.stringify(firstBody)).not.toContain('filePath')
+      expect(JSON.stringify(firstBody)).not.toContain('secretRef')
+      expect(JSON.stringify(firstBody)).not.toContain('OPENAI_API_KEY')
+      expect(snapshotCalls).toBe(0)
+
+      const second = await fetch(
+        started.url + '/runlog/tool-calls?limit=2&cursor='
+          + encodeURIComponent(firstBody.nextCursor ?? ''),
+      )
+      expect(second.status).toBe(200)
+      const secondBody = await second.json() as {
+        toolCalls: Array<{ toolCallId: string }>
+        nextCursor?: string
+      }
+      expect(secondBody.toolCalls).toHaveLength(1)
+      expect(secondBody.nextCursor).toBeUndefined()
+      expect(new Set([
+        ...firstBody.toolCalls.map((toolCall) => toolCall.toolCallId),
+        ...secondBody.toolCalls.map((toolCall) => toolCall.toolCallId),
+      ])).toHaveLength(3)
+      expect(snapshotCalls).toBe(0)
+
+      const invalid = await fetch(started.url + '/runlog/tool-calls?cursor=not-a-valid-cursor')
+      expect(invalid.status).toBe(400)
+      const invalidLimit = await fetch(started.url + '/runlog/tool-calls?limit=101')
+      expect(invalidLimit.status).toBe(400)
+    } finally {
+      await server.stop()
+      runLog.close()
+      await runtime.stop()
+    }
+  })
+
   it('serves reverse-paginated public RunLog traces without exposing hidden events', async () => {
     const root = makeTempRoot('mainspring-gateway-runlog-trace-page-')
     const runtime = createMainspring({

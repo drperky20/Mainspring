@@ -1,7 +1,7 @@
 import type { ConsoleConnectionState } from './OperatorConsoleScreens'
 
 export type ConsoleScreen = 'home' | 'workspaces' | 'activity' | 'settings'
-export type ActivityTab = 'runs' | 'approvals' | 'usage' | 'artifacts' | 'audit' | 'memory'
+export type ActivityTab = 'runs' | 'tools' | 'approvals' | 'usage' | 'artifacts' | 'audit' | 'memory'
 
 type NavigationClient = {
   clientId: string
@@ -150,6 +150,7 @@ export function ActivityNavigation({
 }) {
   const tabs: Array<{ id: ActivityTab; label: string; count?: number }> = [
     { id: 'runs', label: 'Runs', count: activeRuns },
+    { id: 'tools', label: 'Tools' },
     { id: 'approvals', label: 'Approvals', count: pendingApprovals },
     { id: 'usage', label: 'Usage' },
     { id: 'artifacts', label: 'Artifacts' },

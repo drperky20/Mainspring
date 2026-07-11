@@ -708,7 +708,7 @@ export interface LocalGatewayRunLogRunProjection {
   toolCalls: Array<{
     toolCallId?: string
     name?: string
-    status: 'requested' | 'completed' | 'failed' | 'blocked'
+    status: 'requested' | 'updated' | 'completed' | 'failed' | 'blocked'
   }>
   checkpoints: Array<{
     eventId: string
@@ -1500,6 +1500,10 @@ export class LocalMainspringGateway {
       }
     },
     workerStatus: (): LocalGatewayRunLogWorkerStatus => this.runLogWorkerStatus(),
+    toolCalls: {
+      list: (input?: Parameters<RunLogMainspring['toolCalls']['list']>[0]) =>
+        this.requireRunLogRuntime().toolCalls.list(input),
+    },
     approvals: {
       list: (input?: Parameters<RunLogMainspring['store']['listApprovalRequests']>[0]) =>
         this.requireRunLogRuntime().store.listApprovalRequests(input),

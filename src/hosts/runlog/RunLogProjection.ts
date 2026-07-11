@@ -28,7 +28,7 @@ export interface RunLogRunProjection {
   toolCalls: Array<{
     toolCallId?: string
     name?: string
-    status: 'requested' | 'completed' | 'failed' | 'blocked'
+    status: 'requested' | 'updated' | 'completed' | 'failed' | 'blocked'
     payload: unknown
   }>
   policyDecisions: DecisionRecord[]
@@ -149,7 +149,7 @@ export function projectRunLogRun(input: {
         toolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : undefined,
         name: typeof payload.name === 'string' ? payload.name : undefined,
         status:
-          status === 'completed' || status === 'failed' || status === 'blocked'
+          status === 'updated' || status === 'completed' || status === 'failed' || status === 'blocked'
             ? status
             : 'requested',
         payload: event.payload,

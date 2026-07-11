@@ -15,8 +15,9 @@ The largest remaining product risk is not another runtime: it is the breadth of
 the gateway and console read paths. The operator console now conditionally
 revalidates an in-memory safe snapshot rather than rebuilding it on every
 refresh, and Activity uses bounded cursor pages for canonical RunLog rows,
-mailbox compatibility history, approval history, selected public traces, and
-detailed usage, artifact, audit, and per-workspace memory inspection.
+canonical tool-call summaries, mailbox compatibility history, approval history,
+selected public traces, and detailed usage, artifact, audit, and per-workspace
+memory inspection.
 The first broad compatibility projection still reads every app-state collection.
 That is appropriate for a small local installation and materially cheaper on
 normal refreshes, but the compatible aggregate still carries these collections
@@ -87,13 +88,13 @@ new product behavior from landing there without a compatibility reason.
 
 | Finding | Evidence | Impact | Decision |
 | --- | --- | --- | --- |
-| Broad gateway facade | `src/gateway/LocalGateway.ts` remains a large stable public facade. | Ownership is difficult to discover; snapshot/projection work is mixed with domain operations. | Keep the stable facade; `CompatibilityRunPageReader` owns the bounded compatibility page/cache path, `ApprovalHistoryPage` owns approval-history merging, `RunLogActivityPage` owns canonical activity/trace reads and public-event projection, and further internal collaborators remain a P2 refactor. |
+| Broad gateway facade | `src/gateway/LocalGateway.ts` remains a large stable public facade. | Ownership is difficult to discover; snapshot/projection work is mixed with domain operations. | Keep the stable facade; `CompatibilityRunPageReader` owns the bounded compatibility page/cache path, `ApprovalHistoryPage` owns approval-history merging, `RunLogActivityPage` owns canonical activity/trace reads, `RunLogToolCallHistoryPage` owns canonical tool history, and further internal collaborators remain a P2 refactor. |
 | Broad app-state store | `src/gateway/AppStateStore.ts` is 3,273 lines. | Repository methods, SQL mappings, schema, and migrations are co-located. | Preserve the interface; split only behind tested repository seams. |
 | Broad connected console | `apps/console/src/ConnectedConsoleApp.tsx` is now 1,538 lines. | Connection lifecycle, selection, commands, and remaining workspace panels still share one file. | Navigation, provider catalog/form, first-run setup, client editing, settings, and reusable workflow primitives are now extracted; split remaining client/workspace panels only behind stable props. |
-| Broad snapshot compatibility DTO | `/snapshot` still includes every app-state collection. | Fresh projection cost and unbounded growth pressure remain. | ETag transport, server-only sanitized cache, adaptive refresh, and cursor pages for canonical/compatibility runs, approvals, traces, detailed usage, artifacts, audit, and per-workspace memory are complete; the compatible aggregate still needs a future narrowing migration. |
+| Broad snapshot compatibility DTO | `/snapshot` still includes every app-state collection. | Fresh projection cost and unbounded growth pressure remain. | ETag transport, server-only sanitized cache, adaptive refresh, and cursor pages for canonical/compatibility runs, canonical tool calls, approvals, traces, detailed usage, artifacts, audit, and per-workspace memory are complete; the compatible aggregate still needs a future narrowing migration. |
 | Large style surface | Global console styles remain large. | Visual tokens and feature rules are hard to locate. | `ConsoleSettings.css` is the first extracted feature stylesheet; retain global primitives while splitting remaining stable feature boundaries incrementally. |
 | Serial worker dispatch | Default `RunLogWorker` behavior is one active claim. | Safe baseline but unnecessary queue latency for independent work. | Complete: hosts can opt into bounded concurrency; same-workspace work remains serialized in the local executor. |
-| Bounded history is uneven | Activity, approvals, public traces, detailed usage, artifact inventory, audit history, and per-workspace memory history are paginated; the primary snapshot still aggregates numerous unrelated collections. | Long-lived local state can increase snapshot cost; JSONL memory paging reads the selected workspace file rather than a global index. | Preserve compatibility now; narrow aggregate collections only with a deliberate compatibility migration and add an index only when measured workload justifies it. |
+| Bounded history is uneven | Activity, canonical tool calls, approvals, public traces, detailed usage, artifact inventory, audit history, and per-workspace memory history are paginated; the primary snapshot still aggregates numerous unrelated collections. | Long-lived local state can increase snapshot cost; JSONL memory paging reads the selected workspace file rather than a global index. | Preserve compatibility now; narrow aggregate collections only with a deliberate compatibility migration and add an index only when measured workload justifies it. |
 
 No dead runtime architecture was found. The compatibility mailbox modules are
 still reachable through exported APIs, examples, tests, and gateway fallback,
@@ -124,13 +125,14 @@ row and executable regression or an explicit limitation.
 | Select client/workspace/agent | Live gateway selections are scoped by client/workspace. | Remaining chat/agent/automation panels are still in the shell. | `ConsoleClientForms` owns client editing; retain Home, Workspaces, Activity, and Settings as the first navigation layer. |
 | Start, watch, and stop work | Durable RunLog starts, cancellation, SSE run events, and merged cursor-paginated canonical/compatibility Activity rows exist. | The broad snapshot remains a compatibility source for unrelated summary data. | Retain explicit run/event actions and migrate the next aggregate collections only with concrete UI callers. |
 | Approval | Prominent approvals and RunLog receipt flow are present. | Detailed policy data can compete with the normal task workflow. | Approval history is cursor-paginated and RunLog-preferred; keep action cards visible and raw traces behind inspection. |
-| Inspect outcomes | Runs, artifacts, tool rows, checkpoints, usage, audit, memory, and trace panels exist. | Detailed memory inspection requires selecting a workspace; its JSONL source is not yet globally indexed. | Public RunLog trace, usage, artifact, audit, and per-workspace memory pages are bounded; progressively narrow the compatible aggregate only with migration evidence. |
+| Inspect outcomes | Runs, canonical tool-call history, artifacts, checkpoints, usage, audit, memory, and trace panels exist. | Detailed memory inspection requires selecting a workspace; its JSONL source is not yet globally indexed. | Public RunLog trace, tool-call, usage, artifact, audit, and per-workspace memory pages are bounded; progressively narrow the compatible aggregate only with migration evidence. |
 | Offline/stale behavior | Loading, offline, stale, and unauthorized states exist. | Full snapshots are still expensive when state changes. | Complete visibility-aware, abortable, non-overlapping revalidation with bounded backoff. |
 
 The shared dialog now has a labelled focus target, local Tab cycling, Escape
 dismissal, and opener-focus restoration; narrow client tabs form a two-column
 grid at phone widths. The console E2E suite now verifies 390px Activity
-navigation (including Memory), no document overflow, and dialog focus return.
+navigation (including canonical Tool Calls and Memory), no document overflow,
+and dialog focus return.
 Broader status-announcement coverage remains a P2 follow-up after the shell is
 decomposed further.
 
@@ -166,7 +168,8 @@ The repository does not need a rewrite. This branch preserves the RunLog spine,
 adds safe bounded concurrency, makes normal console refreshes conditional and
 cheap, gives canonical and compatibility Activity rows, approval history, and
 public traces bounded cursor paths, and splits provider/setup/client editing out
-of the connected shell. Detailed usage, artifacts, audit, and memory are now
-available through purpose-specific pages; the next read-model work is narrowing
+of the connected shell. Detailed canonical tool calls, usage, artifacts, audit,
+and memory are now available through purpose-specific pages; the next read-model
+work is narrowing
 the compatibility aggregate only with public-DTO migration evidence—not a
 second runtime or a weakening of policy, lease, or browser-safety boundaries.

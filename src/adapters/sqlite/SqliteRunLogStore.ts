@@ -15,6 +15,7 @@ import type {
   ExecutionOutboxRecord,
   ExecutionOutboxStatus,
   ListRunLogApprovalRequestsInput,
+  ListRunLogToolCallSummariesInput,
   ListRunEventsInput,
   ListRunsInput,
   RunCheckpoint,
@@ -26,6 +27,8 @@ import type {
   RunLogProjectionCatchupResult,
   RunLogRunSummary,
   RunLogStore,
+  RunLogToolCallStatus,
+  RunLogToolCallSummary,
   RunRecord,
   RunStatus,
   PauseRunForApprovalInput,
@@ -137,6 +140,62 @@ function mapRunProjectionSummary(row: Record<string, unknown>): RunLogRunSummary
   }
   if (row.last_event_type) summary.lastEventType = row.last_event_type as RunLogEvent['type']
   return summary
+}
+
+function mapRunToolCallSummary(row: Record<string, unknown>): RunLogToolCallSummary {
+  const summary: RunLogToolCallSummary = {
+    runId: String(row.run_id),
+    sessionId: String(row.session_id),
+    agentId: String(row.agent_id),
+    toolCallId: String(row.tool_call_id),
+    status: row.status as RunLogToolCallStatus,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    latestSeq: Number(row.latest_seq),
+  }
+  if (row.workspace_id) summary.workspaceId = String(row.workspace_id)
+  if (row.tool_name) summary.toolName = String(row.tool_name)
+  return summary
+}
+
+function toolCallSummaryFieldsForEvent(event: RunLogEvent): {
+  toolCallId: string
+  toolName?: string
+  status: RunLogToolCallStatus
+} | undefined {
+  let status: RunLogToolCallStatus
+  switch (event.type) {
+    case 'tool.call.requested':
+      status = 'requested'
+      break
+    case 'tool.call.updated':
+      status = 'updated'
+      break
+    case 'tool.call.completed':
+      status = 'completed'
+      break
+    case 'tool.call.failed':
+      status = 'failed'
+      break
+    case 'tool.call.blocked':
+      status = 'blocked'
+      break
+    default:
+      return undefined
+  }
+  const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+    ? event.payload as Record<string, unknown>
+    : {}
+  const toolCallId = typeof payload.toolCallId === 'string' ? payload.toolCallId.trim() : ''
+  // A malformed provider event must not create an unbounded or ambiguous
+  // global read-model key. The raw event remains available host-side.
+  if (!toolCallId || toolCallId.length > 512) return undefined
+  const rawToolName = typeof payload.name === 'string' ? payload.name.trim() : ''
+  return {
+    toolCallId,
+    ...(rawToolName ? { toolName: rawToolName.slice(0, 256) } : {}),
+    status,
+  }
 }
 
 function projectionStatusForEvent(event: RunLogEvent, fallback: RunLogRunSummary['status']): RunLogRunSummary['status'] {
@@ -479,7 +538,7 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
 
   private migrateRunProjectionSchema(): void {
     const db = this.handle()
-    const currentVersion = Number(db.pragma('user_version', { simple: true }) ?? 0)
+    let currentVersion = Number(db.pragma('user_version', { simple: true }) ?? 0)
     if (currentVersion < 2) {
       db.exec(`
         CREATE TABLE IF NOT EXISTS runlog_projection_cursors (
@@ -507,12 +566,46 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
         VALUES ('run-summary-v1', 0, @updatedAt)
       `).run({ updatedAt: this.nowIso() })
       db.pragma('user_version = 2')
-      return
+      currentVersion = 2
     }
-    // Existing v2 databases can have a missing cursor after manual recovery.
+    if (currentVersion < 3) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS runlog_tool_call_summaries (
+          run_id TEXT NOT NULL,
+          tool_call_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          workspace_id TEXT,
+          tool_name TEXT,
+          status TEXT NOT NULL CHECK (
+            status IN ('requested', 'updated', 'completed', 'failed', 'blocked')
+          ),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          latest_seq INTEGER NOT NULL,
+          PRIMARY KEY (run_id, tool_call_id),
+          FOREIGN KEY(run_id) REFERENCES runs(run_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runlog_tool_call_summaries_activity
+          ON runlog_tool_call_summaries(latest_seq DESC);
+        CREATE INDEX IF NOT EXISTS idx_runlog_tool_call_summaries_session_activity
+          ON runlog_tool_call_summaries(session_id, latest_seq DESC);
+        CREATE INDEX IF NOT EXISTS idx_runlog_tool_call_summaries_workspace_activity
+          ON runlog_tool_call_summaries(workspace_id, latest_seq DESC);
+        CREATE INDEX IF NOT EXISTS idx_runlog_tool_call_summaries_status_activity
+          ON runlog_tool_call_summaries(status, latest_seq DESC);
+      `)
+      db.pragma('user_version = 3')
+    }
+    // Existing databases can have a missing cursor after manual recovery.
     db.prepare(`
       INSERT OR IGNORE INTO runlog_projection_cursors (projection_name, last_seq, updated_at)
       VALUES ('run-summary-v1', 0, @updatedAt)
+    `).run({ updatedAt: this.nowIso() })
+    db.prepare(`
+      INSERT OR IGNORE INTO runlog_projection_cursors (projection_name, last_seq, updated_at)
+      VALUES ('tool-call-summary-v1', 0, @updatedAt)
     `).run({ updatedAt: this.nowIso() })
   }
 
@@ -1482,6 +1575,131 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       SELECT * FROM runlog_run_summaries WHERE run_id = ?
     `).get(runId) as Record<string, unknown> | undefined
     return row ? mapRunProjectionSummary(row) : null
+  }
+
+  /**
+   * Projects the canonical event stream into a compact global tool-call index.
+   * Cursor movement and summary writes share one SQLite transaction so a
+   * restart never replays an already-indexed event or skips an event that was
+   * read before a crash.
+   */
+  catchUpRunToolCallProjection(input: { limit?: number } = {}): RunLogProjectionCatchupResult {
+    const db = this.handle()
+    const limit = Math.min(Math.max(Math.floor(input.limit ?? 1_000), 1), 10_000)
+    return db.transaction(() => {
+      const cursor = db.prepare(`
+        SELECT last_seq FROM runlog_projection_cursors WHERE projection_name = 'tool-call-summary-v1'
+      `).get() as { last_seq: number } | undefined
+      const lastSeq = Number(cursor?.last_seq ?? 0)
+      const rows = db.prepare(`
+        SELECT * FROM run_events WHERE seq > @lastSeq ORDER BY seq ASC LIMIT @limit
+      `).all({ lastSeq, limit }) as Array<Record<string, unknown>>
+      if (rows.length === 0) {
+        return { projectionName: 'tool-call-summary-v1' as const, processedEvents: 0, lastSeq }
+      }
+
+      const upsert = db.prepare(`
+        INSERT INTO runlog_tool_call_summaries (
+          run_id, tool_call_id, session_id, agent_id, workspace_id, tool_name,
+          status, created_at, updated_at, latest_seq
+        ) VALUES (
+          @runId, @toolCallId, @sessionId, @agentId, @workspaceId, @toolName,
+          @status, @createdAt, @updatedAt, @latestSeq
+        )
+        ON CONFLICT(run_id, tool_call_id) DO UPDATE SET
+          session_id = excluded.session_id,
+          agent_id = excluded.agent_id,
+          workspace_id = COALESCE(excluded.workspace_id, runlog_tool_call_summaries.workspace_id),
+          tool_name = COALESCE(excluded.tool_name, runlog_tool_call_summaries.tool_name),
+          status = excluded.status,
+          updated_at = excluded.updated_at,
+          latest_seq = excluded.latest_seq
+      `)
+      for (const row of rows) {
+        const event = mapEvent(row)
+        const fields = toolCallSummaryFieldsForEvent(event)
+        if (!fields) continue
+        const run = this.getRun(event.runId)
+        upsert.run({
+          runId: event.runId,
+          toolCallId: fields.toolCallId,
+          sessionId: event.sessionId,
+          agentId: event.agentId,
+          workspaceId: run?.workspaceId ?? null,
+          toolName: fields.toolName ?? null,
+          status: fields.status,
+          createdAt: event.timestamp,
+          updatedAt: event.timestamp,
+          latestSeq: event.seq,
+        })
+      }
+
+      const nextSeq = Number(rows.at(-1)?.seq ?? lastSeq)
+      db.prepare(`
+        UPDATE runlog_projection_cursors
+        SET last_seq = @nextSeq, updated_at = @updatedAt
+        WHERE projection_name = 'tool-call-summary-v1'
+      `).run({ nextSeq, updatedAt: this.nowIso() })
+      return {
+        projectionName: 'tool-call-summary-v1' as const,
+        processedEvents: rows.length,
+        lastSeq: nextSeq,
+      }
+    })()
+  }
+
+  listRunToolCallSummaries(
+    input: ListRunLogToolCallSummariesInput = {},
+  ): RunLogToolCallSummary[] {
+    const clauses: string[] = []
+    const params: Record<string, unknown> = {}
+    if (input.runId) {
+      clauses.push('run_id = @runId')
+      params.runId = input.runId
+    }
+    if (input.sessionId) {
+      clauses.push('session_id = @sessionId')
+      params.sessionId = input.sessionId
+    }
+    if (input.workspaceId) {
+      clauses.push('workspace_id = @workspaceId')
+      params.workspaceId = input.workspaceId
+    }
+    const statuses = Array.isArray(input.status)
+      ? input.status
+      : input.status
+        ? [input.status]
+        : []
+    if (Array.isArray(input.status) && statuses.length === 0) return []
+    if (statuses.length > 0) {
+      const placeholders = statuses.map((status, index) => {
+        const key = `status${index}`
+        params[key] = status
+        return `@${key}`
+      })
+      clauses.push(`status IN (${placeholders.join(', ')})`)
+    }
+    if (input.before) {
+      const latestSeq = input.before.latestSeq
+      if (!Number.isSafeInteger(latestSeq) || latestSeq < 1) {
+        throw new Error('Tool-call summary cursor requires a positive latestSeq value.')
+      }
+      clauses.push('latest_seq < @beforeLatestSeq')
+      params.beforeLatestSeq = latestSeq
+    }
+    const limit = Math.floor(input.limit ?? 500)
+    if (!Number.isFinite(limit) || limit <= 0) return []
+    params.limit = Math.min(limit, 10_000)
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    return this.handle()
+      .prepare(`
+        SELECT * FROM runlog_tool_call_summaries
+        ${where}
+        ORDER BY latest_seq DESC
+        LIMIT @limit
+      `)
+      .all(params)
+      .map((row) => mapRunToolCallSummary(row as Record<string, unknown>))
   }
 
   appendCheckpoint(input: Omit<RunCheckpoint, 'checkpointId' | 'timestamp'>): RunCheckpoint {

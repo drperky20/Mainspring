@@ -27,6 +27,24 @@ export class RunLogProjector {
     return latest
   }
 
+  /** Catch up the independent durable global tool-call read model. */
+  catchUpToolCalls(limit?: number): RunLogProjectionCatchupResult {
+    return this.store.catchUpRunToolCallProjection(limit === undefined ? undefined : { limit })
+  }
+
+  catchUpToolCallsUntilIdle(
+    input: { limit?: number; maxBatches?: number } = {},
+  ): RunLogProjectionCatchupResult {
+    const maxBatches = Math.min(Math.max(Math.floor(input.maxBatches ?? 10_000), 1), 100_000)
+    let latest = this.catchUpToolCalls(input.limit)
+    for (let batch = 1; latest.processedEvents > 0 && batch < maxBatches; batch += 1) {
+      const next = this.catchUpToolCalls(input.limit)
+      if (next.processedEvents === 0) return next
+      latest = next
+    }
+    return latest
+  }
+
   summary(runId: string): RunLogRunSummary | null {
     return this.store.getRunProjectionSummary(runId)
   }

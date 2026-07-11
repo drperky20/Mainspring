@@ -9,6 +9,7 @@ import {
   consoleCronRuntimeStatus,
   consoleMarketplaceInstall,
   consoleRunEvent,
+  consoleRunLogToolCall,
   consoleUsageStatus,
   gatewaySnapshotToConsoleState,
   gatewaySnapshotToExecutionBackendStatus,
@@ -1233,6 +1234,37 @@ describe('gatewaySnapshotToConsoleState', () => {
       lastTickAt: '2026-06-27T12:30:00.000Z',
       lastError: 'tick failed [redacted] [redacted]',
     })
+  })
+
+  it('projects canonical tool-call history with an opaque identifier', () => {
+    const input = {
+      runId: 'run_tool_history',
+      sessionId: 'session_tool_history',
+      agentId: 'agent filePath=C:\\secret\\agent.txt',
+      workspaceId: 'workspace_tool_history',
+      toolCallId: 'provider-call filePath=/srv/private/tool-input.txt',
+      toolName: 'shell.exec secretRef=env:OPENAI_API_KEY',
+      status: 'completed' as const,
+      createdAt: '2026-07-10T12:00:00.000Z',
+      updatedAt: '2026-07-10T12:00:01.000Z',
+      latestSeq: 42,
+    }
+    const toolCall = consoleRunLogToolCall(input)
+    const sameToolCall = consoleRunLogToolCall(input)
+    const differentRunToolCall = consoleRunLogToolCall({ ...input, runId: 'run_other' })
+    const serialized = JSON.stringify(toolCall)
+
+    expect(toolCall.toolCallId).toMatch(/^toolcall_[a-zA-Z0-9_-]{24}$/)
+    expect(toolCall.toolCallId).toBe(sameToolCall.toolCallId)
+    expect(toolCall.toolCallId).not.toBe(differentRunToolCall.toolCallId)
+    expect(toolCall.agentId).toBe('agent [redacted]')
+    expect(toolCall.toolName).toBe('shell.exec [redacted]')
+    expect(serialized).not.toContain('provider-call')
+    expect(serialized).not.toContain('filePath')
+    expect(serialized).not.toContain('secretRef')
+    expect(serialized).not.toContain('OPENAI_API_KEY')
+    expect(serialized).not.toContain('C:\\secret')
+    expect(serialized).not.toContain('/srv/private')
   })
 
   it('builds a sanitized run event DTO', () => {

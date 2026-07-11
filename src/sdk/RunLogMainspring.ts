@@ -9,18 +9,21 @@ import {
   type AgentSpec,
   type DecideRunLogApprovalInput,
   type ListRunsInput,
+  type ListRunLogToolCallSummariesInput,
   type ProviderRouter,
   type RunExecutionSummary,
   type RunIntent,
   type RunLogApprovalReceipt,
   type RunLogEvent,
   type RunLogStore,
+  type RunLogToolCallSummary,
   type RunRecord,
 } from '../core/index.js'
 import {
   projectRunLogRun,
   type RunLogRunProjection,
 } from '../hosts/runlog/RunLogProjection.js'
+import { RunLogProjector } from '../hosts/runlog/RunLogProjector.js'
 import type { AgentProvider } from '../providers/types.js'
 import type { RuntimeSecretResolver } from '../providers/types.js'
 import { createDefaultRuntimeTools } from '../runtime/defaultTools.js'
@@ -251,6 +254,13 @@ export class RunLogMainspring {
       this.kernel.approveRunLogApproval(input),
     deny: (input: DecideRunLogApprovalInput): RunLogApprovalReceipt =>
       this.kernel.denyRunLogApproval(input),
+  }
+
+  readonly toolCalls = {
+    list: (input?: ListRunLogToolCallSummariesInput): RunLogToolCallSummary[] => {
+      new RunLogProjector(this.store).catchUpToolCallsUntilIdle()
+      return this.store.listRunToolCallSummaries(input)
+    },
   }
 
   putAgent(spec: AgentSpec): void {

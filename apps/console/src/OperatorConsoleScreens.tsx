@@ -4,6 +4,7 @@ import type {
   ConsoleGatewayAuditEvent,
   ConsoleGatewayMemoryEntry,
   ConsoleGatewayRunEvent,
+  ConsoleGatewayRunLogToolCall,
   ConsoleGatewayUsageLedgerEntry,
 } from 'mainspring/gateway'
 import type {
@@ -719,6 +720,79 @@ export function ArtifactsScreen({
             onClick={onLoadMore}
           >
             {loading ? 'Loading artifacts...' : 'Load more artifacts'}
+          </button>
+        ) : null}
+      </section>
+    </section>
+  )
+}
+
+export function ToolCallsScreen({
+  error,
+  hasMore = false,
+  loading = false,
+  onLoadMore,
+  toolCalls = [],
+}: {
+  error?: string
+  hasMore?: boolean
+  loading?: boolean
+  onLoadMore?: () => void
+  toolCalls?: ConsoleGatewayRunLogToolCall[]
+}) {
+  return (
+    <section className="control-screen tools-screen" aria-labelledby="tool-calls-title">
+      <header className="control-screen-header">
+        <div>
+          <p className="control-kicker">Canonical execution ledger</p>
+          <h1 id="tool-calls-title">Tool calls</h1>
+          <p>
+            Durable RunLog summaries only. Raw tool inputs, outputs, policy payloads, and host paths remain outside the browser.
+          </p>
+        </div>
+        <div className="control-header-stat">
+          <strong>{toolCalls.length}</strong>
+          <span>visible calls</span>
+        </div>
+      </header>
+
+      <section className="control-panel control-history-panel">
+        <PanelHeader title="Recent canonical tool calls" meta={loading ? 'loading' : String(toolCalls.length) + ' visible'} />
+        {error ? <InlineError message={error} /> : null}
+        {loading && toolCalls.length === 0 ? (
+          <div className="control-skeleton-list" role="status" aria-label="Loading canonical tool-call history">
+            <span /><span /><span />
+          </div>
+        ) : toolCalls.length === 0 ? (
+          <CompactEmptyState
+            title="No canonical tool calls recorded"
+            detail="RunLog tool activity will appear here after a tool executes or is blocked."
+          />
+        ) : (
+          <div className="control-row-list">
+            {toolCalls.map((toolCall) => (
+              <div className="control-data-row static" key={toolCall.toolCallId}>
+                <StatusDot status={toolCall.status} />
+                <span>
+                  <strong>{toolCall.toolName ?? 'Unnamed tool'}</strong>
+                  <small>{toolCall.agentId} | Run {shortId(toolCall.runId)}</small>
+                </span>
+                <span className="control-row-meta">
+                  <strong>{humanizeStatus(toolCall.status)}</strong>
+                  <small>{formatDateTime(toolCall.updatedAt)}</small>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {hasMore ? (
+          <button
+            className="simple-secondary control-run-load-more"
+            disabled={loading}
+            type="button"
+            onClick={onLoadMore}
+          >
+            {loading ? 'Loading tool calls...' : 'Load more tool calls'}
           </button>
         ) : null}
       </section>

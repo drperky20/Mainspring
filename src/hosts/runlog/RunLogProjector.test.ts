@@ -93,12 +93,117 @@ describe('RunLogProjector', () => {
     expect(resumed.summary(run.runId)).toMatchObject({ eventCount: 5, assistantText: 'second' })
   })
 
-  it('only advances the SQLite schema version during projection migration', () => {
+  it('builds a restart-safe global tool-call projection without copying event payloads', () => {
+    const { dbPath, store, run } = setup()
+    const agent = store.getAgent('agent_projection')
+    if (!agent) throw new Error('Projection test agent was not initialized.')
+    const secondRun = store.createQueuedRun({
+      agentId: agent.agentId,
+      input: 'project another tool call',
+      workspaceId: 'workspace_projection_two',
+    }, agent)
+    store.appendEvent({
+      runId: run.runId,
+      type: 'tool.call.requested',
+      payload: {
+        toolCallId: 'tool_shared',
+        name: 'file.write',
+        input: { privateInput: 'must remain only in the event stream' },
+      },
+    })
+    store.appendEvent({
+      runId: secondRun.runId,
+      type: 'tool.call.requested',
+      payload: { toolCallId: 'tool_shared', name: 'browser.open' },
+    })
+    store.appendEvent({
+      runId: secondRun.runId,
+      type: 'tool.call.updated',
+      payload: { toolCallId: 'tool_shared', name: 'browser.open' },
+    })
+    store.appendEvent({
+      runId: secondRun.runId,
+      type: 'tool.call.blocked',
+      payload: { toolCallId: 'tool_blocked', name: 'shell.exec', reasons: ['policy'] },
+    })
+    store.appendEvent({
+      runId: run.runId,
+      type: 'tool.call.completed',
+      payload: {
+        toolCallId: 'tool_shared',
+        name: 'file.write',
+        output: { privateOutput: 'must remain only in the event stream' },
+      },
+    })
+
+    const projector = new RunLogProjector(store)
+    expect(projector.catchUpToolCalls(100)).toMatchObject({
+      projectionName: 'tool-call-summary-v1',
+      processedEvents: 11,
+    })
+    const firstPage = store.listRunToolCallSummaries({ limit: 2 })
+    const secondPage = store.listRunToolCallSummaries({
+      before: { latestSeq: firstPage.at(-1)?.latestSeq ?? 0 },
+      limit: 2,
+    })
+    const summaries = [...firstPage, ...secondPage]
+
+    expect(summaries).toHaveLength(3)
+    expect(new Set(summaries.map((summary) => [summary.runId, summary.toolCallId].join(':')))).toEqual(
+      new Set([
+        [run.runId, 'tool_shared'].join(':'),
+        [secondRun.runId, 'tool_shared'].join(':'),
+        [secondRun.runId, 'tool_blocked'].join(':'),
+      ]),
+    )
+    expect(summaries.find((summary) => summary.runId === run.runId && summary.toolCallId === 'tool_shared'))
+      .toMatchObject({ status: 'completed', toolName: 'file.write' })
+    expect(summaries.find((summary) => summary.toolCallId === 'tool_blocked'))
+      .toMatchObject({
+        status: 'blocked',
+        workspaceId: 'workspace_projection_two',
+      })
+    expect(projectRunLogRun({ store, runId: secondRun.runId }).toolCalls
+      .filter((toolCall) => toolCall.toolCallId === 'tool_shared')
+      .at(-1))
+      .toMatchObject({ status: 'updated' })
+    expect(JSON.stringify(summaries)).not.toContain('privateInput')
+    expect(JSON.stringify(summaries)).not.toContain('privateOutput')
+
+    store.close()
+    stores.splice(stores.indexOf(store), 1)
+    const reopened = new SqliteRunLogStore({ dbPath })
+    stores.push(reopened)
+    reopened.initialize()
+    const resumed = new RunLogProjector(reopened)
+    expect(resumed.catchUpToolCalls()).toMatchObject({
+      projectionName: 'tool-call-summary-v1',
+      processedEvents: 0,
+    })
+    reopened.appendEvent({
+      runId: secondRun.runId,
+      type: 'tool.call.failed',
+      payload: { toolCallId: 'tool_blocked', name: 'shell.exec', message: 'host-only detail' },
+    })
+    expect(resumed.catchUpToolCalls()).toMatchObject({
+      projectionName: 'tool-call-summary-v1',
+      processedEvents: 1,
+    })
+    expect(reopened.listRunToolCallSummaries({
+      runId: secondRun.runId,
+      status: 'failed',
+    })).toHaveLength(1)
+  })
+
+  it('migrates the v2 projection schema with a durable tool-call cursor', () => {
     const { dbPath, store } = setup()
     store.close()
     stores.splice(stores.indexOf(store), 1)
     const db = new Database(dbPath)
-    db.pragma('user_version = 3')
+    db.exec(
+      "DROP TABLE runlog_tool_call_summaries; DELETE FROM runlog_projection_cursors WHERE projection_name = 'tool-call-summary-v1';",
+    )
+    db.pragma('user_version = 2')
     db.close()
 
     const reopened = new SqliteRunLogStore({ dbPath })
@@ -107,6 +212,12 @@ describe('RunLogProjector', () => {
     const verify = new Database(dbPath, { readonly: true })
     try {
       expect(Number(verify.pragma('user_version', { simple: true }))).toBe(3)
+      expect(verify.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runlog_tool_call_summaries'",
+      ).get()).toBeTruthy()
+      expect(verify.prepare(
+        "SELECT projection_name FROM runlog_projection_cursors WHERE projection_name = 'tool-call-summary-v1'",
+      ).get()).toMatchObject({ projection_name: 'tool-call-summary-v1' })
     } finally {
       verify.close()
     }
