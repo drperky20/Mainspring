@@ -18,6 +18,7 @@ Mainspring treats agents as untrusted workers.
 - hash-only, pre-mutation provider-profile authority records with hosted-principal attribution
 - local gateway hosted-auth mode
 - hosted gateway admin/operator/viewer route authorization with fail-closed mutation classification
+- hash-only, pre-mutation deployment authority records with hosted-principal attribution
 - admin-only hosted user management, final-active-admin protection, and session revocation after password changes or account disabling
 - local-only gateway binding
 - local gateway browser-origin allowlist for localhost/loopback console origins; hostile browser origins are rejected before hosted auth bootstrap/login

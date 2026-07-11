@@ -11,6 +11,8 @@ Mainspring has three local gateway feature lanes:
 
 Marketplace installs can create client/workspace/agent records and copy approved markdown/JSON seed files. Configured remote catalogs are fetched only over public HTTPS with redirect target revalidation, bounded to 1 MiB, checked against publisher/key pins and validity windows, and cached only after every embedded file hash, signature, and deterministic provenance scan passes. Entries that need review fail closed instead of becoming installable. `POST /marketplace/remotes/sync` refreshes the in-memory trusted catalog; existing installs use the verified cached payload and preserve publisher provenance.
 
+`GatewayDeploymentControl` owns deployment-target create/update and exact-confirmed deploy, rollback, and destroy authority. Target changes write a hash-only `deployment.target.write` audit decision before app-state mutation; execute writes a target/plan-bound `deployment.execute` decision before the driver sees control. Hosted routes attach the authenticated principal to every mutation and execution audit record, never a browser-provided actor. Browser DTOs omit target configuration and decision evidence.
+
 Remote sources are opt-in host configuration under `createLocalMainspringGateway({ marketplace: { remote: { sources: [...] } } })`. Each source requires `catalogUrl`, `publisherId`, `keyId`, and `publicKeyPem`. The verified cache is intentionally process-local, so a restart requires another explicit sync and never silently trusts stale persisted catalog content.
 
 Deployment plans can run `npm pack` and prepare `ssh` / `scp` command previews for explicit execution.

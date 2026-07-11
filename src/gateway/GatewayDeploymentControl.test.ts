@@ -4,7 +4,12 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { hashApprovalInput } from '../policy/ApprovalReceipt.js'
 import { createHostDecisionRecord } from '../policy/DecisionRecord.js'
-import { createSqliteLocalGatewayAppStateStore } from './AppStateStore.js'
+import {
+  createSqliteLocalGatewayAppStateStore,
+  type CreateLocalGatewayDeploymentTargetInput,
+  type LocalGatewayAppStateStore,
+  type UpdateLocalGatewayDeploymentTargetInput,
+} from './AppStateStore.js'
 import { consoleDeploymentRun, consoleDeploymentTarget } from './ConsoleSnapshotAdapter.js'
 import {
   DeploymentDriverRegistry,
@@ -54,6 +59,29 @@ describe('GatewayDeploymentControl', () => {
     const appState = createSqliteLocalGatewayAppStateStore({
       dbPath: path.join(root, 'gateway-app.sqlite'),
     })
+    const persistedCreateTarget = appState.deploymentTargets.create
+    const persistedUpdateTarget = appState.deploymentTargets.update
+    let createSawAuthorization = false
+    let updateSawAuthorization = false
+    const controlState = {
+      ...appState,
+      deploymentTargets: {
+        ...appState.deploymentTargets,
+        create: (input: CreateLocalGatewayDeploymentTargetInput) => {
+          createSawAuthorization = appState.auditEvents.list({ category: 'deployment' }).some((event) => (
+            event.action === 'target.created.authorized'
+          ))
+          return persistedCreateTarget(input)
+        },
+        update: (input: UpdateLocalGatewayDeploymentTargetInput) => {
+          updateSawAuthorization = appState.auditEvents.list({ category: 'deployment' }).some((event) => (
+            event.action === 'target.updated.authorized'
+          ))
+          return persistedUpdateTarget(input)
+        },
+      },
+    } as unknown as LocalGatewayAppStateStore
+    const actor = 'hosted:deployment-control:admin'
     let driverObservedAuthorization = false
     let driverCalls = 0
     const driver: DeploymentDriver = {
@@ -79,11 +107,12 @@ describe('GatewayDeploymentControl', () => {
         const runningDecision = recordValue(recordValue(running?.metadata)?.decisionRecord)
         driverObservedAuthorization = authorizationDecision?.operation === 'deployment.execute'
           && runningDecision?.decisionId === authorizationDecision.decisionId
+          && authorization?.actor === actor
       },
     }
     const drivers = new DeploymentDriverRegistry().register(driver)
     const control = new GatewayDeploymentControl({
-      appState,
+      appState: controlState,
       repoRoot: root,
       drivers,
     })
@@ -93,7 +122,9 @@ describe('GatewayDeploymentControl', () => {
         label: 'Test deployment target',
         kind: 'test',
         metadata: { privateConfigLabel: 'do-not-copy-into-audit-input' },
+        actor,
       })
+      expect(createSawAuthorization).toBe(true)
       expect(target.metadata).toMatchObject({
         deploymentDriver: {
           executionSupported: true,
@@ -119,7 +150,9 @@ describe('GatewayDeploymentControl', () => {
         targetId: target.targetId,
         label: 'Updated deployment target',
         metadata: { privateConfigLabel: 'changed-without-leaking-into-audit-input' },
+        actor,
       })
+      expect(updateSawAuthorization).toBe(true)
       expect(updated.metadata).toMatchObject({
         decisionRecord: {
           operation: 'deployment.target.write',
@@ -132,6 +165,7 @@ describe('GatewayDeploymentControl', () => {
         targetId: target.targetId,
         operation: 'deploy',
         confirm: 'deploy',
+        actor,
       })
       expect(result.execution.ok).toBe(true)
       expect(driverObservedAuthorization).toBe(true)
@@ -143,6 +177,7 @@ describe('GatewayDeploymentControl', () => {
       expect(completedIndex).toBeGreaterThan(authorizedIndex)
       const authorization = deploymentEvents[authorizedIndex]
       expect(authorization).toMatchObject({
+        actor,
         targetId: target.targetId,
         metadata: {
           decisionRecord: {
@@ -158,7 +193,41 @@ describe('GatewayDeploymentControl', () => {
           },
         },
       })
-      expect(JSON.stringify(authorization)).not.toContain('changed-without-leaking-into-audit-input')
+      expect(deploymentEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          action: 'target.created.authorized',
+          actor,
+          targetId: target.targetId,
+          metadata: expect.objectContaining({
+            decisionRecord: expect.objectContaining({
+              operation: 'deployment.target.write',
+              state: 'allow',
+              metadata: expect.objectContaining({
+                mutation: 'create',
+                targetHash: expect.any(String),
+              }),
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          action: 'target.updated.authorized',
+          actor,
+          targetId: target.targetId,
+          metadata: expect.objectContaining({
+            decisionRecord: expect.objectContaining({
+              operation: 'deployment.target.write',
+              state: 'allow',
+              metadata: expect.objectContaining({
+                mutation: 'update',
+                targetHash: expect.any(String),
+                previousTargetHash: expect.any(String),
+              }),
+            }),
+          }),
+        }),
+      ]))
+      expect(JSON.stringify(deploymentEvents)).not.toContain('do-not-copy-into-audit-input')
+      expect(JSON.stringify(deploymentEvents)).not.toContain('changed-without-leaking-into-audit-input')
       const browserDeployment = {
         target: consoleDeploymentTarget(updated),
         run: consoleDeploymentRun(result.deploymentRun),

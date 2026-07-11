@@ -18,6 +18,7 @@ import {
   createLocalMainspringGateway,
   createSqliteLocalGatewayAppStateStore,
 } from '../index.js'
+import type { DeploymentDriver } from '../DeploymentWizard.js'
 import { createLocalGatewayServer } from './createLocalGatewayServer.js'
 
 const tempRoots: string[] = []
@@ -4267,7 +4268,7 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
-  it('uses hosted identity for cron grants, budget controls, and provider profiles', async () => {
+  it('uses hosted identity for cron grants, budgets, providers, and deployments', async () => {
     const root = makeTempRoot('mainspring-gateway-hosted-cron-identity-')
     const sessionsRoot = path.join(root, 'sessions')
     const workspaceRoot = path.join(root, 'workspace')
@@ -4294,7 +4295,27 @@ describe('LocalGatewayHttpServer', () => {
       sessionId: 'session_hosted_cron_identity',
       workspace: { root: workspaceRoot },
     })
-    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
+    const hostedDeploymentDriver: DeploymentDriver = {
+      kind: 'hosted-test',
+      executionMode: 'test-driver',
+      plan: ({ target, operation }) => ({
+        operation,
+        targetId: target.targetId,
+        targetLabel: target.label,
+        targetKind: target.kind,
+        summary: `Hosted ${operation} test deployment.`,
+        prerequisites: [],
+        warnings: [],
+        steps: [],
+      }),
+      execute: () => undefined,
+    }
+    const gateway = createLocalMainspringGateway({
+      runtime,
+      runLog,
+      appState,
+      deployments: { drivers: [hostedDeploymentDriver] },
+    })
     const server = createLocalGatewayServer({
       gateway,
       host: '127.0.0.1',
@@ -4425,6 +4446,48 @@ describe('LocalGatewayHttpServer', () => {
       )
       expect(updatedProviderResponse.status).toBe(200)
 
+      const createdDeploymentResponse = await fetch(`${started.url}/deployment-targets`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          label: 'Hosted deployment target',
+          kind: 'hosted-test',
+          config: { privateConfigLabel: 'hosted-deployment-private-config' },
+          actor: 'browser-spoofed-deployment-operator',
+        }),
+      })
+      const createdDeployment = await createdDeploymentResponse.json() as {
+        deploymentTarget: { targetId: string }
+      }
+      expect(createdDeploymentResponse.status).toBe(201)
+
+      const updatedDeploymentResponse = await fetch(
+        `${started.url}/deployment-targets/${encodeURIComponent(createdDeployment.deploymentTarget.targetId)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            label: 'Hosted deployment target v2',
+            actor: 'browser-spoofed-deployment-operator',
+          }),
+        },
+      )
+      expect(updatedDeploymentResponse.status).toBe(200)
+
+      const executedDeploymentResponse = await fetch(
+        `${started.url}/deployment-targets/${encodeURIComponent(createdDeployment.deploymentTarget.targetId)}/execute`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            operation: 'deploy',
+            confirm: 'deploy',
+            actor: 'browser-spoofed-deployment-operator',
+          }),
+        },
+      )
+      expect(executedDeploymentResponse.status).toBe(202)
+
       const events = appState.auditEvents.list({ category: 'cron' })
       for (const action of [
         'schedule.created.authorized',
@@ -4455,11 +4518,23 @@ describe('LocalGatewayHttpServer', () => {
           event.action === action && event.targetId === createdProvider.providerProfile.profileId
         ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
       }
+      const deploymentEvents = appState.auditEvents.list({ category: 'deployment' })
+      for (const action of [
+        'target.created.authorized',
+        'target.updated.authorized',
+        'run.deploy.authorized',
+      ]) {
+        expect(deploymentEvents.find((event) => (
+          event.action === action && event.targetId === createdDeployment.deploymentTarget.targetId
+        ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
+      }
       expect(JSON.stringify(events)).not.toContain('browser-spoofed-cron-operator')
       expect(JSON.stringify(events)).not.toContain('HOSTED_CRON_TEST_SECRET')
       expect(JSON.stringify(budgetEvents)).not.toContain('browser-spoofed-budget-operator')
       expect(JSON.stringify(gatewayEvents)).not.toContain('browser-spoofed-provider-operator')
       expect(JSON.stringify(gatewayEvents)).not.toContain(hostedProviderSecret)
+      expect(JSON.stringify(deploymentEvents)).not.toContain('browser-spoofed-deployment-operator')
+      expect(JSON.stringify(deploymentEvents)).not.toContain('hosted-deployment-private-config')
     } finally {
       await server.stop()
       runLog.close()

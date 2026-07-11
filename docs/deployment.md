@@ -50,12 +50,15 @@ Bundled drivers:
 
 Custom deployment kinds are safe strings and fail closed unless a driver is registered. Driver config validation, support metadata, plan, execute, rollback, and destroy all come from the registered driver.
 
-Gateway deployment target creation and updates persist a host-side
-`deployment.target.write` decision. Every deploy, rollback, or destroy action
-requires its exact operation as confirmation, records a bound
-`deployment.execute` decision before the driver is invoked, and preserves that
-same decision and its resolved-target/preflight-plan hashes in the deployment-run metadata. Browser DTOs omit these internal
-decision records and target configuration metadata.
+Gateway deployment target creation and updates persist a host-side,
+hash-only `deployment.target.write` authorization before app-state mutation.
+Every deploy, rollback, or destroy action requires its exact operation as
+confirmation, records a bound `deployment.execute` decision before the driver
+is invoked, and preserves that same decision and its resolved-target/preflight-plan
+hashes in deployment-run metadata. Hosted routes attach the authenticated
+principal to target and execution audit rows instead of accepting browser
+attribution. Browser DTOs omit these internal decision records and target
+configuration metadata.
 
 The VPS driver does not copy provider secrets. Remote env files must be managed separately.
 

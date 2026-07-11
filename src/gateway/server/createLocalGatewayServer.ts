@@ -689,7 +689,7 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/deployment-targets') {
         const body = await this.readJson(request)
         const parsed = CreateDeploymentTargetRequestSchema.parse(body)
-        const deploymentTarget = this.createDeploymentTarget(parsed)
+        const deploymentTarget = this.createDeploymentTarget(parsed, principal?.actor)
         this.writeJson(response, 201, sanitizeGatewayResponse({
           deploymentTarget: consoleDeploymentTarget(deploymentTarget),
         }))
@@ -700,7 +700,7 @@ export class LocalGatewayHttpServer {
         const targetId = decodeURIComponent(path.slice('/deployment-targets/'.length))
         const body = await this.readJson(request)
         const parsed = UpdateDeploymentTargetRequestSchema.parse(body)
-        const deploymentTarget = this.updateDeploymentTarget(targetId, parsed)
+        const deploymentTarget = this.updateDeploymentTarget(targetId, parsed, principal?.actor)
         this.writeJson(response, 200, sanitizeGatewayResponse({
           deploymentTarget: consoleDeploymentTarget(deploymentTarget),
         }))
@@ -720,7 +720,7 @@ export class LocalGatewayHttpServer {
         const targetId = decodeURIComponent(path.slice('/deployment-targets/'.length, -'/execute'.length))
         const body = await this.readJson(request)
         const parsed = ExecuteDeploymentRequestSchema.parse(body)
-        const deploymentExecution = this.executeDeployment(targetId, parsed)
+        const deploymentExecution = this.executeDeployment(targetId, parsed, principal?.actor)
         this.writeJson(response, 202, consoleDeploymentExecution(deploymentExecution))
         return
       }
@@ -1475,12 +1475,13 @@ export class LocalGatewayHttpServer {
     return this.options.gateway.budgets.create({ ...input, ...(actor ? { actor } : {}) })
   }
 
-  private createDeploymentTarget(input: CreateDeploymentTargetRequest) {
+  private createDeploymentTarget(input: CreateDeploymentTargetRequest, actor?: string) {
     return this.options.gateway.deployments.createTarget({
       workspaceId: input.workspaceId,
       label: input.label,
       kind: input.kind,
       ...(input.config ? { metadata: input.config } : {}),
+      ...(actor ? { actor } : {}),
     })
   }
 
@@ -1500,7 +1501,7 @@ export class LocalGatewayHttpServer {
     })
   }
 
-  private updateDeploymentTarget(targetId: string, input: UpdateDeploymentTargetRequest) {
+  private updateDeploymentTarget(targetId: string, input: UpdateDeploymentTargetRequest, actor?: string) {
     return this.options.gateway.deployments.updateTarget({
       targetId,
       workspaceId: input.workspaceId,
@@ -1508,6 +1509,7 @@ export class LocalGatewayHttpServer {
       kind: input.kind,
       status: input.status,
       ...(input.config ? { metadata: input.config } : {}),
+      ...(actor ? { actor } : {}),
     })
   }
 
@@ -1550,11 +1552,12 @@ export class LocalGatewayHttpServer {
     })
   }
 
-  private executeDeployment(targetId: string, input: ExecuteDeploymentRequest) {
+  private executeDeployment(targetId: string, input: ExecuteDeploymentRequest, actor?: string) {
     return this.options.gateway.deployments.execute({
       targetId,
       operation: input.operation,
       confirm: input.confirm,
+      ...(actor ? { actor } : {}),
     })
   }
 

@@ -1,6 +1,6 @@
 import { createMainspringRuntimeId } from '#protocol'
 import { hashApprovalInput } from '../policy/ApprovalReceipt.js'
-import { createHostDecisionRecord } from '../policy/DecisionRecord.js'
+import { createHostDecisionRecord, type DecisionRecord } from '../policy/DecisionRecord.js'
 import type {
   LocalGatewayAppStateStore,
   LocalGatewayDeploymentRunRecord,
@@ -22,6 +22,8 @@ export interface CreateLocalGatewayDeploymentTargetDraftInput {
   label: string
   kind: LocalGatewayDeploymentTargetRecord['kind']
   metadata?: Record<string, unknown>
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface UpdateLocalGatewayDeploymentTargetDraftInput {
@@ -31,6 +33,8 @@ export interface UpdateLocalGatewayDeploymentTargetDraftInput {
   kind?: LocalGatewayDeploymentTargetRecord['kind']
   status?: LocalGatewayDeploymentTargetRecord['status']
   metadata?: Record<string, unknown>
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface GatewayDeploymentControlOptions {
@@ -62,11 +66,12 @@ export class GatewayDeploymentControl {
   createTarget(
     input: CreateLocalGatewayDeploymentTargetDraftInput,
   ): LocalGatewayDeploymentTargetRecord {
-    if (input.workspaceId && !this.options.appState.workspaces.get(input.workspaceId)) {
-      throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
+    const { actor: _actor, ...draft } = input
+    if (draft.workspaceId && !this.options.appState.workspaces.get(draft.workspaceId)) {
+      throw new Error(`Unknown gateway workspace: ${draft.workspaceId}`)
     }
     const targetId = createMainspringRuntimeId('deployment_target')
-    const targetInput = this.deploymentTargetInputWithDriverSupport(input)
+    const targetInput = this.deploymentTargetInputWithDriverSupport(draft)
     this.options.drivers.validateTarget({
       targetId,
       label: targetInput.label,
@@ -77,98 +82,117 @@ export class GatewayDeploymentControl {
       ...(targetInput.workspaceId ? { workspaceId: targetInput.workspaceId } : {}),
       ...(targetInput.metadata ? { metadata: targetInput.metadata } : {}),
     })
-    const decision = createHostDecisionRecord({
-      runId: 'gateway-control-plane',
-      surface: 'deployment',
-      operation: 'deployment.target.write',
-      targetKey: targetId,
-      state: 'allow',
-      reasons: ['Trusted local gateway operator requested deployment target creation.'],
-      permissionCategories: ['deployment', 'operator-control-plane'],
-      input: targetInput,
-      metadata: {
-        mutation: 'create',
-        targetKind: targetInput.kind,
-        ...(targetInput.workspaceId ? { workspaceId: targetInput.workspaceId } : {}),
-      },
-    })
-    const target = this.options.appState.deploymentTargets.create({
+    const targetHash = hashApprovalInput({
       targetId,
-      ...targetInput,
-      metadata: {
-        ...(targetInput.metadata ?? {}),
-        decisionRecord: decision,
-      },
+      workspaceId: targetInput.workspaceId,
+      label: targetInput.label,
+      kind: targetInput.kind,
+      status: 'active',
+      metadata: targetInput.metadata,
     })
-    this.options.appState.auditEvents.create({
-      category: 'deployment',
-      action: 'target.created',
-      actor: 'local-gateway',
-      targetType: 'deployment-target',
-      targetId: target.targetId,
-      metadata: {
-        decisionRecord: decision,
-        ...(target.workspaceId ? { workspaceId: target.workspaceId } : {}),
-      },
+    const actor = actorFor(input)
+    const decision = this.targetDecision({
+      targetId,
+      targetHash,
+      mutation: 'create',
+      targetKind: targetInput.kind,
+      ...(targetInput.workspaceId ? { workspaceId: targetInput.workspaceId } : {}),
+      reason: 'Trusted gateway operator requested deployment target creation.',
     })
-    return target
+    this.authorizeTargetMutation({ action: 'target.created', actor, targetId, decision })
+    try {
+      const target = this.options.appState.deploymentTargets.create({
+        targetId,
+        ...targetInput,
+        metadata: {
+          ...(targetInput.metadata ?? {}),
+          decisionRecord: decision,
+        },
+      })
+      this.recordTargetOutcome({
+        action: 'target.created',
+        actor,
+        target,
+        decision,
+        targetHash,
+      })
+      return target
+    } catch (error) {
+      this.recordTargetFailure({ action: 'target.created', actor, targetId, decision, targetHash })
+      throw error
+    }
   }
 
   updateTarget(
     input: UpdateLocalGatewayDeploymentTargetDraftInput,
   ): LocalGatewayDeploymentTargetRecord {
-    const existing = this.options.appState.deploymentTargets.get(input.targetId)
-    if (!existing) throw new Error(`Unknown deployment target: ${input.targetId}`)
-    if (input.workspaceId && !this.options.appState.workspaces.get(input.workspaceId)) {
-      throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
+    const { actor: _actor, ...draft } = input
+    const existing = this.options.appState.deploymentTargets.get(draft.targetId)
+    if (!existing) throw new Error(`Unknown deployment target: ${draft.targetId}`)
+    if (draft.workspaceId && !this.options.appState.workspaces.get(draft.workspaceId)) {
+      throw new Error(`Unknown gateway workspace: ${draft.workspaceId}`)
     }
     const nextCandidate: LocalGatewayDeploymentTargetRecord = {
       ...existing,
-      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
-      ...(input.label ? { label: input.label } : {}),
-      ...(input.kind ? { kind: input.kind } : {}),
-      ...(input.status ? { status: input.status } : {}),
-      ...(input.metadata ? { metadata: input.metadata } : {}),
+      ...(draft.workspaceId ? { workspaceId: draft.workspaceId } : {}),
+      ...(draft.label ? { label: draft.label } : {}),
+      ...(draft.kind ? { kind: draft.kind } : {}),
+      ...(draft.status ? { status: draft.status } : {}),
+      ...(draft.metadata ? { metadata: draft.metadata } : {}),
     }
     this.options.drivers.validateTarget(nextCandidate)
-    const targetInput = this.deploymentTargetInputWithDriverSupport(input, nextCandidate)
-    const decision = createHostDecisionRecord({
-      runId: 'gateway-control-plane',
-      surface: 'deployment',
-      operation: 'deployment.target.write',
-      targetKey: existing.targetId,
-      state: 'allow',
-      reasons: ['Trusted local gateway operator requested deployment target mutation.'],
-      permissionCategories: ['deployment', 'operator-control-plane'],
-      input: targetInput,
-      metadata: {
-        mutation: 'update',
-        previousKind: existing.kind,
-        nextKind: targetInput.kind ?? existing.kind,
+    const targetInput = this.deploymentTargetInputWithDriverSupport(draft, nextCandidate)
+    const previousTargetHash = hashApprovalInput(existing)
+    const targetHash = hashApprovalInput({
+      targetId: existing.targetId,
+      workspaceId: targetInput.workspaceId ?? existing.workspaceId,
+      label: targetInput.label ?? existing.label,
+      kind: targetInput.kind ?? existing.kind,
+      status: targetInput.status ?? existing.status,
+      metadata: targetInput.metadata ?? existing.metadata,
+    })
+    const actor = actorFor(input)
+    const decision = this.targetDecision({
+      targetId: existing.targetId,
+      targetHash,
+      previousTargetHash,
+      mutation: 'update',
+      targetKind: targetInput.kind ?? existing.kind,
+      ...(targetInput.workspaceId ?? existing.workspaceId
+        ? { workspaceId: targetInput.workspaceId ?? existing.workspaceId }
+        : {}),
+      previousStatus: existing.status,
+      nextStatus: targetInput.status ?? existing.status,
+      reason: 'Trusted gateway operator requested deployment target mutation.',
+    })
+    this.authorizeTargetMutation({ action: 'target.updated', actor, targetId: existing.targetId, decision })
+    try {
+      const target = this.options.appState.deploymentTargets.update({
+        ...targetInput,
+        metadata: {
+          ...(targetInput.metadata ?? {}),
+          decisionRecord: decision,
+        },
+      })
+      this.recordTargetOutcome({
+        action: 'target.updated',
+        actor,
+        target,
+        decision,
+        targetHash,
         previousStatus: existing.status,
-        nextStatus: targetInput.status ?? existing.status,
-      },
-    })
-    const target = this.options.appState.deploymentTargets.update({
-      ...targetInput,
-      metadata: {
-        ...(targetInput.metadata ?? {}),
-        decisionRecord: decision,
-      },
-    })
-    this.options.appState.auditEvents.create({
-      category: 'deployment',
-      action: 'target.updated',
-      actor: 'local-gateway',
-      targetType: 'deployment-target',
-      targetId: target.targetId,
-      metadata: {
-        previousStatus: existing.status,
-        nextStatus: target.status,
-        decisionRecord: decision,
-      },
-    })
-    return target
+      })
+      return target
+    } catch (error) {
+      this.recordTargetFailure({
+        action: 'target.updated',
+        actor,
+        targetId: existing.targetId,
+        decision,
+        targetHash,
+      })
+      throw error
+    }
   }
 
   plan(input: {
@@ -190,6 +214,8 @@ export class GatewayDeploymentControl {
     targetId: string
     operation: LocalGatewayDeploymentOperation
     confirm: string
+    /** Trusted gateway identity. HTTP callers cannot set this directly. */
+    actor?: string
   }): LocalGatewayDeploymentExecutionResult {
     assertDeploymentConfirmation(input.operation, input.confirm)
     const target = this.options.appState.deploymentTargets.get(input.targetId)
@@ -197,7 +223,7 @@ export class GatewayDeploymentControl {
 
     // Preflight before recording allow, while the actual driver call remains
     // immediately after the durable decision write below.
-    const plan = this.plan(input)
+    const plan = this.plan({ targetId: input.targetId, operation: input.operation })
     const planHash = hashApprovalInput(plan)
     const targetHash = hashApprovalInput(target)
     const support = deploymentTargetSupport(target, this.options.drivers)
@@ -207,7 +233,7 @@ export class GatewayDeploymentControl {
       operation: 'deployment.execute',
       targetKey: target.targetId,
       state: 'allow',
-      reasons: [`Trusted local gateway operator confirmed ${input.operation} for the deployment target.`],
+      reasons: [`Trusted gateway operator confirmed ${input.operation} for the deployment target.`],
       permissionCategories: ['deployment', 'side-effecting', 'operator-control-plane'],
       input: {
         targetId: target.targetId,
@@ -224,40 +250,158 @@ export class GatewayDeploymentControl {
         planHash,
       },
     })
+    const actor = actorFor(input)
     this.options.appState.auditEvents.create({
       category: 'deployment',
       action: `run.${input.operation}.authorized`,
-      actor: 'local-gateway',
+      actor,
       targetType: 'deployment-target',
       targetId: target.targetId,
       metadata: { decisionRecord: decision },
     })
-    const result = executeLocalGatewayDeployment({
-      appState: this.options.appState,
-      targetId: input.targetId,
-      operation: input.operation,
-      confirm: input.confirm,
-      authorization: decision,
-      plan,
-      dependencies: {
-        repoRoot: this.options.repoRoot,
-        drivers: this.options.drivers,
-        ...(this.options.commandRunner ? { commandRunner: this.options.commandRunner } : {}),
+    try {
+      const result = executeLocalGatewayDeployment({
+        appState: this.options.appState,
+        targetId: input.targetId,
+        operation: input.operation,
+        confirm: input.confirm,
+        authorization: decision,
+        plan,
+        dependencies: {
+          repoRoot: this.options.repoRoot,
+          drivers: this.options.drivers,
+          ...(this.options.commandRunner ? { commandRunner: this.options.commandRunner } : {}),
+        },
+      })
+      this.options.appState.auditEvents.create({
+        category: 'deployment',
+        action: `run.${input.operation}.${result.execution.ok ? 'succeeded' : 'failed'}`,
+        actor,
+        targetType: 'deployment-target',
+        targetId: input.targetId,
+        metadata: {
+          decisionId: decision.decisionId,
+          deploymentRunId: result.deploymentRun.deploymentRunId,
+          exitCode: result.execution.exitCode,
+          targetHash,
+          planHash,
+          executionMode: support.executionMode,
+        },
+      })
+      return result
+    } catch (error) {
+      this.options.appState.auditEvents.create({
+        category: 'deployment',
+        action: `run.${input.operation}.failed`,
+        actor,
+        targetType: 'deployment-target',
+        targetId: input.targetId,
+        metadata: {
+          decisionId: decision.decisionId,
+          targetHash,
+          planHash,
+          executionMode: support.executionMode,
+        },
+      })
+      throw error
+    }
+  }
+
+  private targetDecision(input: {
+    targetId: string
+    targetHash: string
+    previousTargetHash?: string
+    mutation: 'create' | 'update'
+    targetKind: string
+    workspaceId?: string
+    previousStatus?: LocalGatewayDeploymentTargetRecord['status']
+    nextStatus?: LocalGatewayDeploymentTargetRecord['status']
+    reason: string
+  }): DecisionRecord {
+    return createHostDecisionRecord({
+      runId: 'gateway-control-plane',
+      surface: 'deployment',
+      operation: 'deployment.target.write',
+      targetKey: input.targetId,
+      state: 'allow',
+      reasons: [input.reason],
+      permissionCategories: ['deployment', 'operator-control-plane'],
+      input: {
+        targetId: input.targetId,
+        mutation: input.mutation,
+        targetHash: input.targetHash,
+        ...(input.previousTargetHash ? { previousTargetHash: input.previousTargetHash } : {}),
+      },
+      metadata: {
+        mutation: input.mutation,
+        targetKind: input.targetKind,
+        targetHash: input.targetHash,
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+        ...(input.previousStatus ? { previousStatus: input.previousStatus } : {}),
+        ...(input.nextStatus ? { nextStatus: input.nextStatus } : {}),
+        ...(input.previousTargetHash ? { previousTargetHash: input.previousTargetHash } : {}),
       },
     })
+  }
+
+  private authorizeTargetMutation(input: {
+    action: 'target.created' | 'target.updated'
+    actor: string
+    targetId: string
+    decision: DecisionRecord
+  }): void {
     this.options.appState.auditEvents.create({
       category: 'deployment',
-      action: `run.${input.operation}.${result.execution.ok ? 'succeeded' : 'failed'}`,
-      actor: 'local-gateway',
+      action: `${input.action}.authorized`,
+      actor: input.actor,
+      targetType: 'deployment-target',
+      targetId: input.targetId,
+      metadata: { decisionRecord: input.decision },
+    })
+  }
+
+  private recordTargetOutcome(input: {
+    action: 'target.created' | 'target.updated'
+    actor: string
+    target: LocalGatewayDeploymentTargetRecord
+    decision: DecisionRecord
+    targetHash: string
+    previousStatus?: LocalGatewayDeploymentTargetRecord['status']
+  }): void {
+    this.options.appState.auditEvents.create({
+      category: 'deployment',
+      action: input.action,
+      actor: input.actor,
+      targetType: 'deployment-target',
+      targetId: input.target.targetId,
+      metadata: {
+        decisionRecord: input.decision,
+        targetHash: input.targetHash,
+        ...(input.target.workspaceId ? { workspaceId: input.target.workspaceId } : {}),
+        ...(input.previousStatus ? { previousStatus: input.previousStatus } : {}),
+        ...(input.previousStatus ? { nextStatus: input.target.status } : {}),
+      },
+    })
+  }
+
+  private recordTargetFailure(input: {
+    action: 'target.created' | 'target.updated'
+    actor: string
+    targetId: string
+    decision: DecisionRecord
+    targetHash: string
+  }): void {
+    this.options.appState.auditEvents.create({
+      category: 'deployment',
+      action: `${input.action}.failed`,
+      actor: input.actor,
       targetType: 'deployment-target',
       targetId: input.targetId,
       metadata: {
-        decisionId: decision.decisionId,
-        deploymentRunId: result.deploymentRun.deploymentRunId,
-        exitCode: result.execution.exitCode,
+        decisionId: input.decision.decisionId,
+        targetHash: input.targetHash,
       },
     })
-    return result
   }
 
   private deploymentTargetInputWithDriverSupport<T extends {
@@ -297,6 +441,11 @@ export class GatewayDeploymentControl {
       },
     }
   }
+}
+
+function actorFor(input: { actor?: string }): string {
+  const actor = input.actor?.trim()
+  return actor || 'local-gateway'
 }
 
 function assertDeploymentConfirmation(
