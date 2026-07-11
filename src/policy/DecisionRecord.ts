@@ -23,6 +23,7 @@ export type DecisionRecordSurface =
   | 'subagent'
   | 'artifact'
   | 'provider_config'
+  | 'deployment'
   | 'channel'
   | 'mcp'
   | 'unknown'
@@ -34,6 +35,8 @@ type HostDecisionSurfaceOperation =
   | { surface: 'channel'; operation: 'channel.send' }
   | { surface: 'memory'; operation: 'memory.replace' }
   | { surface: 'memory'; operation: 'memory.delete' }
+  | { surface: 'deployment'; operation: 'deployment.target.write' }
+  | { surface: 'deployment'; operation: 'deployment.execute' }
 
 export interface DecisionRecord {
   decisionId: string

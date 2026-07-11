@@ -4,6 +4,8 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { z } from 'zod'
 import { redactRuntimeSensitiveText } from '#protocol'
+import { hashApprovalInput } from '../policy/ApprovalReceipt.js'
+import { createHostDecisionRecord, type DecisionRecord } from '../policy/DecisionRecord.js'
 import type {
   LocalGatewayAppStateStore,
   LocalGatewayDeploymentRunRecord,
@@ -280,6 +282,13 @@ export function executeLocalGatewayDeployment(input: {
   targetId: string
   operation: LocalGatewayDeploymentOperation
   confirm: string
+  /**
+   * The public gateway supplies this before invoking the driver. The internal
+   * fallback still records a bound decision for focused driver callers.
+   */
+  authorization?: DecisionRecord
+  /** A preflight plan must be bound to the same target and operation. */
+  plan?: LocalGatewayDeploymentPlan
   dependencies?: LocalGatewayDeploymentDependencies
 }): LocalGatewayDeploymentExecutionResult {
   const normalizedConfirm = input.confirm.trim().toLowerCase()
@@ -288,21 +297,40 @@ export function executeLocalGatewayDeployment(input: {
   }
 
   const drivers = createDeploymentDriverRegistry(input.dependencies?.drivers)
-  const plan = planLocalGatewayDeployment({
-    appState: input.appState,
-    targetId: input.targetId,
-    operation: input.operation,
-    dependencies: {
-      ...(input.dependencies ?? {}),
-      drivers,
-    },
-  })
   const target = requireDeploymentTarget(input.appState, input.targetId)
   const driver = drivers.require(target.kind)
-  const runner = input.dependencies?.commandRunner ?? defaultCommandRunner
+  driver.validateTarget?.(target)
   const repoRoot = path.resolve(input.dependencies?.repoRoot ?? process.cwd())
+  const plan = input.plan ?? driver.plan({
+    appState: input.appState,
+    target,
+    operation: input.operation,
+    repoRoot,
+  })
+  assertDeploymentPlan({ plan, target, operation: input.operation })
+  const runner = input.dependencies?.commandRunner ?? defaultCommandRunner
   const startedAt = new Date().toISOString()
   const deploymentRunId = `deployment_run_${Date.now().toString(36)}`
+  const planHash = hashApprovalInput(plan)
+  const targetHash = hashApprovalInput(target)
+  const authorization = input.authorization ?? createHostDecisionRecord({
+    runId: deploymentRunId,
+    surface: 'deployment',
+    operation: 'deployment.execute',
+    targetKey: target.targetId,
+    state: 'allow',
+    reasons: ['Deployment execution received an exact local confirmation.'],
+    permissionCategories: ['deployment', 'side-effecting', 'operator-control-plane'],
+    input: {
+      targetId: target.targetId,
+      operation: input.operation,
+      targetKind: target.kind,
+      targetHash,
+      planHash,
+    },
+    metadata: { operation: input.operation, targetKind: target.kind, targetHash, planHash },
+  })
+  assertDeploymentAuthorization({ authorization, target, operation: input.operation, plan })
 
   let deploymentRun = input.appState.deploymentRuns.upsert({
     deploymentRunId,
@@ -311,6 +339,7 @@ export function executeLocalGatewayDeployment(input: {
     metadata: {
       operation: input.operation,
       planSummary: plan.summary,
+      decisionRecord: authorization,
       ...(plan.releaseId ? { releaseId: plan.releaseId } : {}),
       ...(plan.rollbackReleaseId ? { rollbackReleaseId: plan.rollbackReleaseId } : {}),
     },
@@ -332,6 +361,7 @@ export function executeLocalGatewayDeployment(input: {
       metadata: {
         operation: input.operation,
         planSummary: plan.summary,
+        decisionRecord: authorization,
         completedAt: new Date().toISOString(),
         ...(plan.releaseId ? { releaseId: plan.releaseId } : {}),
         ...(plan.rollbackReleaseId ? { rollbackReleaseId: plan.rollbackReleaseId } : {}),
@@ -364,6 +394,7 @@ export function executeLocalGatewayDeployment(input: {
       metadata: {
         operation: input.operation,
         planSummary: plan.summary,
+        decisionRecord: authorization,
         error: message,
         ...(plan.releaseId ? { releaseId: plan.releaseId } : {}),
         ...(plan.rollbackReleaseId ? { rollbackReleaseId: plan.rollbackReleaseId } : {}),
@@ -380,6 +411,53 @@ export function executeLocalGatewayDeployment(input: {
         detail: message,
       },
     }
+  }
+}
+
+function assertDeploymentAuthorization(input: {
+  authorization: DecisionRecord
+  target: LocalGatewayDeploymentTargetRecord
+  operation: LocalGatewayDeploymentOperation
+  plan: LocalGatewayDeploymentPlan
+}): void {
+  const { authorization, target, operation, plan } = input
+  const planHash = hashApprovalInput(plan)
+  const targetHash = hashApprovalInput(target)
+  const expectedInputHash = hashApprovalInput({
+    targetId: target.targetId,
+    operation,
+    targetKind: target.kind,
+    targetHash,
+    planHash,
+  })
+  if (
+    authorization.surface !== 'deployment'
+    || authorization.operation !== 'deployment.execute'
+    || authorization.targetKey !== target.targetId
+    || authorization.state !== 'allow'
+    || !authorization.approved
+    || authorization.inputHash !== expectedInputHash
+    || authorization.metadata?.targetHash !== targetHash
+    || authorization.metadata?.planHash !== planHash
+  ) {
+    throw new Error('Deployment execution authorization does not match the confirmed target.')
+  }
+  if (authorization.metadata?.operation !== operation) {
+    throw new Error('Deployment execution authorization does not match the requested operation.')
+  }
+}
+
+function assertDeploymentPlan(input: {
+  plan: LocalGatewayDeploymentPlan
+  target: LocalGatewayDeploymentTargetRecord
+  operation: LocalGatewayDeploymentOperation
+}): void {
+  if (
+    input.plan.targetId !== input.target.targetId
+    || input.plan.targetKind !== input.target.kind
+    || input.plan.operation !== input.operation
+  ) {
+    throw new Error('Deployment preflight plan does not match the requested target and operation.')
   }
 }
 

@@ -50,6 +50,13 @@ Bundled drivers:
 
 Custom deployment kinds are safe strings and fail closed unless a driver is registered. Driver config validation, support metadata, plan, execute, rollback, and destroy all come from the registered driver.
 
+Gateway deployment target creation and updates persist a host-side
+`deployment.target.write` decision. Every deploy, rollback, or destroy action
+requires its exact operation as confirmation, records a bound
+`deployment.execute` decision before the driver is invoked, and preserves that
+same decision and its resolved-target/preflight-plan hashes in the deployment-run metadata. Browser DTOs omit these internal
+decision records and target configuration metadata.
+
 The VPS driver does not copy provider secrets. Remote env files must be managed separately.
 
 The Kubernetes driver is documented in [`deploy/kubernetes/README.md`](../deploy/kubernetes/README.md). Its passing generated-manifest and injected-runner checks do not certify any real cluster, storage class, ingress controller, registry, backup, or disaster-recovery system.

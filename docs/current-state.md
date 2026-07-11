@@ -97,6 +97,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Non-tool authority decisions use the same durable `DecisionRecord` shape:
   - attenuated child-run creation appends a public `subagent.create` decision to the parent RunLog before creating the child; the decision binds the generated child run id and records inherited authority without exposing credentials or workspace roots.
   - local gateway provider-profile create/update mutations store a `provider_config.write` decision inside the corresponding audit row; mutation input is represented only by its hash.
+  - `GatewayDeploymentControl` persists `deployment.target.write` decisions with target configuration mutations and records a `deployment.execute` decision, bound to resolved target and preflight-plan hashes, in both the pre-driver audit trail and the deployment-run metadata before an exact-confirmed driver invocation.
   - artifact handling in the gateway is read-only indexing of runtime-created artifacts; the gateway has no artifact-publish mutation surface.
   - channel sends remain explicitly on the legacy mailbox compatibility path and are not presented as RunLog-native authority.
 - RunLog cron rows now fail closed at the schedule-to-run boundary:

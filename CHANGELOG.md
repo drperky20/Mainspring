@@ -16,6 +16,7 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Workspace-scoped, cursor-paginated memory history with browser-safe previews and no browser-supplied host paths.
 - Durable operator memory correction and deletion with append-only JSONL replacement/tombstone records, opaque workspace-scoped gateway routes, provenance-aware corrections, audit evidence, and console confirmation dialogs.
 - Durable, restart-safe canonical RunLog tool-call summaries with a dedicated cursor, bounded `GET /runlog/tool-calls` history route, opaque browser IDs, and an incremental Activity view.
+- Bounded `GatewayDeploymentControl` ownership for deployment target configuration and driver execution.
 
 ### Changed
 - Verification lane standardized around `pnpm verify`.
@@ -26,3 +27,4 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Security language now consistently states that host shell execution is not a sandbox and browser-side provider auth remains prototype-only.
 - Gateway error bodies now pass through the same path/credential sanitizer as successful browser responses.
 - Memory correction/deletion routes accept only opaque browser IDs scoped to registered workspaces; raw JSONL IDs, workspace roots, source metadata, and full values remain host-side.
+- Deployment target writes and exact-confirmed driver invocations now persist bound host decision records before external execution; browser DTOs omit decision and configuration metadata.

@@ -63,9 +63,6 @@ import {
 } from './CronExpression.js'
 import {
   createDeploymentDriverRegistry,
-  deploymentTargetSupport,
-  executeLocalGatewayDeployment,
-  planLocalGatewayDeployment,
   type DeploymentDriver,
   type DeploymentDriverRegistry,
   type LocalGatewayDeploymentCommandRunner,
@@ -115,12 +112,21 @@ import {
   type LocalGatewayMemoryDeletionInput,
   type LocalGatewayMemoryDeletionResult,
 } from './GatewayMemoryControl.js'
+import {
+  GatewayDeploymentControl,
+  type CreateLocalGatewayDeploymentTargetDraftInput,
+  type UpdateLocalGatewayDeploymentTargetDraftInput,
+} from './GatewayDeploymentControl.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
   LocalGatewayMemoryDeletionInput,
   LocalGatewayMemoryDeletionResult,
 } from './GatewayMemoryControl.js'
+export type {
+  CreateLocalGatewayDeploymentTargetDraftInput,
+  UpdateLocalGatewayDeploymentTargetDraftInput,
+} from './GatewayDeploymentControl.js'
 export type {
   LocalGatewayDeploymentCommandRunner,
   LocalGatewayDeploymentExecutionResult,
@@ -624,22 +630,6 @@ class LocalGatewayRuntimeProfileRegistry {
   defaultProfile(): string {
     return this.assertRegistered(DEFAULT_MAINSPRING_RUNTIME_PROFILE)!
   }
-}
-
-export interface CreateLocalGatewayDeploymentTargetDraftInput {
-  workspaceId?: string
-  label: string
-  kind: LocalGatewayDeploymentTargetRecord['kind']
-  metadata?: Record<string, unknown>
-}
-
-export interface UpdateLocalGatewayDeploymentTargetDraftInput {
-  targetId: string
-  workspaceId?: string
-  label?: string
-  kind?: LocalGatewayDeploymentTargetRecord['kind']
-  status?: LocalGatewayDeploymentTargetRecord['status']
-  metadata?: Record<string, unknown>
 }
 
 export interface LocalGatewaySnapshot {
@@ -1307,35 +1297,27 @@ export class LocalMainspringGateway {
 
   readonly deployments = {
     listTargets: (workspaceId?: string): LocalGatewayDeploymentTargetRecord[] =>
-      this.requireAppState().deploymentTargets.list(workspaceId ? { workspaceId } : {}),
+      this.deploymentControl().listTargets(workspaceId),
     listRuns: (input: {
       targetId?: string
       status?: LocalGatewayDeploymentRunRecord['status']
-    } = {}): LocalGatewayDeploymentRunRecord[] => this.requireAppState().deploymentRuns.list(input),
+    } = {}): LocalGatewayDeploymentRunRecord[] => this.deploymentControl().listRuns(input),
     createTarget: (
       input: CreateLocalGatewayDeploymentTargetDraftInput,
-    ): LocalGatewayDeploymentTargetRecord => this.createDeploymentTarget(input),
+    ): LocalGatewayDeploymentTargetRecord => this.deploymentControl().createTarget(input),
     updateTarget: (
       input: UpdateLocalGatewayDeploymentTargetDraftInput,
-    ): LocalGatewayDeploymentTargetRecord => this.updateDeploymentTarget(input),
+    ): LocalGatewayDeploymentTargetRecord => this.deploymentControl().updateTarget(input),
     plan: (input: {
       targetId: string
       operation: LocalGatewayDeploymentOperation
     }): LocalGatewayDeploymentPlan =>
-      planLocalGatewayDeployment({
-        appState: this.requireAppState(),
-        targetId: input.targetId,
-        operation: input.operation,
-        dependencies: {
-          repoRoot: this.deploymentRepoRoot,
-          drivers: this.deploymentDrivers,
-        },
-      }),
+      this.deploymentControl().plan(input),
     execute: (input: {
       targetId: string
       operation: LocalGatewayDeploymentOperation
       confirm: string
-    }): LocalGatewayDeploymentExecutionResult => this.executeDeployment(input),
+    }): LocalGatewayDeploymentExecutionResult => this.deploymentControl().execute(input),
   }
 
   readonly marketplace = {
@@ -3225,138 +3207,13 @@ export class LocalMainspringGateway {
     }
   }
 
-  private createDeploymentTarget(
-    input: CreateLocalGatewayDeploymentTargetDraftInput,
-  ): LocalGatewayDeploymentTargetRecord {
-    const appState = this.requireAppState()
-    if (input.workspaceId && !appState.workspaces.get(input.workspaceId)) {
-      throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
-    }
-    const targetInput = this.deploymentTargetInputWithDriverSupport(input)
-    this.deploymentDrivers.validateTarget({
-      targetId: 'deployment_target_pending',
-      label: targetInput.label,
-      kind: targetInput.kind,
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      ...(targetInput.workspaceId ? { workspaceId: targetInput.workspaceId } : {}),
-      ...(targetInput.metadata ? { metadata: targetInput.metadata } : {}),
+  private deploymentControl(): GatewayDeploymentControl {
+    return new GatewayDeploymentControl({
+      appState: this.requireAppState(),
+      repoRoot: this.deploymentRepoRoot,
+      drivers: this.deploymentDrivers,
+      ...(this.deploymentCommandRunner ? { commandRunner: this.deploymentCommandRunner } : {}),
     })
-    const target = appState.deploymentTargets.create(targetInput)
-    appState.auditEvents.create({
-      category: 'deployment',
-      action: 'target.created',
-      actor: 'local-gateway',
-      targetType: 'deployment-target',
-      targetId: target.targetId,
-      ...(target.workspaceId ? { metadata: { workspaceId: target.workspaceId } } : {}),
-    })
-    return target
-  }
-
-  private updateDeploymentTarget(
-    input: UpdateLocalGatewayDeploymentTargetDraftInput,
-  ): LocalGatewayDeploymentTargetRecord {
-    const appState = this.requireAppState()
-    const existing = appState.deploymentTargets.get(input.targetId)
-    if (!existing) throw new Error(`Unknown deployment target: ${input.targetId}`)
-    if (input.workspaceId && !appState.workspaces.get(input.workspaceId)) {
-      throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
-    }
-    const nextCandidate: LocalGatewayDeploymentTargetRecord = {
-      ...existing,
-      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
-      ...(input.label ? { label: input.label } : {}),
-      ...(input.kind ? { kind: input.kind } : {}),
-      ...(input.status ? { status: input.status } : {}),
-      ...(input.metadata ? { metadata: input.metadata } : {}),
-    }
-    this.deploymentDrivers.validateTarget(nextCandidate)
-    const target = appState.deploymentTargets.update(
-      this.deploymentTargetInputWithDriverSupport(input, nextCandidate),
-    )
-    appState.auditEvents.create({
-      category: 'deployment',
-      action: 'target.updated',
-      actor: 'local-gateway',
-      targetType: 'deployment-target',
-      targetId: target.targetId,
-      metadata: {
-        previousStatus: existing.status,
-        nextStatus: target.status,
-      },
-    })
-    return target
-  }
-
-  private executeDeployment(input: {
-    targetId: string
-    operation: LocalGatewayDeploymentOperation
-    confirm: string
-  }): LocalGatewayDeploymentExecutionResult {
-    const appState = this.requireAppState()
-    const result = executeLocalGatewayDeployment({
-      appState,
-      targetId: input.targetId,
-      operation: input.operation,
-      confirm: input.confirm,
-      dependencies: {
-        repoRoot: this.deploymentRepoRoot,
-        drivers: this.deploymentDrivers,
-        ...(this.deploymentCommandRunner ? { commandRunner: this.deploymentCommandRunner } : {}),
-      },
-    })
-    appState.auditEvents.create({
-      category: 'deployment',
-      action: `run.${input.operation}.${result.execution.ok ? 'succeeded' : 'failed'}`,
-      actor: 'local-gateway',
-      targetType: 'deployment-target',
-      targetId: input.targetId,
-      metadata: {
-        deploymentRunId: result.deploymentRun.deploymentRunId,
-        exitCode: result.execution.exitCode,
-      },
-    })
-    return result
-  }
-
-  private deploymentTargetInputWithDriverSupport<T extends {
-    kind?: string
-    metadata?: Record<string, unknown>
-  }>(
-    input: T,
-    target?: LocalGatewayDeploymentTargetRecord,
-  ): T {
-    const supportTarget = target
-      ?? (
-        input.kind
-          ? {
-              targetId: 'deployment_target_pending',
-              label: 'pending',
-              kind: input.kind,
-              status: 'active' as const,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              ...(input.metadata ? { metadata: input.metadata } : {}),
-            }
-          : undefined
-      )
-    if (!supportTarget) return input
-    const support = deploymentTargetSupport(supportTarget, this.deploymentDrivers)
-    return {
-      ...input,
-      metadata: {
-        ...(input.metadata ?? target?.metadata ?? {}),
-        deploymentDriver: {
-          executionSupported: support.executionSupported,
-          executionMode: support.executionMode,
-          ...(support.executionUnavailableReason
-            ? { executionUnavailableReason: support.executionUnavailableReason }
-            : {}),
-        },
-      },
-    }
   }
 
   private listProvenanceReviews(

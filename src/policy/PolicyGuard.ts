@@ -17,6 +17,8 @@ export type PolicyOperation =
   | 'channel.send'
   | 'memory.replace'
   | 'memory.delete'
+  | 'deployment.target.write'
+  | 'deployment.execute'
 
 export interface RuntimePolicyDefaults {
   approvalPolicy?: RuntimePolicy['approvalPolicy']

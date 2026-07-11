@@ -63,8 +63,9 @@ new product behavior from landing there without a compatibility reason.
 - `LocalGateway` is the public facade for clients, workspaces, agents,
   provider profiles, secrets, runs, approvals, cron, usage/budgets, artifacts,
   provenance, marketplace, cells, deployment, and console snapshots. Its
-  mutable-memory authority is delegated to the bounded `GatewayMemoryControl`
-  service rather than being implemented in the facade.
+  mutable-memory authority is delegated to `GatewayMemoryControl`, and
+  deployment target/driver authority to `GatewayDeploymentControl`, rather
+  than being implemented in the facade.
 - `AppStateStore` persists host/app metadata independently of RunLog execution.
   It must stay a read-model/metadata store rather than a second run truth.
 - `createLocalGatewayServer` authenticates/authorizes, validates input, calls
@@ -90,7 +91,7 @@ new product behavior from landing there without a compatibility reason.
 
 | Finding | Evidence | Impact | Decision |
 | --- | --- | --- | --- |
-| Broad gateway facade | `src/gateway/LocalGateway.ts` remains a large stable public facade. | Ownership is difficult to discover; snapshot/projection work is mixed with domain operations. | Keep the stable facade; `CompatibilityRunPageReader` owns the bounded compatibility page/cache path, `ApprovalHistoryPage` owns approval-history merging, `RunLogActivityPage` owns canonical activity/trace reads, `RunLogToolCallHistoryPage` owns canonical tool history, and `GatewayMemoryControl` owns opaque-ID memory correction/deletion, provenance scanning, decision evidence, journal writes, and audit persistence. Further internal collaborators remain a P2 refactor. |
+| Broad gateway facade | `src/gateway/LocalGateway.ts` remains a large stable public facade. | Ownership is difficult to discover; snapshot/projection work is mixed with domain operations. | Keep the stable facade; `CompatibilityRunPageReader` owns the bounded compatibility page/cache path, `ApprovalHistoryPage` owns approval-history merging, `RunLogActivityPage` owns canonical activity/trace reads, `RunLogToolCallHistoryPage` owns canonical tool history, `GatewayMemoryControl` owns opaque-ID memory correction/deletion, and `GatewayDeploymentControl` owns target configuration plus confirmed driver execution and durable decision evidence. Further internal collaborators remain a P2 refactor. |
 | Broad app-state store | `src/gateway/AppStateStore.ts` is 3,273 lines. | Repository methods, SQL mappings, schema, and migrations are co-located. | Preserve the interface; split only behind tested repository seams. |
 | Broad connected console | `apps/console/src/ConnectedConsoleApp.tsx` is now 1,538 lines. | Connection lifecycle, selection, commands, and remaining workspace panels still share one file. | Navigation, provider catalog/form, first-run setup, client editing, settings, and reusable workflow primitives are now extracted; split remaining client/workspace panels only behind stable props. |
 | Broad snapshot compatibility DTO | `/snapshot` still includes every app-state collection. | Fresh projection cost and unbounded growth pressure remain. | ETag transport, server-only sanitized cache, adaptive refresh, and cursor pages for canonical/compatibility runs, canonical tool calls, approvals, traces, detailed usage, artifacts, audit, and per-workspace memory are complete; the compatible aggregate still needs a future narrowing migration. |
@@ -113,7 +114,7 @@ so deleting them would be an unsafe breaking change.
 | Cron | Scoped, expiring grants and RunLog decisions before side-effecting dispatch. | Grant projections omit private hashes. | Compatibility gateway cron remains mailbox-backed without a RunLog host. |
 | Child runs | RunLog child creation narrows inherited parent context and records a decision. | Credential references stay opaque. | No remote cross-host identity/dispatch fabric. |
 | Gateway administration | Hosted auth/session attribution and role authorization before mutations. | User/password verifier material is omitted from DTOs. | Local roles are not tenancy, SSO, or enterprise identity. |
-| Deployment/cells | Explicit deployment driver and backend capability truth. | Browser DTOs expose only safe status. | Docker/WSL are not VM isolation; generated Kubernetes controls are not production certification. |
+| Deployment/cells | `GatewayDeploymentControl` records target-write and exact-confirmed execution decisions before driver invocation; deployment runs retain the same decision metadata. | Browser DTOs expose only safe status, never decision/config metadata. | Docker/WSL are not VM isolation; generated Kubernetes controls are not production certification. |
 
 The full regression corpus is mapped in
 `docs/security-redteam-matrix.md`. New privileged surfaces should add a matrix

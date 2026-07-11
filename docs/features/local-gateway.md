@@ -125,6 +125,15 @@ Staged memory/skill provenance reviews are exposed through local gateway routes:
 
 These routes read the workspace-local `.mainspring/provenance-review.jsonl` queue, return sanitized browser DTOs, and apply only previously approved staged memory/skill mutations. The React console has matching controls to load the queue, approve/reject a pending item, and apply an approved item. This is local operator review, not a remote skill reputation service.
 
+Deployment target configuration and driver execution are owned by
+`GatewayDeploymentControl`. Target create/update writes persist a
+`deployment.target.write` decision, while exact-confirmed deploy, rollback, or
+destroy actions write a bound `deployment.execute` decision to the audit trail
+and deployment-run metadata before a driver is invoked; the decision binds
+hashes of the resolved target and validated preflight plan. The console receives
+only sanitized target, plan, and execution DTOs, not decision records or
+target configuration metadata.
+
 Optional remote template sources are configured host-side with a catalog URL, publisher ID, key ID, and Ed25519 public key. Admins can call `POST /marketplace/remotes/sync`; verified templates then appear in `GET /marketplace/templates` with signed publisher provenance and can use the existing admin-only install route. Catalog/file content and source URLs are not returned to the browser. This is pinned template distribution, not a remote skill reputation or paid marketplace service.
 
 Gateway RunLog routes are local development surfaces. They do not create a hosted worker
