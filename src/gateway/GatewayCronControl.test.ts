@@ -143,6 +143,18 @@ describe('GatewayCronControl', () => {
       expect(grantSawAuthorization).toBe(true)
       expect(granted).toMatchObject({ scheduleId: schedule.scheduleId, grantPresent: true })
 
+      const triggerAuthorization = control.authorizeTrigger({
+        scheduleId: schedule.scheduleId,
+        trigger: 'manual',
+        nextRunAt: '2026-07-10T13:00:00.000Z',
+        actor: 'hosted:operator_cron:admin',
+      })
+      control.recordTriggerOutcome({
+        authorization: triggerAuthorization,
+        runId: 'run_cron_control',
+        nextRunAt: '2026-07-10T13:00:00.000Z',
+      })
+
       control.delete(schedule.scheduleId, 'hosted:operator_cron:admin')
       expect(appState.cronSchedules.get(schedule.scheduleId)).toBeNull()
 
@@ -179,6 +191,30 @@ describe('GatewayCronControl', () => {
           action: 'schedule.deleted.authorized',
           actor: 'hosted:operator_cron:admin',
           targetId: schedule.scheduleId,
+        }),
+        expect.objectContaining({
+          action: 'schedule.run-now.authorized',
+          actor: 'hosted:operator_cron:admin',
+          targetId: schedule.scheduleId,
+          metadata: {
+            decisionRecord: expect.objectContaining({
+              surface: 'cron',
+              operation: 'cron.trigger',
+              metadata: expect.objectContaining({
+                scheduleHash: expect.any(String),
+                trigger: 'manual',
+              }),
+            }),
+          },
+        }),
+        expect.objectContaining({
+          action: 'schedule.run-now',
+          actor: 'hosted:operator_cron:admin',
+          targetId: schedule.scheduleId,
+          runId: 'run_cron_control',
+          metadata: expect.objectContaining({
+            triggerDecisionId: triggerAuthorization.decision.decisionId,
+          }),
         }),
       ]))
       expect(JSON.stringify(events)).not.toContain(secretPrompt)

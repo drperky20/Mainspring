@@ -3096,7 +3096,8 @@ describe('LocalMainspringGateway', () => {
         cronExpr: '30 9 * * 1',
         enabled: false,
       })
-      const run = gateway.cron.runNow(schedule.scheduleId)
+      const actor = 'hosted:cron-manual:admin'
+      const run = gateway.cron.runNow(schedule.scheduleId, actor)
       const [pending] = MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(1)
       if (!pending?.dispatch.success) {
         throw new Error(`Expected cron mailbox dispatch, got ${pending?.dispatch.error?.message ?? 'none'}.`)
@@ -3121,17 +3122,32 @@ describe('LocalMainspringGateway', () => {
         providerId: 'openrouter',
         modelId: 'openrouter/free',
       })
-      expect(appState.auditEvents.list({ category: 'cron' })).toEqual(
+      const cronEvents = appState.auditEvents.list({ category: 'cron' })
+      expect(cronEvents).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ action: 'schedule.created', targetId: schedule.scheduleId }),
           expect.objectContaining({ action: 'schedule.updated', targetId: schedule.scheduleId }),
           expect.objectContaining({
             action: 'schedule.run-now',
+            actor,
             targetId: schedule.scheduleId,
             runId: run.runId,
+            metadata: expect.objectContaining({ triggerDecisionId: expect.any(String) }),
           }),
         ]),
       )
+      const triggerAuthorizationIndex = cronEvents.findIndex((event) => (
+        event.action === 'schedule.run-now.authorized'
+        && event.targetId === schedule.scheduleId
+        && event.actor === actor
+      ))
+      const triggerOutcomeIndex = cronEvents.findIndex((event) => (
+        event.action === 'schedule.run-now'
+        && event.targetId === schedule.scheduleId
+        && event.runId === run.runId
+      ))
+      expect(triggerAuthorizationIndex).toBeGreaterThanOrEqual(0)
+      expect(triggerOutcomeIndex).toBeGreaterThan(triggerAuthorizationIndex)
     } finally {
       appState.close()
     }

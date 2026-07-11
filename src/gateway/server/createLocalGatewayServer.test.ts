@@ -4458,6 +4458,16 @@ describe('LocalGatewayHttpServer', () => {
       )
       expect(grantedResponse.status).toBe(201)
 
+      const runNowResponse = await fetch(
+        `${started.url}/cron/${encodeURIComponent(created.cronSchedule.scheduleId)}/run-now`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ actor: 'browser-spoofed-cron-trigger-operator' }),
+        },
+      )
+      expect(runNowResponse.status).toBe(202)
+
       const deletedResponse = await fetch(`${started.url}/cron/${encodeURIComponent(created.cronSchedule.scheduleId)}`, {
         method: 'DELETE',
         headers,
@@ -4572,6 +4582,7 @@ describe('LocalGatewayHttpServer', () => {
         'schedule.created.authorized',
         'schedule.updated.authorized',
         'schedule.grant.created.authorized',
+        'schedule.run-now.authorized',
         'schedule.deleted.authorized',
       ]) {
         expect(events.find((event) => (

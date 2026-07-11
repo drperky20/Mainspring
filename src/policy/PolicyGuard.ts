@@ -29,6 +29,7 @@ export type PolicyOperation =
   | 'topology.write'
   | 'marketplace.install'
   | 'marketplace.catalog.sync'
+  | 'cron.trigger'
 
 export interface RuntimePolicyDefaults {
   approvalPolicy?: RuntimePolicy['approvalPolicy']

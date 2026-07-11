@@ -117,6 +117,7 @@ import {
   type LocalGatewayCreateCronGrantInput,
   type LocalGatewayCronGrantPreview,
   type LocalGatewayCronScheduleDraftInput,
+  type LocalGatewayCronTriggerAuthorization,
   type UpdateLocalGatewayCronScheduleDraftInput,
 } from './GatewayCronControl.js'
 import {
@@ -151,6 +152,7 @@ export type {
   LocalGatewayCreateCronGrantInput,
   LocalGatewayCronGrantPreview,
   LocalGatewayCronScheduleDraftInput,
+  LocalGatewayCronTriggerAuthorization,
   UpdateLocalGatewayCronScheduleDraftInput,
 } from './GatewayCronControl.js'
 export type {
@@ -1166,8 +1168,8 @@ export class LocalMainspringGateway {
       this.cronControl().delete(scheduleId, actor)
       return { scheduleId, deleted: true }
     },
-    runNow: (scheduleId: string): RunRecord | RunLogRunRecord =>
-      this.runCronScheduleNow(scheduleId, 'manual'),
+    runNow: (scheduleId: string, actor?: string): RunRecord | RunLogRunRecord =>
+      this.runCronScheduleNow(scheduleId, 'manual', this.now(), actor),
     grantPreview: (scheduleId: string): LocalGatewayCronGrantPreview =>
       this.cronControl().previewGrant(scheduleId),
     createGrant: (input: LocalGatewayCreateCronGrantInput): LocalGatewayCronGrantPreview =>
@@ -3104,6 +3106,7 @@ export class LocalMainspringGateway {
     scheduleId: string,
     trigger: 'manual' | 'scheduler',
     now = this.now(),
+    actor?: string,
   ): RunRecord | RunLogRunRecord {
     const appState = this.requireAppState()
     const schedule = appState.cronSchedules.get(scheduleId)
@@ -3116,48 +3119,61 @@ export class LocalMainspringGateway {
           after: now,
         })
       : undefined
-    const updatedSchedule = appState.cronSchedules.update({
+    const triggerAuthorization = this.cronControl().authorizeTrigger({
       scheduleId,
-      lastRunAt: now.toISOString(),
-      nextRunAt: nextRunAt ?? '',
-      lastError: '',
+      trigger,
+      ...(actor ? { actor } : {}),
+      ...(nextRunAt ? { nextRunAt } : {}),
     })
-    if (this.runLogRuntime) {
-      return this.runRunLogCronSchedule(updatedSchedule, trigger, now, nextRunAt)
+    try {
+      const updatedSchedule = appState.cronSchedules.update({
+        scheduleId,
+        lastRunAt: now.toISOString(),
+        nextRunAt: nextRunAt ?? '',
+        lastError: '',
+      })
+      if (this.runLogRuntime) {
+        return this.runRunLogCronSchedule(
+          updatedSchedule,
+          trigger,
+          now,
+          nextRunAt,
+          triggerAuthorization,
+        )
+      }
+      const run = this.runs.startFromAppState({
+        sessionId: updatedSchedule.sessionId,
+        input: updatedSchedule.prompt,
+        mode: 'chat',
+        allowedTools: updatedSchedule.allowedTools,
+        actor: triggerAuthorization.actor,
+        ...(updatedSchedule.workspaceId ? { workspaceId: updatedSchedule.workspaceId } : {}),
+        ...(updatedSchedule.agentId ? { agentId: updatedSchedule.agentId } : {}),
+        ...(updatedSchedule.providerProfileId
+          ? { providerProfileId: updatedSchedule.providerProfileId }
+          : {}),
+        ...(updatedSchedule.computerId ? { computerId: updatedSchedule.computerId } : {}),
+        ...(updatedSchedule.runtimeProfile
+          ? { runtimeProfile: this.runtimeProfiles.assertRegistered(updatedSchedule.runtimeProfile) }
+          : {}),
+      })
+      appState.runs.upsert({
+        runId: run.runId,
+        sessionId: updatedSchedule.sessionId,
+        ...(updatedSchedule.workspaceId ? { workspaceId: updatedSchedule.workspaceId } : {}),
+        ...(updatedSchedule.agentId ? { agentId: updatedSchedule.agentId } : {}),
+        metadata: { scheduleId: updatedSchedule.scheduleId, trigger },
+      })
+      this.cronControl().recordTriggerOutcome({
+        authorization: triggerAuthorization,
+        runId: run.runId,
+        ...(nextRunAt ? { nextRunAt } : {}),
+      })
+      return run
+    } catch (error) {
+      this.cronControl().recordTriggerFailure({ authorization: triggerAuthorization })
+      throw error
     }
-    const run = this.runs.startFromAppState({
-      sessionId: updatedSchedule.sessionId,
-      input: updatedSchedule.prompt,
-      mode: 'chat',
-      allowedTools: updatedSchedule.allowedTools,
-      ...(updatedSchedule.workspaceId ? { workspaceId: updatedSchedule.workspaceId } : {}),
-      ...(updatedSchedule.agentId ? { agentId: updatedSchedule.agentId } : {}),
-      ...(updatedSchedule.providerProfileId
-        ? { providerProfileId: updatedSchedule.providerProfileId }
-        : {}),
-      ...(updatedSchedule.computerId ? { computerId: updatedSchedule.computerId } : {}),
-      ...(updatedSchedule.runtimeProfile
-        ? { runtimeProfile: this.runtimeProfiles.assertRegistered(updatedSchedule.runtimeProfile) }
-        : {}),
-    })
-    appState.runs.upsert({
-      runId: run.runId,
-      sessionId: updatedSchedule.sessionId,
-      ...(updatedSchedule.workspaceId ? { workspaceId: updatedSchedule.workspaceId } : {}),
-      ...(updatedSchedule.agentId ? { agentId: updatedSchedule.agentId } : {}),
-      metadata: { scheduleId: updatedSchedule.scheduleId, trigger },
-    })
-    appState.auditEvents.create({
-      category: 'cron',
-      action: trigger === 'manual' ? 'schedule.run-now' : 'schedule.triggered',
-      actor: 'local-gateway',
-      targetType: 'schedule',
-      targetId: updatedSchedule.scheduleId,
-      runId: run.runId,
-      sessionId: updatedSchedule.sessionId,
-      metadata: { nextRunAt: nextRunAt ?? null },
-    })
-    return run
   }
 
   private buildRunLogCronContext(
@@ -3272,12 +3288,16 @@ export class LocalMainspringGateway {
     trigger: 'manual' | 'scheduler',
     now: Date,
     nextRunAt?: string,
+    triggerAuthorization?: LocalGatewayCronTriggerAuthorization,
   ): RunLogRunRecord {
     const session = this.runtime.storage.stateStore.getSession(schedule.sessionId)
     if (!session) throw new Error(`Unknown session: ${schedule.sessionId}`)
     const context = this.buildRunLogCronContext(schedule, now)
     const runtime = context.runtime
-    const resolvedInput = context.resolvedInput
+    const resolvedInput = {
+      ...context.resolvedInput,
+      ...(triggerAuthorization ? { actor: triggerAuthorization.actor } : {}),
+    }
     const budgetEvaluations = this.assertRunBudgetAllowed(resolvedInput, session)
     const metadata: Record<string, unknown> & RunLogCronPolicyMetadata = {
       ...context.metadata,
@@ -3312,6 +3332,9 @@ export class LocalMainspringGateway {
           headless: true,
           cronMode: metadata.cronMode ?? (context.agent.tools?.length ? 'deny' : 'allowlist'),
           cronDecisionId: decision.decisionId,
+          ...(triggerAuthorization
+            ? { gatewayTriggerDecisionId: triggerAuthorization.decision.decisionId }
+            : {}),
           ...(schedule.providerProfileId ? { providerProfileId: schedule.providerProfileId } : {}),
           ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
           ...(resolvedInput.runtimeProfile
@@ -3400,21 +3423,14 @@ export class LocalMainspringGateway {
         cronDecisionState: runDecision.state,
       },
     )
-    this.requireAppState().auditEvents.create({
-      category: 'cron',
-      action: trigger === 'manual' ? 'schedule.run-now' : 'schedule.triggered',
-      actor: 'local-gateway',
-      targetType: 'schedule',
-      targetId: schedule.scheduleId,
-      runId: run.runId,
-      sessionId: schedule.sessionId,
-      metadata: {
-        nextRunAt: nextRunAt ?? null,
-        decisionId: runDecision.decisionId,
-        state: runDecision.state,
-        ...(runDecision.reasons.length > 0 ? { reasons: runDecision.reasons } : {}),
-      },
-    })
+    if (triggerAuthorization) {
+      this.cronControl().recordTriggerOutcome({
+        authorization: triggerAuthorization,
+        runId: run.runId,
+        ...(nextRunAt ? { nextRunAt } : {}),
+        executionDecision: runDecision,
+      })
+    }
     return runtime.store.getRun(run.runId) ?? run
   }
 

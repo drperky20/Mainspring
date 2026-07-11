@@ -43,6 +43,7 @@ type HostDecisionSurfaceOperation =
   | { surface: 'provenance'; operation: 'provenance.review.apply' }
   | { surface: 'cron'; operation: 'cron.schedule.write' }
   | { surface: 'cron'; operation: 'cron.grant.create' }
+  | { surface: 'cron'; operation: 'cron.trigger' }
   | { surface: 'budget'; operation: 'budget.write' }
   | { surface: 'budget'; operation: 'budget.warning.acknowledge' }
   | { surface: 'budget'; operation: 'budget.run.block' }

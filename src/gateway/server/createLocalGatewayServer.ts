@@ -1082,7 +1082,7 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'POST' && path.startsWith('/cron/') && path.endsWith('/run-now')) {
         const scheduleId = decodeURIComponent(path.slice('/cron/'.length, -'/run-now'.length))
-        const run = this.runCronNow(scheduleId)
+        const run = this.runCronNow(scheduleId, principal?.actor)
         this.writeJson(response, 202, sanitizeGatewayResponse({ run: consoleRunDispatch(run) }))
         return
       }
@@ -1513,8 +1513,8 @@ export class LocalGatewayHttpServer {
     return this.options.gateway.budgets.delete(budgetId, actor)
   }
 
-  private runCronNow(scheduleId: string) {
-    return this.options.gateway.cron.runNow(scheduleId)
+  private runCronNow(scheduleId: string, actor?: string) {
+    return this.options.gateway.cron.runNow(scheduleId, actor)
   }
 
   private previewCronGrant(scheduleId: string) {

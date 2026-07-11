@@ -34,6 +34,7 @@ Mainspring treats agents as untrusted workers.
 - Kubernetes gateway deployment manifests with single-replica SQLite, non-root execution, dropped capabilities, read-only root filesystem, disabled service-account token mounting, health probes, resource limits, existing Secret/PVC references, and guarded destroy
 - unapprovable hard blocks for catastrophic shell, credential-disclosure, Git remote/hook mutation, approval-disabling, and network-to-shell patterns
 - RunLog cron/headless grant decisions before due runs are queued or failed
+- hash-only cron trigger authority before manual/due schedule cursor mutation or dispatch, with hosted-principal attribution
 - local-agent security regression corpus for shell, filesystem, browser/fetch, memory, skill, bridge, and cron policy boundaries
 - repo-local red-team matrix that maps each tested or deferred failure class to evidence and remaining work
 - memory, skill, and local template provenance scanner with staged JSONL review records

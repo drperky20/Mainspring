@@ -136,6 +136,15 @@ export interface GatewayCronControlOptions {
   ) => LocalGatewayCronGrantPreview
 }
 
+export interface LocalGatewayCronTriggerAuthorization {
+  scheduleId: string
+  sessionId: string
+  trigger: 'manual' | 'scheduler'
+  actor: string
+  scheduleHash: string
+  decision: DecisionRecord
+}
+
 function normalizedText(value: string | undefined): string | undefined {
   const text = value?.trim()
   return text || undefined
@@ -199,6 +208,111 @@ export class GatewayCronControl {
 
   list(): LocalGatewayCronScheduleRecord[] {
     return this.options.appState.cronSchedules.list()
+  }
+
+  authorizeTrigger(input: {
+    scheduleId: string
+    trigger: 'manual' | 'scheduler'
+    actor?: string
+    nextRunAt?: string
+  }): LocalGatewayCronTriggerAuthorization {
+    const schedule = this.requireSchedule(input.scheduleId)
+    const scheduleHashValue = scheduleHash(schedule)
+    const actor = actorFor(input)
+    const decision = createHostDecisionRecord({
+      runId: 'gateway-control-plane',
+      surface: 'cron',
+      operation: 'cron.trigger',
+      targetKey: schedule.scheduleId,
+      state: 'allow',
+      reasons: [
+        input.trigger === 'manual'
+          ? 'Trusted gateway operator requested an immediate cron trigger.'
+          : 'Trusted gateway scheduler requested a due cron trigger.',
+      ],
+      permissionCategories: ['cron', 'headless', 'operator-control-plane'],
+      input: {
+        scheduleId: schedule.scheduleId,
+        scheduleHash: scheduleHashValue,
+        trigger: input.trigger,
+        ...(input.nextRunAt ? { nextRunAt: input.nextRunAt } : {}),
+      },
+      metadata: {
+        scheduleHash: scheduleHashValue,
+        trigger: input.trigger,
+        ...(input.nextRunAt ? { nextRunAt: input.nextRunAt } : {}),
+      },
+    })
+    this.options.appState.auditEvents.create({
+      category: 'cron',
+      action: input.trigger === 'manual'
+        ? 'schedule.run-now.authorized'
+        : 'schedule.triggered.authorized',
+      actor,
+      targetType: 'schedule',
+      targetId: schedule.scheduleId,
+      sessionId: schedule.sessionId,
+      metadata: decisionMetadata(decision),
+    })
+    return {
+      scheduleId: schedule.scheduleId,
+      sessionId: schedule.sessionId,
+      trigger: input.trigger,
+      actor,
+      scheduleHash: scheduleHashValue,
+      decision,
+    }
+  }
+
+  recordTriggerOutcome(input: {
+    authorization: LocalGatewayCronTriggerAuthorization
+    runId: string
+    nextRunAt?: string
+    executionDecision?: DecisionRecord
+  }): void {
+    const metadata: Record<string, unknown> = {
+      nextRunAt: input.nextRunAt ?? null,
+      triggerDecisionId: input.authorization.decision.decisionId,
+      scheduleHash: input.authorization.scheduleHash,
+      ...(input.executionDecision
+        ? {
+            decisionId: input.executionDecision.decisionId,
+            state: input.executionDecision.state,
+            ...(input.executionDecision.reasons.length > 0
+              ? { reasons: input.executionDecision.reasons }
+              : {}),
+          }
+        : {}),
+    }
+    this.options.appState.auditEvents.create({
+      category: 'cron',
+      action: input.authorization.trigger === 'manual' ? 'schedule.run-now' : 'schedule.triggered',
+      actor: input.authorization.actor,
+      targetType: 'schedule',
+      targetId: input.authorization.scheduleId,
+      runId: input.runId,
+      sessionId: input.authorization.sessionId,
+      metadata,
+    })
+  }
+
+  recordTriggerFailure(input: {
+    authorization: LocalGatewayCronTriggerAuthorization
+  }): void {
+    this.options.appState.auditEvents.create({
+      category: 'cron',
+      action: input.authorization.trigger === 'manual'
+        ? 'schedule.run-now.failed'
+        : 'schedule.triggered.failed',
+      actor: input.authorization.actor,
+      targetType: 'schedule',
+      targetId: input.authorization.scheduleId,
+      sessionId: input.authorization.sessionId,
+      metadata: {
+        triggerDecisionId: input.authorization.decision.decisionId,
+        scheduleHash: input.authorization.scheduleHash,
+      },
+    })
   }
 
   create(input: LocalGatewayCronScheduleDraftInput): LocalGatewayCronScheduleRecord {
