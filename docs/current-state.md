@@ -144,6 +144,9 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   worker/outbox summary, and the server-only revision token. `LocalGateway` keeps
   the stable public facade and command authority while its scoped compatibility
   event cache remains local to the facade.
+- `GatewayBudgetEvaluator` owns read-only usage rollups and budget threshold
+  derivation. `GatewayBudgetControl` and the facade continue to record durable
+  authority and threshold-transition audit evidence before stateful behavior.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
 - Contributor, governance, operations, and security guidance now describe RunLog Fabric as canonical while keeping the mailbox/`RuntimeKernel` path compatibility-only.

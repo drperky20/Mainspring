@@ -132,6 +132,7 @@ import { GatewayArtifactAccess, type LocalGatewayArtifactFile } from './GatewayA
 import { GatewayArtifactProjection } from './GatewayArtifactProjection.js'
 import { GatewayUsageProjection } from './GatewayUsageProjection.js'
 import { GatewaySnapshotReader, projectLocalGatewayRunLogRun } from './GatewaySnapshotReader.js'
+import { GatewayBudgetEvaluator } from './GatewayBudgetEvaluator.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
@@ -912,14 +913,6 @@ function emptyUsageStatus(): LocalGatewayUsageStatus {
   }
 }
 
-type LocalGatewayUsageEvaluationContext = {
-  usageEntries: LocalGatewayUsageLedgerEntryRecord[]
-  runsById: Map<string, LocalGatewayRunMetadataRecord>
-  workspacesById: Map<string, LocalGatewayWorkspaceRecord>
-  agentsById: Map<string, LocalGatewayAgentRecord>
-  clientsById: Map<string, LocalGatewayClientRecord>
-}
-
 type LocalGatewaySnapshotReadCache = {
   eventsBySessionId: Map<string, RunEvent[]>
   rawEventsBySessionId: Map<string, RuntimeEventRow[]>
@@ -955,6 +948,7 @@ export class LocalMainspringGateway {
   private readonly hyperCells?: HyperCellScheduler
   private readonly compatibilityRunPageReader: CompatibilityRunPageReader<LocalGatewayRunProjection>
   private readonly snapshotReader: GatewaySnapshotReader
+  private readonly budgetEvaluator = new GatewayBudgetEvaluator()
   private snapshotReadCache?: LocalGatewaySnapshotReadCache
   private cronTimer: NodeJS.Timeout | null = null
   private cronLastTickAt?: string
@@ -1030,7 +1024,7 @@ export class LocalMainspringGateway {
       ? new GatewayUsageProjection({
           appState,
           pricingCatalog: this.pricingCatalog,
-          evaluateBudgets: () => this.evaluateBudgets(appState),
+          evaluateBudgets: () => this.budgetEvaluator.evaluate(appState),
           recordBudgetTransitions: (input) => this.recordBudgetTransitions({
             appState,
             ...input,
@@ -2362,46 +2356,7 @@ export class LocalMainspringGateway {
   private usageStatus(): LocalGatewayUsageStatus {
     const appState = this.appState
     if (!appState) return emptyUsageStatus()
-    const context = this.usageContext(appState)
-    const totalSummary = summarizeUsageLedger(context.usageEntries)
-    return {
-      total: {
-        scopeType: 'total',
-        scopeId: 'total',
-        scopeLabel: 'All usage',
-        summary: totalSummary,
-      },
-      clients: [...context.clientsById.values()].map((client) => ({
-        scopeType: 'client',
-        scopeId: client.clientId,
-        scopeLabel: client.name,
-        summary: summarizeUsageLedger(
-          context.usageEntries.filter((entry) => {
-            const workspaceId = this.usageEntryWorkspaceId(entry, context)
-            return workspaceId ? context.workspacesById.get(workspaceId)?.clientId === client.clientId : false
-          }),
-        ),
-      })),
-      workspaces: [...context.workspacesById.values()].map((workspace) => ({
-        scopeType: 'workspace',
-        scopeId: workspace.workspaceId,
-        scopeLabel: workspace.name,
-        summary: summarizeUsageLedger(
-          context.usageEntries.filter((entry) => this.usageEntryWorkspaceId(entry, context) === workspace.workspaceId),
-        ),
-      })),
-      agents: [...context.agentsById.values()].map((agent) => ({
-        scopeType: 'agent',
-        scopeId: agent.agentId,
-        scopeLabel: agent.name,
-        summary: summarizeUsageLedger(
-          context.usageEntries.filter((entry) => context.runsById.get(entry.runId)?.agentId === agent.agentId),
-        ),
-      })),
-      unpricedEntries: totalSummary.unpricedEntries,
-      pricedEntries: totalSummary.pricedEntries,
-      estimatedCostUsd: totalSummary.estimatedCostUsd,
-    }
+    return this.budgetEvaluator.usageStatus(appState)
   }
 
   readonly cells = {
@@ -2776,9 +2731,7 @@ export class LocalMainspringGateway {
   }
 
   private evaluateBudgets(appState: LocalGatewayAppStateStore): LocalGatewayBudgetEvaluation[] {
-    const budgets = appState.budgets.list({ status: 'active' })
-    const context = this.usageContext(appState)
-    return budgets.map((budget) => this.evaluateBudgetRecord(budget, context))
+    return this.budgetEvaluator.evaluate(appState)
   }
 
   private evaluateBudgetsForRun(
@@ -2786,114 +2739,7 @@ export class LocalMainspringGateway {
     input: LocalGatewayStartRunInput,
     session: MainspringSessionRecord,
   ): LocalGatewayBudgetEvaluation[] {
-    const sessionMetadata = recordValue(session.metadata) ?? {}
-    const workspaceId =
-      input.workspaceId ?? textValue(sessionMetadata.workspaceId as string | undefined)
-    const agentId = input.agentId
-    const clientId =
-      workspaceId
-        ? appState.workspaces.get(workspaceId)?.clientId
-        : textValue(sessionMetadata.clientId as string | undefined)
-    const budgets = appState.budgets
-      .list({ status: 'active' })
-      .filter((budget) =>
-        (budget.scopeType === 'client' && clientId === budget.scopeId)
-        || (budget.scopeType === 'workspace' && workspaceId === budget.scopeId)
-        || (budget.scopeType === 'agent' && agentId === budget.scopeId),
-      )
-    const allEvaluations = this.evaluateBudgets(appState)
-    const evaluationsById = new Map(allEvaluations.map((evaluation) => [evaluation.budgetId, evaluation] as const))
-    return budgets
-      .map((budget) => evaluationsById.get(budget.budgetId))
-      .filter((evaluation): evaluation is LocalGatewayBudgetEvaluation => Boolean(evaluation))
-  }
-
-  private evaluateBudgetRecord(
-    budget: LocalGatewayBudgetRecord,
-    context: LocalGatewayUsageEvaluationContext,
-  ): LocalGatewayBudgetEvaluation {
-    const matchedEntries = context.usageEntries.filter((entry) => {
-      const workspaceId = this.usageEntryWorkspaceId(entry, context)
-      if (budget.scopeType === 'workspace') return workspaceId === budget.scopeId
-      if (budget.scopeType === 'agent') return context.runsById.get(entry.runId)?.agentId === budget.scopeId
-      const clientId = workspaceId ? context.workspacesById.get(workspaceId)?.clientId : undefined
-      return clientId === budget.scopeId
-    })
-    const summary = summarizeUsageLedger(matchedEntries)
-    const usedEstimatedCostUsd = summary.estimatedCostUsd
-    const remainingEstimatedCostUsd = budget.maxEstimatedCostUsd - usedEstimatedCostUsd
-    const scopeLabel = this.budgetScopeLabel(budget, context)
-    const hasUnpricedUsage = summary.unpricedEntries > 0
-    const status =
-      usedEstimatedCostUsd >= budget.maxEstimatedCostUsd
-        ? 'blocked'
-        : usedEstimatedCostUsd >= budget.warnAtUsd || hasUnpricedUsage
-          ? 'warn'
-          : 'ok'
-    const costSensitiveReason =
-      status === 'blocked'
-        ? `Budget blocked cost-sensitive tools: ${budget.label} (${scopeLabel})`
-        : hasUnpricedUsage
-          ? `Budget has ${summary.unpricedEntries} unpriced usage ${summary.unpricedEntries === 1 ? 'entry' : 'entries'} requiring review: ${budget.label} (${scopeLabel})`
-          : status === 'warn'
-            ? `Budget warning requires review for cost-sensitive tools: ${budget.label} (${scopeLabel})`
-            : `Budget allows cost-sensitive tools: ${budget.label} (${scopeLabel})`
-    return {
-      budgetId: budget.budgetId,
-      scopeType: budget.scopeType,
-      scopeId: budget.scopeId,
-      label: budget.label,
-      scopeLabel,
-      status,
-      maxEstimatedCostUsd: budget.maxEstimatedCostUsd,
-      warnAtUsd: budget.warnAtUsd,
-      usedEstimatedCostUsd,
-      remainingEstimatedCostUsd,
-      usageEntryCount: matchedEntries.length,
-      pricedUsageEntryCount: summary.pricedEntries,
-      unpricedUsageEntryCount: summary.unpricedEntries,
-      estimateCoverage: hasUnpricedUsage ? 'incomplete' : 'complete',
-      costSensitiveTools: {
-        mode: status === 'warn' ? 'approval' : status === 'blocked' ? 'block' : 'allow',
-        reason: costSensitiveReason,
-      },
-    }
-  }
-
-  private budgetScopeLabel(
-    budget: LocalGatewayBudgetRecord,
-    context: {
-      workspacesById: Map<string, LocalGatewayWorkspaceRecord>
-      agentsById: Map<string, LocalGatewayAgentRecord>
-      clientsById: Map<string, LocalGatewayClientRecord>
-    },
-  ): string {
-    if (budget.scopeType === 'client') {
-      return context.clientsById.get(budget.scopeId)?.name ?? budget.scopeId
-    }
-    if (budget.scopeType === 'workspace') {
-      return context.workspacesById.get(budget.scopeId)?.name ?? budget.scopeId
-    }
-    return context.agentsById.get(budget.scopeId)?.name ?? budget.scopeId
-  }
-
-  private usageContext(appState: LocalGatewayAppStateStore): LocalGatewayUsageEvaluationContext {
-    return {
-      usageEntries: appState.usageLedger.list(),
-      runsById: new Map(appState.runs.list().map((run) => [run.runId, run] as const)),
-      workspacesById: new Map(
-        appState.workspaces.list().map((workspace) => [workspace.workspaceId, workspace] as const),
-      ),
-      agentsById: new Map(appState.agents.list().map((agent) => [agent.agentId, agent] as const)),
-      clientsById: new Map(appState.clients.list().map((client) => [client.clientId, client] as const)),
-    }
-  }
-
-  private usageEntryWorkspaceId(
-    entry: LocalGatewayUsageLedgerEntryRecord,
-    context: Pick<LocalGatewayUsageEvaluationContext, 'runsById'>,
-  ): string | undefined {
-    return entry.workspaceId ?? context.runsById.get(entry.runId)?.workspaceId
+    return this.budgetEvaluator.evaluateForRun(appState, input, session.metadata)
   }
 
   private recordBudgetTransitions(input: {

@@ -11,6 +11,8 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
   command so pull requests and release jobs exercise the same gates.
 
 ### Added
+- `GatewayBudgetEvaluator` now owns read-only budget scope matching, usage rollups,
+  and warning/block derivation while `GatewayBudgetControl` retains durable authority.
 - `GatewaySnapshotReader` now owns read-only aggregate snapshot assembly, RunLog
   summary projection, worker/outbox status, and server-only revision-token caching,
   leaving `LocalGateway` focused on stable facade and command orchestration.
