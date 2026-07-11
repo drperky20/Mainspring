@@ -16,6 +16,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - `GatewaySnapshotReader` now owns read-only aggregate snapshot assembly, RunLog
   summary projection, worker/outbox status, and server-only revision-token caching,
   leaving `LocalGateway` focused on stable facade and command orchestration.
+- `ConsoleClientWorkspaceFrame` now owns the selected-client header, workspace
+  context, client tabs, and two-column shell while the connected app retains
+  feature state and command orchestration.
 - Runtime kernel, SQLite mailbox, SDK, provider registry, tool registry, policy guard, approval receipts, and event journal package surfaces.
 - Prototype founder-cockpit console with explicit localStorage honesty and development gateway fixture previews.
 - Launch-baseline branding assets, examples, and open-source documentation set.

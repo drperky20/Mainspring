@@ -85,8 +85,9 @@ import {
   type OperatorRunRow,
 } from './operatorConsoleViewModel'
 import './controlRoom.css'
+import { ConsoleClientWorkspaceFrame, type ClientWorkspaceTab } from './ConsoleClientWorkspaceFrame'
 
-type ClientTab = 'chat' | 'agents' | 'automations' | 'access'
+type ClientTab = ClientWorkspaceTab
 
 type AgentDraft = {
   name: string
@@ -1071,101 +1072,73 @@ function ClientsScreen({
   }
 
   return (
-    <section className={`client-screen ${clientTab === 'automations' ? 'is-automation-tab' : ''}`}>
-      <header className="screen-header">
-        <div>
-          <p>{workspace?.name ?? 'Client workspace'}</p>
-          <div className="screen-title-row">
-            <h1>{client.name}</h1>
-            {clientTab === 'automations' ? (
-              <button
-                className="workspace-selector"
-                disabled
-                title="Each client currently has one primary workspace."
-                type="button"
-                aria-label="Current workspace"
-              >
-                <span className="workspace-selector-icon" aria-hidden="true" />
-                <span>Default workspace</span>
-                <span aria-hidden="true">v</span>
-              </button>
-            ) : null}
-          </div>
-        </div>
-        <button className="simple-secondary" type="button" onClick={onCreateClient}>New client</button>
-      </header>
-      <div className="client-layout">
-        {clientTab === 'automations' ? null : (
-          <ClientDetailsPanel
-            agent={selectedAgent}
-            client={client}
-            provider={provider}
-            workspace={workspace}
-            onSave={onEditClient}
-          />
-        )}
-        <div className="workspace-area">
-          <div className="client-tabs">
-            {(['chat', 'agents', 'automations', 'access'] as ClientTab[]).map((tab) => (
-              <button className={clientTab === tab ? 'active' : ''} key={tab} type="button" onClick={() => onClientTab(tab)}>
-                <span className={`client-tab-icon ${tab}`} aria-hidden="true" />
-                <span>{tab}</span>
-              </button>
-            ))}
-          </div>
-          {clientTab === 'chat' ? (
-            <ChatPanel
-              agent={selectedAgent}
-              busy={busy}
-              chatInput={chatInput}
-              messages={chatMessages}
-              provider={provider}
-              runEvents={runEvents}
-              lastRun={lastRun}
-              onChatInput={onChatInput}
-              onSend={(prompt) =>
-                onStartRun({
-                  mode: 'chat',
-                  prompt,
-                  tools: enabledTools(selectedAgent),
-                  addChatMessage: true,
-                })
-              }
-            />
-          ) : clientTab === 'agents' ? (
-            <AgentBuilder
-              agents={agents}
-              provider={provider}
-              providers={providers}
-              selectedAgent={selectedAgent}
-              onNewAgent={onNewAgent}
-              onProvider={onProvider}
-              onSave={onSaveAgent}
-              onSelectAgent={onSelectAgent}
-            />
-          ) : clientTab === 'automations' ? (
-            <AutomationBuilder
-              agent={selectedAgent}
-              busy={busy}
-              prompt={automationPrompt}
-              provider={provider}
-              runEvents={runEvents}
-              lastRun={lastRun}
-              onPrompt={onAutomationPrompt}
-              onRun={(prompt, tools) =>
-                onStartRun({
-                  mode: 'automation-test',
-                  prompt,
-                  tools,
-                })
-              }
-            />
-          ) : (
-            <AccessPanel client={client} workspace={workspace} />
-          )}
-        </div>
-      </div>
-    </section>
+    <ConsoleClientWorkspaceFrame
+      client={client}
+      details={(
+        <ClientDetailsPanel
+          agent={selectedAgent}
+          client={client}
+          provider={provider}
+          workspace={workspace}
+          onSave={onEditClient}
+        />
+      )}
+      onCreateClient={onCreateClient}
+      onTab={onClientTab}
+      tab={clientTab}
+      workspace={workspace}
+    >
+      {clientTab === 'chat' ? (
+        <ChatPanel
+          agent={selectedAgent}
+          busy={busy}
+          chatInput={chatInput}
+          messages={chatMessages}
+          provider={provider}
+          runEvents={runEvents}
+          lastRun={lastRun}
+          onChatInput={onChatInput}
+          onSend={(prompt) =>
+            onStartRun({
+              mode: 'chat',
+              prompt,
+              tools: enabledTools(selectedAgent),
+              addChatMessage: true,
+            })
+          }
+        />
+      ) : clientTab === 'agents' ? (
+        <AgentBuilder
+          agents={agents}
+          provider={provider}
+          providers={providers}
+          selectedAgent={selectedAgent}
+          onNewAgent={onNewAgent}
+          onProvider={onProvider}
+          onSave={onSaveAgent}
+          onSelectAgent={onSelectAgent}
+        />
+      ) : clientTab === 'automations' ? (
+        <AutomationBuilder
+          agent={selectedAgent}
+          busy={busy}
+          prompt={automationPrompt}
+          provider={provider}
+          runEvents={runEvents}
+          lastRun={lastRun}
+          onPrompt={onAutomationPrompt}
+          onRun={(prompt, tools) =>
+            onStartRun({
+              mode: 'automation-test',
+              prompt,
+              tools,
+            })
+          }
+        />
+      ) : (
+        <AccessPanel client={client} workspace={workspace} />
+      )}
+    </ConsoleClientWorkspaceFrame>
   )
 }
 
