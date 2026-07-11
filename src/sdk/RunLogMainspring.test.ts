@@ -215,10 +215,12 @@ describe('RunLogMainspring SDK host', () => {
         runId: run.runId,
         status: run.status,
       })),
-    ).toEqual([
-      { runId: second.record.runId, status: 'queued' },
-      { runId: first.record.runId, status: 'cancelled' },
-    ])
+    ).toEqual(
+      expectedRunOrder.map((runId) => ({
+        runId,
+        status: runId === first.record.runId ? 'cancelled' : 'queued',
+      })),
+    )
     expect(reopened.runs.cancel(second.record.runId, 'Stopped after restart.').status).toBe(
       'cancelled',
     )
