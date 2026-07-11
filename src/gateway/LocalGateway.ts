@@ -37,8 +37,6 @@ import type {
 } from '../core/types.js'
 import type { RunLogRunProjection } from '../hosts/runlog/RunLogProjection.js'
 import { createHostDecisionRecord, type DecisionRecord } from '../policy/DecisionRecord.js'
-import { MemoryProvider } from '../memory/MemoryProvider.js'
-import type { MemoryRecord } from '../memory/MemoryStore.js'
 import { estimateUsageCost } from '../usage/UsageAccounting.js'
 import {
   describeModelPricingCatalog,
@@ -104,19 +102,25 @@ import {
   type RemoteMarketplaceSource,
 } from './RemoteMarketplace.js'
 import {
-  assertScanCanProceed,
   applyApprovedMemoryReview,
   applyApprovedSkillReview,
   createProvenanceReviewQueue,
-  deriveProvenanceTrustMetadata,
-  scanMemoryMutation,
   type ProvenanceReviewItem,
   type ProvenanceReviewStatus,
 } from '../provenance/ProvenanceReview.js'
 import {
-  resolveMemoryHistoryEntry,
-  type ResolvedMemoryHistoryEntry,
-} from './MemoryHistoryPage.js'
+  GatewayMemoryControl,
+  type LocalGatewayMemoryCorrectionInput,
+  type LocalGatewayMemoryCorrectionResult,
+  type LocalGatewayMemoryDeletionInput,
+  type LocalGatewayMemoryDeletionResult,
+} from './GatewayMemoryControl.js'
+export type {
+  LocalGatewayMemoryCorrectionInput,
+  LocalGatewayMemoryCorrectionResult,
+  LocalGatewayMemoryDeletionInput,
+  LocalGatewayMemoryDeletionResult,
+} from './GatewayMemoryControl.js'
 export type {
   LocalGatewayDeploymentCommandRunner,
   LocalGatewayDeploymentExecutionResult,
@@ -466,53 +470,6 @@ export interface LocalGatewayProvenanceReviewApplyInput {
 export type LocalGatewayAppliedProvenanceReview =
   | { kind: 'memory'; reviewId: string; memoryId: string; applied: true }
   | { kind: 'skill'; reviewId: string; skillKey: string; action: 'installed' | 'updated'; applied: true }
-
-/**
- * These inputs use the browser-safe memory entry identifier from the bounded
- * history page. The gateway resolves it to a registered workspace record;
- * callers never submit a workspace root or the raw JSONL entry ID.
- */
-export interface LocalGatewayMemoryCorrectionInput {
-  workspaceId: string
-  entryId: string
-  text: string
-  reason?: string
-  /** Trusted gateway identity. HTTP callers cannot set this directly. */
-  actor?: string
-}
-
-export interface LocalGatewayMemoryDeletionInput {
-  workspaceId: string
-  entryId: string
-  reason?: string
-  /** Trusted gateway identity. HTTP callers cannot set this directly. */
-  actor?: string
-}
-
-export interface LocalGatewayMemoryCorrectionResult {
-  workspaceId: string
-  entry: MemoryRecord
-}
-
-export interface LocalGatewayMemoryDeletionResult {
-  workspaceId: string
-  entryId: string
-  deletedAt: string
-}
-
-function memoryMutationDecisionMetadata(decision: DecisionRecord): Record<string, unknown> {
-  return {
-    decisionId: decision.decisionId,
-    surface: decision.surface,
-    operation: decision.operation,
-    targetKey: decision.targetKey,
-    state: decision.state,
-    inputHash: decision.inputHash,
-    manifestHash: decision.manifestHash,
-    policyHash: decision.policyHash,
-    createdAt: decision.createdAt,
-  }
-}
 
 export interface InstallLocalMarketplaceTemplateInput {
   templateId: string
@@ -1408,9 +1365,9 @@ export class LocalMainspringGateway {
 
   readonly memory = {
     correct: (input: LocalGatewayMemoryCorrectionInput): LocalGatewayMemoryCorrectionResult =>
-      this.correctMemory(input),
+      new GatewayMemoryControl(this.requireAppState()).correct(input),
     delete: (input: LocalGatewayMemoryDeletionInput): LocalGatewayMemoryDeletionResult =>
-      this.deleteMemory(input),
+      new GatewayMemoryControl(this.requireAppState()).delete(input),
   }
 
   readonly runs = {
@@ -3472,145 +3429,6 @@ export class LocalMainspringGateway {
       },
     })
     return applied
-  }
-
-  private correctMemory(
-    input: LocalGatewayMemoryCorrectionInput,
-  ): LocalGatewayMemoryCorrectionResult {
-    const text = input.text.trim()
-    if (!text) throw new Error('Memory correction text is required.')
-    const resolved = this.resolveMemoryForMutation(input)
-    const actor = input.actor?.trim() || 'local-gateway'
-    const reason = input.reason?.trim() || undefined
-    const scan = scanMemoryMutation({
-      text,
-      scope: resolved.record.scope,
-      tags: resolved.record.tags,
-    })
-    assertScanCanProceed(scan)
-    const decision = createHostDecisionRecord({
-      runId: 'gateway-control-plane',
-      surface: 'memory',
-      operation: 'memory.replace',
-      targetKey: input.entryId.trim(),
-      state: 'allow',
-      reasons: [
-        scan.status === 'review'
-          ? 'Trusted local gateway operator reviewed a memory correction requiring provenance attention.'
-          : 'Trusted local gateway operator requested a durable memory correction.',
-      ],
-      permissionCategories: ['memory', 'workspace-write', 'operator-control-plane'],
-      input: {
-        workspaceId: resolved.workspaceId,
-        entryId: input.entryId.trim(),
-        text,
-        ...(reason ? { reason } : {}),
-      },
-      metadata: {
-        mutation: 'correct',
-        workspaceId: resolved.workspaceId,
-        scanStatus: scan.status,
-        contentHash: scan.contentHash,
-      },
-    })
-    const provider = new MemoryProvider({ workspaceRoot: resolved.workspaceRoot })
-    const entry = provider.replace({
-      entryId: resolved.record.entryId,
-      text,
-      scope: resolved.record.scope,
-      ...(resolved.record.sessionId ? { sessionId: resolved.record.sessionId } : {}),
-      tags: resolved.record.tags,
-      metadata: {
-        provenance: deriveProvenanceTrustMetadata({
-          source: 'gateway.memory.correct',
-          scan,
-          reviewed: true,
-          mutationKind: 'memory',
-        }),
-      },
-      actor,
-      ...(reason ? { reason } : {}),
-      journalMetadata: memoryMutationDecisionMetadata(decision),
-    })
-    this.requireAppState().auditEvents.create({
-      category: 'memory',
-      action: 'entry.corrected',
-      actor,
-      targetType: 'memory-entry',
-      targetId: input.entryId.trim(),
-      metadata: {
-        workspaceId: resolved.workspaceId,
-        decisionRecord: decision,
-      },
-    })
-    return { workspaceId: resolved.workspaceId, entry }
-  }
-
-  private deleteMemory(
-    input: LocalGatewayMemoryDeletionInput,
-  ): LocalGatewayMemoryDeletionResult {
-    const resolved = this.resolveMemoryForMutation(input)
-    const actor = input.actor?.trim() || 'local-gateway'
-    const reason = input.reason?.trim() || undefined
-    const decision = createHostDecisionRecord({
-      runId: 'gateway-control-plane',
-      surface: 'memory',
-      operation: 'memory.delete',
-      targetKey: input.entryId.trim(),
-      state: 'allow',
-      reasons: ['Trusted local gateway operator requested a durable memory deletion.'],
-      permissionCategories: ['memory', 'workspace-write', 'operator-control-plane'],
-      input: {
-        workspaceId: resolved.workspaceId,
-        entryId: input.entryId.trim(),
-        ...(reason ? { reason } : {}),
-      },
-      metadata: { mutation: 'delete', workspaceId: resolved.workspaceId },
-    })
-    const provider = new MemoryProvider({ workspaceRoot: resolved.workspaceRoot })
-    const deletion = provider.delete({
-      entryId: resolved.record.entryId,
-      actor,
-      ...(reason ? { reason } : {}),
-      journalMetadata: memoryMutationDecisionMetadata(decision),
-    })
-    this.requireAppState().auditEvents.create({
-      category: 'memory',
-      action: 'entry.deleted',
-      actor,
-      targetType: 'memory-entry',
-      targetId: input.entryId.trim(),
-      metadata: {
-        workspaceId: resolved.workspaceId,
-        decisionRecord: decision,
-      },
-    })
-    return {
-      workspaceId: resolved.workspaceId,
-      entryId: input.entryId.trim(),
-      deletedAt: deletion.deletedAt,
-    }
-  }
-
-  private resolveMemoryForMutation(input: {
-    workspaceId: string
-    entryId: string
-  }): ResolvedMemoryHistoryEntry {
-    const workspaceId = input.workspaceId.trim()
-    const entryId = input.entryId.trim()
-    if (!workspaceId) throw new Error('Memory workspaceId is required.')
-    if (!entryId) throw new Error('Memory entryId is required.')
-    const appState = this.requireAppState()
-    if (!appState.workspaces.get(workspaceId)) {
-      throw new Error('Unknown gateway workspace.')
-    }
-    const resolved = resolveMemoryHistoryEntry({
-      source: appState,
-      workspaceId,
-      entryId,
-    })
-    if (!resolved) throw new Error('Memory entry is unavailable in the selected workspace.')
-    return resolved
   }
 
   private requireWorkspace(workspaceId: string): LocalGatewayWorkspaceRecord {
