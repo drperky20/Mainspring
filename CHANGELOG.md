@@ -22,6 +22,7 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Bounded `GatewayBudgetControl` ownership for budget configuration, warning acknowledgement, and hard-block authority.
 - Bounded `GatewayProviderProfileControl` ownership for provider configuration and managed-secret authority.
 - Bounded `GatewayTopologyControl` ownership for client/workspace/agent/session topology, with cross-client binding checks and pre-mutation authority records.
+- Bounded `GatewayMarketplaceControl` ownership for verified template file installation and client/workspace/agent provisioning.
 
 ### Changed
 - Verification lane standardized around `pnpm verify`.
@@ -38,3 +39,4 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Gateway budget create/update/delete now persist hash-only `budget.write` authority before app-state mutation; warning acknowledgements and hard blocks record the matching pre-enqueue decision, with hosted identity supplied only by the authenticated gateway principal.
 - Gateway provider-profile create/update now persist hash-only `provider_config.write` authority before app-state mutation; managed-secret values remain host-side, and hosted identity replaces browser-supplied attribution.
 - Gateway client/workspace/agent/session topology mutations now persist hash-only `topology.write` authority before writes, reject cross-client workspace mutation, and use hosted session identity instead of browser attribution; workspace roots remain hash-only in audit evidence.
+- Pinned remote-catalog sync and verified local/signed-remote marketplace installs now persist hash-only `marketplace.catalog.sync`/`marketplace.install` authority before registry or file writes, propagate hosted identity through topology provisioning, and record failures without raw template content or workspace roots.

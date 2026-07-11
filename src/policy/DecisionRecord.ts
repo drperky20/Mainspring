@@ -27,6 +27,7 @@ export type DecisionRecordSurface =
   | 'provider_config'
   | 'deployment'
   | 'topology'
+  | 'marketplace'
   | 'channel'
   | 'mcp'
   | 'unknown'
@@ -48,6 +49,8 @@ type HostDecisionSurfaceOperation =
   | { surface: 'deployment'; operation: 'deployment.target.write' }
   | { surface: 'deployment'; operation: 'deployment.execute' }
   | { surface: 'topology'; operation: 'topology.write' }
+  | { surface: 'marketplace'; operation: 'marketplace.install' }
+  | { surface: 'marketplace'; operation: 'marketplace.catalog.sync' }
 
 export interface DecisionRecord {
   decisionId: string

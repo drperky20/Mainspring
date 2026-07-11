@@ -4,6 +4,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import { assertPublicNetworkTarget, parsePublicHttpUrl } from '../containment/UrlPolicy.js'
 import { scanTemplateCatalogEntry, type ProvenanceScanResult } from '../provenance/ProvenanceReview.js'
+import { hashApprovalInput } from '../policy/ApprovalReceipt.js'
 
 const MAX_CATALOG_BYTES = 1024 * 1024
 const MAX_CATALOG_LIFETIME_MS = 1000 * 60 * 60 * 24 * 30
@@ -117,6 +118,15 @@ export class RemoteMarketplaceRegistry {
 
   get(templateId: string): VerifiedRemoteMarketplaceTemplate | undefined {
     return this.templates.get(templateId)
+  }
+
+  sourceBindingHash(): string {
+    return hashApprovalInput(this.sources.map((source) => ({
+      catalogUrl: source.catalogUrl,
+      publisherId: source.publisherId,
+      keyId: source.keyId,
+      publicKeyHash: hashApprovalInput(source.publicKeyPem),
+    })))
   }
 }
 

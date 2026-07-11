@@ -642,17 +642,7 @@ export class LocalGatewayHttpServer {
       }
 
       if (request.method === 'POST' && path === '/marketplace/remotes/sync') {
-        const templates = await this.options.gateway.marketplace.syncRemoteCatalogs()
-        this.options.gateway.appState?.auditEvents.create({
-          category: 'marketplace',
-          action: 'remote-catalogs.synced',
-          actor: principal?.actor ?? 'local-gateway',
-          targetType: 'remote-marketplace',
-          targetId: 'configured-catalogs',
-          metadata: {
-            templateCount: templates.filter((template) => template.provenance === 'signed-remote').length,
-          },
-        })
+        const templates = await this.options.gateway.marketplace.syncRemoteCatalogs(principal?.actor)
         this.writeJson(response, 200, {
           templates: templates.map(consoleMarketplaceTemplate),
         })
@@ -731,7 +721,7 @@ export class LocalGatewayHttpServer {
         )
         const body = await this.readJson(request)
         const parsed = InstallMarketplaceTemplateRequestSchema.parse(body)
-        const installed = this.installMarketplaceTemplate(templateId, parsed)
+        const installed = this.installMarketplaceTemplate(templateId, parsed, principal?.actor)
         this.writeJson(response, 201, sanitizeGatewayResponse(consoleMarketplaceInstall(installed)))
         return
       }
@@ -1566,6 +1556,7 @@ export class LocalGatewayHttpServer {
   private installMarketplaceTemplate(
     templateId: string,
     input: InstallMarketplaceTemplateRequest,
+    actor?: string,
   ) {
     return this.options.gateway.marketplace.installTemplate({
       templateId,
@@ -1573,6 +1564,7 @@ export class LocalGatewayHttpServer {
       clientName: input.clientName,
       workspaceName: input.workspaceName,
       agentName: input.agentName,
+      ...(actor ? { actor } : {}),
     })
   }
 

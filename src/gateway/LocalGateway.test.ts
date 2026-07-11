@@ -3889,6 +3889,7 @@ describe('LocalMainspringGateway', () => {
       const installed = gateway.marketplace.installTemplate({
         templateId: 'coding-agent',
         workspaceRoot: installRoot,
+        actor: 'hosted:marketplace-control:admin',
       })
 
       expect(installed.template).toMatchObject({
@@ -3923,13 +3924,32 @@ describe('LocalMainspringGateway', () => {
       expect(fs.existsSync(path.join(installRoot, 'policy.md'))).toBe(true)
       expect(fs.existsSync(path.join(installRoot, 'README.md'))).toBe(true)
       expect(fs.existsSync(path.join(installRoot, 'run.mjs'))).toBe(false)
-      expect(appState.auditEvents.list({ category: 'marketplace' })).toEqual([
+      const marketplaceEvents = appState.auditEvents.list({ category: 'marketplace' })
+      expect(marketplaceEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          action: 'template.install.authorized',
+          actor: 'hosted:marketplace-control:admin',
+          targetId: 'coding-agent',
+          metadata: {
+            decisionRecord: expect.objectContaining({
+              surface: 'marketplace',
+              operation: 'marketplace.install',
+              inputHash: expect.any(String),
+              metadata: expect.objectContaining({
+                workspaceRootHash: expect.any(String),
+                templateHash: expect.any(String),
+              }),
+            }),
+          },
+        }),
         expect.objectContaining({
           action: 'template.installed',
+          actor: 'hosted:marketplace-control:admin',
           targetType: 'template',
           targetId: 'coding-agent',
         }),
-      ])
+      ]))
+      expect(JSON.stringify(marketplaceEvents)).not.toContain(path.resolve(installRoot))
     } finally {
       appState.close()
     }

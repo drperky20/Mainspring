@@ -4405,6 +4405,24 @@ describe('LocalGatewayHttpServer', () => {
       )
       expect(updatedTopologyClientResponse.status).toBe(200)
 
+      const marketplaceInstallResponse = await fetch(
+        `${started.url}/marketplace/templates/${encodeURIComponent('coding-agent')}/install`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            workspaceRoot: path.join(root, 'hosted-marketplace-install'),
+            actor: 'browser-spoofed-marketplace-operator',
+          }),
+        },
+      )
+      const marketplaceInstall = await marketplaceInstallResponse.json() as {
+        client: { clientId: string }
+        workspace: { workspaceId: string }
+        agent: { agentId: string }
+      }
+      expect(marketplaceInstallResponse.status).toBe(201)
+
       const createdResponse = await fetch(`${started.url}/cron`, {
         method: 'POST',
         headers,
@@ -4618,6 +4636,21 @@ describe('LocalGatewayHttpServer', () => {
       expect(JSON.stringify(topologyEvents)).not.toContain('browser-spoofed-topology-operator')
       expect(JSON.stringify(topologyEvents)).not.toContain(topologyRoot)
       expect(JSON.stringify(topologyEvents)).not.toContain('topology-workspace-v2')
+      const marketplaceEvents = appState.auditEvents.list({ category: 'marketplace' })
+      expect(marketplaceEvents.find((event) => (
+        event.action === 'template.install.authorized'
+        && event.targetId === 'coding-agent'
+      ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
+      expect(marketplaceEvents.find((event) => (
+        event.action === 'template.installed'
+        && event.targetId === 'coding-agent'
+        && event.metadata
+        && typeof event.metadata === 'object'
+        && !Array.isArray(event.metadata)
+        && (event.metadata as Record<string, unknown>).clientId === marketplaceInstall.client.clientId
+      ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
+      expect(JSON.stringify(marketplaceEvents)).not.toContain('browser-spoofed-marketplace-operator')
+      expect(JSON.stringify(marketplaceEvents)).not.toContain(path.join(root, 'hosted-marketplace-install'))
     } finally {
       await server.stop()
       runLog.close()

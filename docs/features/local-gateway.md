@@ -140,6 +140,17 @@ hashes of the resolved target and validated preflight plan. The console receives
 only sanitized target, plan, and execution DTOs, not decision records or
 target configuration metadata.
 
+`GatewayMarketplaceControl` owns pinned remote-catalog synchronization and the
+verified template install path. Catalog sync persists hash-only
+`marketplace.catalog.sync` authority before replacing the in-memory remote
+registry. Installation resolves the selected local or signed-remote template and runtime profile before writing,
+persists a hash-only `marketplace.install` decision before copying template
+files, then provisions the client/workspace/agent through `GatewayTopologyControl`
+with the same trusted actor. The audit trail includes only template/content and
+workspace-root hashes plus opaque provisioned IDs; a failed install is recorded
+without claiming that partial filesystem/topology work was automatically rolled
+back.
+
 Optional remote template sources are configured host-side with a catalog URL, publisher ID, key ID, and Ed25519 public key. Admins can call `POST /marketplace/remotes/sync`; verified templates then appear in `GET /marketplace/templates` with signed publisher provenance and can use the existing admin-only install route. Catalog/file content and source URLs are not returned to the browser. This is pinned template distribution, not a remote skill reputation or paid marketplace service.
 
 Gateway RunLog routes are local development surfaces. They do not create a hosted worker

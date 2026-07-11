@@ -27,6 +27,8 @@ export type PolicyOperation =
   | 'deployment.target.write'
   | 'deployment.execute'
   | 'topology.write'
+  | 'marketplace.install'
+  | 'marketplace.catalog.sync'
 
 export interface RuntimePolicyDefaults {
   approvalPolicy?: RuntimePolicy['approvalPolicy']

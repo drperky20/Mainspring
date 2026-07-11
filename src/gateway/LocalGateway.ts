@@ -84,14 +84,10 @@ import {
   type CompatibilityRunPage,
 } from './CompatibilityRunPage.js'
 import {
-  consoleApprovalMode,
-  installLocalMarketplaceTemplate,
   listLocalMarketplaceTemplates,
-  skillFlagsFromAllowedTools,
   type MarketplaceTemplateRecord,
 } from './TemplateMarketplace.js'
 import {
-  installVerifiedRemoteMarketplaceTemplate,
   RemoteMarketplaceRegistry,
   type RemoteMarketplaceFetchOptions,
   type RemoteMarketplaceSource,
@@ -134,6 +130,7 @@ import {
   type UpdateLocalGatewayProviderProfileDraftInput,
 } from './GatewayProviderProfileControl.js'
 import { GatewayTopologyControl } from './GatewayTopologyControl.js'
+import { GatewayMarketplaceControl } from './GatewayMarketplaceControl.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
@@ -406,6 +403,8 @@ export interface InstallLocalMarketplaceTemplateInput {
   clientName?: string
   workspaceName?: string
   agentName?: string
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface InstallLocalMarketplaceTemplateResult {
@@ -1232,11 +1231,8 @@ export class LocalMainspringGateway {
       ...listLocalMarketplaceTemplates(this.marketplaceRepoRoot),
       ...(this.remoteMarketplace?.list() ?? []),
     ],
-    syncRemoteCatalogs: async (): Promise<MarketplaceTemplateRecord[]> => {
-      if (!this.remoteMarketplace) return this.marketplace.listTemplates()
-      const localIds = new Set(listLocalMarketplaceTemplates(this.marketplaceRepoRoot).map((template) => template.templateId))
-      await this.remoteMarketplace.sync(localIds)
-      return this.marketplace.listTemplates()
+    syncRemoteCatalogs: async (actor?: string): Promise<MarketplaceTemplateRecord[]> => {
+      return this.marketplaceControl().syncRemoteCatalogs(actor)
     },
     installTemplate: (
       input: InstallLocalMarketplaceTemplateInput,
@@ -2776,6 +2772,18 @@ export class LocalMainspringGateway {
     })
   }
 
+  private marketplaceControl(): GatewayMarketplaceControl {
+    return new GatewayMarketplaceControl({
+      appState: this.requireAppState(),
+      repoRoot: this.marketplaceRepoRoot,
+      workspaceBaseRoot: this.workspaceBaseRoot,
+      remoteMarketplace: this.remoteMarketplace,
+      topology: this.topologyControl(),
+      resolveWorkspaceRoot: (value, label) => this.resolveGatewayWorkspaceRoot(value, label),
+      resolveRuntimeProfile: (profileId) => this.runtimeProfiles.assertRegistered(profileId),
+    })
+  }
+
   private deploymentControl(): GatewayDeploymentControl {
     return new GatewayDeploymentControl({
       appState: this.requireAppState(),
@@ -2839,83 +2847,7 @@ export class LocalMainspringGateway {
   private installMarketplaceTemplate(
     input: InstallLocalMarketplaceTemplateInput,
   ): InstallLocalMarketplaceTemplateResult {
-    const workspaceRoot = this.resolveGatewayWorkspaceRoot(
-      input.workspaceRoot,
-      'Marketplace workspace root',
-    )
-    const remoteTemplate = this.remoteMarketplace?.get(input.templateId)
-    const installed: { template: MarketplaceTemplateRecord; installedFiles: string[] } = remoteTemplate
-      ? {
-          template: remoteTemplate,
-          installedFiles: installVerifiedRemoteMarketplaceTemplate({
-            template: remoteTemplate,
-            workspaceRoot,
-            workspaceBaseRoot: this.workspaceBaseRoot,
-          }),
-        }
-      : installLocalMarketplaceTemplate({
-          repoRoot: this.marketplaceRepoRoot,
-          templateId: input.templateId,
-          workspaceRoot,
-          workspaceBaseRoot: this.workspaceBaseRoot,
-        })
-    const created = this.createClientWorkspace({
-      name: input.clientName?.trim() || installed.template.defaults.clientName,
-      workspaceRoot,
-      workspaceName: input.workspaceName?.trim() || installed.template.defaults.workspaceName,
-      metadata: {
-        templateId: installed.template.templateId,
-        templateProvenance: installed.template.provenance,
-        ...('publisherId' in installed.template ? { templatePublisherId: installed.template.publisherId } : {}),
-      },
-    })
-    if (!created.workspace) {
-      throw new Error('Marketplace install requires a workspace-backed client result.')
-    }
-    const agent = this.createAgentDraft({
-      workspaceId: created.workspace.workspaceId,
-      name: input.agentName?.trim() || installed.template.defaults.agentName,
-      ...(installed.template.modelId
-        ? { defaultModelId: installed.template.modelId }
-        : {}),
-      instructions: installed.template.defaults.instructions,
-      outcome: installed.template.defaults.outcome,
-      voice: installed.template.defaults.voice,
-      approvalMode: consoleApprovalMode(installed.template.approvalMode),
-      skills: skillFlagsFromAllowedTools(installed.template.allowedTools),
-      metadata: {
-        templateId: installed.template.templateId,
-        templateProvenance: installed.template.provenance,
-        ...('publisherId' in installed.template ? { templatePublisherId: installed.template.publisherId } : {}),
-        allowedTools: installed.template.allowedTools,
-        ...(installed.template.runtimeProfile
-          ? { runtimeProfile: this.runtimeProfiles.assertRegistered(installed.template.runtimeProfile) }
-          : {}),
-        ...(installed.template.providerId ? { providerId: installed.template.providerId } : {}),
-      },
-    })
-    this.requireAppState().auditEvents.create({
-      category: 'marketplace',
-      action: 'template.installed',
-      actor: 'local-gateway',
-      targetType: 'template',
-      targetId: installed.template.templateId,
-      ...(created.session ? { sessionId: created.session.sessionId } : {}),
-      metadata: {
-        clientId: created.client.clientId,
-        workspaceId: created.workspace.workspaceId,
-        agentId: agent.agentId,
-        installedFiles: installed.installedFiles,
-      },
-    })
-    return {
-      template: installed.template,
-      client: created.client,
-      workspace: created.workspace,
-      session: created.session,
-      agent,
-      installedFiles: installed.installedFiles,
-    }
+    return this.marketplaceControl().install(input)
   }
 
   private resolveGatewayWorkspaceRoot(value: string, label: string): string {

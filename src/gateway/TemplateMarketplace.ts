@@ -105,6 +105,21 @@ export function installLocalMarketplaceTemplate(input: {
     (candidate) => candidate.templateId === input.templateId,
   )
   if (!template) throw new Error(`Unknown marketplace template: ${input.templateId}`)
+  return installLocalMarketplaceTemplateRecord({
+    repoRoot: input.repoRoot,
+    template,
+    workspaceRoot: input.workspaceRoot,
+    ...(input.workspaceBaseRoot ? { workspaceBaseRoot: input.workspaceBaseRoot } : {}),
+  })
+}
+
+export function installLocalMarketplaceTemplateRecord(input: {
+  repoRoot: string
+  template: LocalMarketplaceTemplateRecord
+  workspaceRoot: string
+  workspaceBaseRoot?: string
+}): InstallLocalMarketplaceTemplateResult {
+  const template = input.template
   const exampleRoot = safeExampleRoot(input.repoRoot, template.exampleDir)
   const workspaceRoot = path.resolve(input.workspaceRoot)
   const workspaceBaseRoot = input.workspaceBaseRoot
