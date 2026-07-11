@@ -13,6 +13,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
   macOS canonical temp paths, RunLog outbox ties retain enqueue order, and Windows
   managed-secret checks use an explicit PowerShell Security preflight plus PowerShell
   Core when the hosted runner provides it.
+- Updated hosted CI actions to the current Node 24-compatible checkout, setup-node,
+  and artifact-upload majors, with the repository workflow verifier enforcing the
+  same versions locally and in CI.
 
 ### Added
 - `GatewayBudgetEvaluator` now owns read-only budget scope matching, usage rollups,
@@ -59,6 +62,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Bounded `GatewayMarketplaceControl` ownership for verified template file installation and client/workspace/agent provisioning.
 - Bounded `GatewayRunControl` ownership for run ingress and approval-response authority.
 - Explicit runtime projection writes for artifact and usage read models, with non-negative usage validation and root-contained, symlink-safe artifact download handles.
+- Canonical RunLog artifact-created and completed-tool outputs now feed the gateway
+  artifact inventory through the same bounded-ID/path-derived projection seam as
+  compatibility events.
 
 ### Changed
 - Verification lane standardized around `pnpm verify`.

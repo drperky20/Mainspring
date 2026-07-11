@@ -2371,6 +2371,100 @@ describe('LocalMainspringGateway', () => {
     }
   }, 30_000)
 
+  it('projects canonical RunLog artifact events into gateway artifact history', () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-runlog-artifacts-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider(() => [
+        { type: 'event', event: { type: 'result', text: 'unused' } },
+      ]),
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, runLog, appState })
+
+    try {
+      const session = mainspring.sessions.create({
+        sessionId: 'gateway-runlog-artifact-session',
+        workspace: { root: workspaceRoot },
+      })
+      const handle = runLog.runs.start({
+        sessionId: session.record.sessionId,
+        input: 'Capture canonical artifacts.',
+        workspaceId: 'workspace_runlog_artifacts',
+      })
+      runLog.store.appendEvent({
+        runId: handle.record.runId,
+        type: 'tool.call.completed',
+        payload: {
+          toolCallId: 'tool_call_runlog_screenshot',
+          name: 'browser.screenshot',
+          output: {
+            artifactId: 'runlog_screenshot_gateway',
+            artifactLabel: 'RunLog screenshot',
+            path: path.join(root, 'outside', 'screenshot.png'),
+            mediaType: 'text/html',
+          },
+        },
+      })
+      runLog.store.appendEvent({
+        runId: handle.record.runId,
+        type: 'artifact.created',
+        payload: {
+          artifactId: 'runlog_report_gateway',
+          kind: 'report',
+          path: path.join(root, 'outside', 'report.md'),
+        },
+      })
+
+      const first = gateway.snapshot()
+      const second = gateway.snapshot()
+      expect(first.appState.artifacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            artifactId: 'runlog_screenshot_gateway',
+            runId: handle.record.runId,
+            sessionId: session.record.sessionId,
+            workspaceId: 'workspace_runlog_artifacts',
+            kind: 'image',
+            path: path.resolve(
+              mainspring.storage.artifactStore.rootPath,
+              'runlog_screenshot_gateway',
+            ),
+            mediaType: 'image/png',
+            metadata: expect.objectContaining({
+              runtime: 'runlog',
+              sourceType: 'tool.call.completed',
+              toolName: 'browser.screenshot',
+            }),
+          }),
+          expect.objectContaining({
+            artifactId: 'runlog_report_gateway',
+            kind: 'report',
+            metadata: expect.objectContaining({
+              runtime: 'runlog',
+              sourceType: 'artifact.created',
+            }),
+          }),
+        ]),
+      )
+      expect(second.appState.artifacts).toHaveLength(first.appState.artifacts.length)
+      expect(JSON.stringify(first.appState.artifacts)).not.toContain(`${path.sep}outside${path.sep}`)
+    } finally {
+      runLog.close()
+      appState.close()
+    }
+  })
+
   it('prices gateway usage-ledger rows from a configured local catalog', async () => {
     const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
       'mainspring-gateway-priced-usage-ledger-',

@@ -417,6 +417,29 @@ export class GatewayProjectionSynchronizer<
         })
       }
     }
+
+    this.syncRunLogArtifacts(projection)
+  }
+
+  private syncRunLogArtifacts(projection: GatewayArtifactProjection): void {
+    const runtime = this.options.runLog
+    if (!runtime) return
+
+    for (const run of runtime.runs.list()) {
+      const runMetadata = this.options.appState.runs.get(run.runId) ?? undefined
+      const events = runtime.store.listEvents({
+        runId: run.runId,
+        types: ['artifact.created', 'tool.call.completed'],
+        limit: 10_000,
+      })
+      for (const event of events) {
+        projection.projectRunLogEvent({
+          event,
+          run,
+          ...(runMetadata ? { runMetadata } : {}),
+        })
+      }
+    }
   }
 
   private syncRunCellLeases(): void {

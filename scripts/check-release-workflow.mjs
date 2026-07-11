@@ -68,8 +68,8 @@ requireWorkflowText(workflowPath, workflow, 'cancel-in-progress: true')
 
 for (const [jobName, job] of Object.entries(jobs)) {
   if (!job) continue
-  requireJobCommand(jobName, job, 'uses: actions/checkout@v4')
-  requireJobCommand(jobName, job, 'uses: actions/setup-node@v4')
+  requireJobCommand(jobName, job, 'uses: actions/checkout@v7')
+  requireJobCommand(jobName, job, 'uses: actions/setup-node@v6')
   requireJobCommand(jobName, job, 'node-version: 22.12.0')
   requireJobCommand(jobName, job, 'run: corepack enable')
   requireJobCommand(jobName, job, 'run: corepack prepare pnpm@9.15.4 --activate')
@@ -196,8 +196,8 @@ function requireCiWorkflow() {
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'timeout-minutes: 30')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'fail-fast: false')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'os: [ubuntu-latest, macos-latest, windows-latest]')
-  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/checkout@v4')
-  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/setup-node@v4')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/checkout@v7')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/setup-node@v6')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'node-version: 22.12.0')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: corepack enable')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: corepack prepare pnpm@9.15.4 --activate')
@@ -214,8 +214,8 @@ function requireCiWorkflow() {
   const browserJob = requireWorkflowJob(ciWorkflowPath, ciWorkflow, 'browser-e2e')
   requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'runs-on: ubuntu-latest')
   requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'timeout-minutes: 25')
-  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'uses: actions/checkout@v4')
-  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'uses: actions/setup-node@v4')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'uses: actions/checkout@v7')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'uses: actions/setup-node@v6')
   requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'node-version: 22.12.0')
   requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'run: corepack enable')
   requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'run: corepack prepare pnpm@9.15.4 --activate')
@@ -224,7 +224,7 @@ function requireCiWorkflow() {
   requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'run: pnpm console:e2e')
   requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'MAINSPRING_E2E_ARTIFACTS_DIR: output/playwright/ci')
   requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'if: failure()')
-  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'uses: actions/upload-artifact@v4')
+  requireWorkflowJobCommand(ciWorkflowPath, 'browser-e2e', browserJob, 'uses: actions/upload-artifact@v7')
 }
 
 function requireNoLinuxDesktopPackaging() {
