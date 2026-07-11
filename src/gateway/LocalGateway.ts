@@ -36,7 +36,7 @@ import type {
   RunRecord as RunLogRunRecord,
 } from '../core/types.js'
 import type { RunLogRunProjection } from '../hosts/runlog/RunLogProjection.js'
-import { createHostDecisionRecord, type DecisionRecord } from '../policy/DecisionRecord.js'
+import type { DecisionRecord } from '../policy/DecisionRecord.js'
 import { estimateUsageCost } from '../usage/UsageAccounting.js'
 import {
   describeModelPricingCatalog,
@@ -128,6 +128,11 @@ import {
   type LocalGatewayBudgetDraftInput,
   type UpdateLocalGatewayBudgetDraftInput,
 } from './GatewayBudgetControl.js'
+import {
+  GatewayProviderProfileControl,
+  type CreateLocalGatewayProviderProfileDraftInput,
+  type UpdateLocalGatewayProviderProfileDraftInput,
+} from './GatewayProviderProfileControl.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
@@ -155,6 +160,10 @@ export type {
   UpdateLocalGatewayBudgetDraftInput,
 } from './GatewayBudgetControl.js'
 export type {
+  CreateLocalGatewayProviderProfileDraftInput,
+  UpdateLocalGatewayProviderProfileDraftInput,
+} from './GatewayProviderProfileControl.js'
+export type {
   LocalGatewayDeploymentCommandRunner,
   LocalGatewayDeploymentExecutionResult,
   LocalGatewayDeploymentOperation,
@@ -162,7 +171,6 @@ export type {
 } from './DeploymentWizard.js'
 import type {
   CreateLocalGatewayCronScheduleInput,
-  CreateLocalGatewayProviderProfileInput,
   LocalGatewayAgentRecord,
   LocalGatewayApprovalMetadataRecord,
   LocalGatewayAppStateStore,
@@ -182,7 +190,6 @@ import type {
   LocalGatewayRunMetadataRecord,
   LocalGatewayToolCallRecord,
   UpdateLocalGatewayCronScheduleInput,
-  UpdateLocalGatewayProviderProfileInput,
   LocalGatewayUsageLedgerEntryRecord,
   LocalGatewayWorkspaceRecord,
 } from './AppStateStore.js'
@@ -302,26 +309,6 @@ export interface UpdateLocalGatewayAgentDraftInput {
   approvalMode?: string
   modelLabel?: string
   skills?: Record<string, boolean>
-  metadata?: Record<string, unknown>
-}
-
-export interface CreateLocalGatewayProviderProfileDraftInput {
-  providerId: string
-  label: string
-  secretRef?: string
-  secretValue?: string
-  defaultModelId?: string
-  metadata?: Record<string, unknown>
-}
-
-export interface UpdateLocalGatewayProviderProfileDraftInput {
-  profileId: string
-  providerId?: string
-  label?: string
-  secretRef?: string
-  secretValue?: string
-  defaultModelId?: string
-  status?: LocalGatewayProviderProfileRecord['status']
   metadata?: Record<string, unknown>
 }
 
@@ -1150,10 +1137,10 @@ export class LocalMainspringGateway {
   readonly providerProfiles = {
     create: (
       input: CreateLocalGatewayProviderProfileDraftInput,
-    ): LocalGatewayProviderProfileRecord => this.createProviderProfileDraft(input),
+    ): LocalGatewayProviderProfileRecord => this.providerProfileControl().create(input),
     update: (
       input: UpdateLocalGatewayProviderProfileDraftInput,
-    ): LocalGatewayProviderProfileRecord => this.updateProviderProfileDraft(input),
+    ): LocalGatewayProviderProfileRecord => this.providerProfileControl().update(input),
   }
 
   readonly cron = {
@@ -3130,6 +3117,10 @@ export class LocalMainspringGateway {
     })
   }
 
+  private providerProfileControl(): GatewayProviderProfileControl {
+    return new GatewayProviderProfileControl({ appState: this.requireAppState() })
+  }
+
   private provenanceReviewControl(): GatewayProvenanceReviewControl {
     return new GatewayProvenanceReviewControl({ appState: this.requireAppState() })
   }
@@ -3848,60 +3839,6 @@ export class LocalMainspringGateway {
     const agent = appState.agents.get(agentId)
     if (!agent) throw new Error(`Unknown gateway agent: ${agentId}`)
     return agent
-  }
-
-  private createProviderProfileDraft(
-    input: CreateLocalGatewayProviderProfileInput,
-  ): LocalGatewayProviderProfileRecord {
-    const appState = this.requireAppState()
-    const decision = createHostDecisionRecord({
-      runId: 'gateway-control-plane',
-      surface: 'provider_config',
-      operation: 'provider_config.write',
-      targetKey: input.providerId,
-      state: 'allow',
-      reasons: ['Trusted local gateway operator requested provider profile creation.'],
-      permissionCategories: ['provider-config', 'secrets'],
-      input,
-      metadata: { mutation: 'create' },
-    })
-    const profile = appState.providerProfiles.create(input)
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'provider-profile.created',
-      actor: 'local-gateway',
-      targetType: 'provider-profile',
-      targetId: profile.profileId,
-      metadata: { decisionRecord: decision },
-    })
-    return profile
-  }
-
-  private updateProviderProfileDraft(
-    input: UpdateLocalGatewayProviderProfileInput,
-  ): LocalGatewayProviderProfileRecord {
-    const appState = this.requireAppState()
-    const decision = createHostDecisionRecord({
-      runId: 'gateway-control-plane',
-      surface: 'provider_config',
-      operation: 'provider_config.write',
-      targetKey: input.profileId,
-      state: 'allow',
-      reasons: ['Trusted local gateway operator requested provider profile mutation.'],
-      permissionCategories: ['provider-config', 'secrets'],
-      input,
-      metadata: { mutation: 'update' },
-    })
-    const profile = appState.providerProfiles.update(input)
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'provider-profile.updated',
-      actor: 'local-gateway',
-      targetType: 'provider-profile',
-      targetId: profile.profileId,
-      metadata: { decisionRecord: decision },
-    })
-    return profile
   }
 
   private resolveGatewayProviderProfile(

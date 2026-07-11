@@ -4267,7 +4267,7 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
-  it('uses hosted identity for cron grants and budget controls', async () => {
+  it('uses hosted identity for cron grants, budget controls, and provider profiles', async () => {
     const root = makeTempRoot('mainspring-gateway-hosted-cron-identity-')
     const sessionsRoot = path.join(root, 'sessions')
     const workspaceRoot = path.join(root, 'workspace')
@@ -4395,6 +4395,36 @@ describe('LocalGatewayHttpServer', () => {
       )
       expect(deletedBudgetResponse.status).toBe(200)
 
+      const hostedProviderSecret = 'hosted-provider-control-secret'
+      const createdProviderResponse = await fetch(`${started.url}/provider-profiles`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          providerId: 'openrouter',
+          label: 'Hosted provider profile',
+          secretValue: hostedProviderSecret,
+          defaultModelId: 'openrouter/hosted-provider-control',
+          actor: 'browser-spoofed-provider-operator',
+        }),
+      })
+      const createdProvider = await createdProviderResponse.json() as {
+        providerProfile: { profileId: string }
+      }
+      expect(createdProviderResponse.status).toBe(201)
+
+      const updatedProviderResponse = await fetch(
+        `${started.url}/provider-profiles/${encodeURIComponent(createdProvider.providerProfile.profileId)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            label: 'Hosted provider profile v2',
+            actor: 'browser-spoofed-provider-operator',
+          }),
+        },
+      )
+      expect(updatedProviderResponse.status).toBe(200)
+
       const events = appState.auditEvents.list({ category: 'cron' })
       for (const action of [
         'schedule.created.authorized',
@@ -4416,9 +4446,20 @@ describe('LocalGatewayHttpServer', () => {
           event.action === action && event.targetId === workspace.workspaceId
         ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
       }
+      const gatewayEvents = appState.auditEvents.list({ category: 'gateway' })
+      for (const action of [
+        'provider-profile.created.authorized',
+        'provider-profile.updated.authorized',
+      ]) {
+        expect(gatewayEvents.find((event) => (
+          event.action === action && event.targetId === createdProvider.providerProfile.profileId
+        ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
+      }
       expect(JSON.stringify(events)).not.toContain('browser-spoofed-cron-operator')
       expect(JSON.stringify(events)).not.toContain('HOSTED_CRON_TEST_SECRET')
       expect(JSON.stringify(budgetEvents)).not.toContain('browser-spoofed-budget-operator')
+      expect(JSON.stringify(gatewayEvents)).not.toContain('browser-spoofed-provider-operator')
+      expect(JSON.stringify(gatewayEvents)).not.toContain(hostedProviderSecret)
     } finally {
       await server.stop()
       runLog.close()

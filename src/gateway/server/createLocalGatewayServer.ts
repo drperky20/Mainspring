@@ -880,7 +880,7 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/provider-profiles') {
         const body = await this.readJson(request)
         const parsed = CreateProviderProfileRequestSchema.parse(body)
-        const profile = this.createProviderProfile(parsed)
+        const profile = this.createProviderProfile(parsed, principal?.actor)
         this.writeJson(response, 201, { providerProfile: consoleProviderProfile(profile) })
         return
       }
@@ -918,7 +918,7 @@ export class LocalGatewayHttpServer {
         const profileId = decodeURIComponent(path.slice('/provider-profiles/'.length))
         const body = await this.readJson(request)
         const parsed = UpdateProviderProfileRequestSchema.parse(body)
-        const profile = this.updateProviderProfile(profileId, parsed)
+        const profile = this.updateProviderProfile(profileId, parsed, principal?.actor)
         this.writeJson(response, 200, { providerProfile: consoleProviderProfile(profile) })
         return
       }
@@ -1422,14 +1422,15 @@ export class LocalGatewayHttpServer {
     })
   }
 
-  private createProviderProfile(input: CreateProviderProfileRequest) {
-    return this.options.gateway.providerProfiles.create(input)
+  private createProviderProfile(input: CreateProviderProfileRequest, actor?: string) {
+    return this.options.gateway.providerProfiles.create({ ...input, ...(actor ? { actor } : {}) })
   }
 
-  private updateProviderProfile(profileId: string, input: UpdateProviderProfileRequest) {
+  private updateProviderProfile(profileId: string, input: UpdateProviderProfileRequest, actor?: string) {
     return this.options.gateway.providerProfiles.update({
       profileId,
       ...input,
+      ...(actor ? { actor } : {}),
     })
   }
 

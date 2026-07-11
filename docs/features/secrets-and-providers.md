@@ -21,6 +21,8 @@ Runtime provider IDs are safe strings resolved through `ProviderRegistry`. `open
 
 In `local-gateway-dev`, a browser can submit a provider secret once. The gateway encrypts it in local app-state storage and resolves it host-side during provider query. The browser cannot read the value back. RunLog-backed gateway starts carry only opaque credential refs such as `managed:provider_profile_...`; the raw value is injected into provider calls through the host resolver and is not appended to RunLog events.
 
+`GatewayProviderProfileControl` persists a hash-only `provider_config.write` decision before a provider profile or managed secret can change app state. Hosted gateway routes attach the authenticated principal as the audit actor rather than accepting browser attribution. The decision binds provider configuration and a credential hash, never the raw secret or its reference value.
+
 `openrouter:e2e` is an optional live-provider verifier. Missing credentials fail closed with `MAINSPRING_OPENROUTER_E2E_PREREQUISITES_BLOCKED` without echoing key values. With credentials present, it uses `createRunLogMainspring`, `RunIntent`, the SQLite RunLog store, `ProviderRouter`, and `OpenRouterProvider` rather than a direct provider shortcut.
 
 ## What It Does Not Do

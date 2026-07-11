@@ -456,11 +456,13 @@ describe('LocalMainspringGateway', () => {
         label: 'OpenRouter Default',
         secretRef: 'env:OPENROUTER_API_KEY',
         defaultModelId: 'openrouter/free',
+        actor: 'hosted:provider-profile-test:admin',
       })
       const updated = gateway.providerProfiles.update({
         profileId: created.profileId,
         label: 'OpenRouter Archived',
         status: 'archived',
+        actor: 'hosted:provider-profile-test:admin',
       })
 
       expect(created).toMatchObject({
@@ -477,31 +479,63 @@ describe('LocalMainspringGateway', () => {
       })
       expect(appState.auditEvents.list({ category: 'gateway' })).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({
-            action: 'provider-profile.created',
-            targetType: 'provider-profile',
-            targetId: created.profileId,
-            metadata: {
-              decisionRecord: expect.objectContaining({
-                surface: 'provider_config',
-                operation: 'provider_config.write',
-                state: 'allow',
-                targetKey: 'openrouter',
-              }),
-            },
+        expect.objectContaining({
+          action: 'provider-profile.created.authorized',
+          actor: 'hosted:provider-profile-test:admin',
+          targetType: 'provider-profile',
+          targetId: created.profileId,
+          metadata: expect.objectContaining({
+            decisionRecord: expect.objectContaining({
+              surface: 'provider_config',
+              operation: 'provider_config.write',
+              state: 'allow',
+              targetKey: created.profileId,
+              metadata: expect.objectContaining({ mutation: 'create' }),
+            }),
           }),
-          expect.objectContaining({
-            action: 'provider-profile.updated',
-            targetType: 'provider-profile',
-            targetId: created.profileId,
-            metadata: {
-              decisionRecord: expect.objectContaining({
-                surface: 'provider_config',
-                operation: 'provider_config.write',
-                state: 'allow',
-                targetKey: created.profileId,
-              }),
-            },
+        }),
+        expect.objectContaining({
+          action: 'provider-profile.created',
+          actor: 'hosted:provider-profile-test:admin',
+          targetType: 'provider-profile',
+          targetId: created.profileId,
+          metadata: expect.objectContaining({
+            decisionRecord: expect.objectContaining({
+              surface: 'provider_config',
+              operation: 'provider_config.write',
+              state: 'allow',
+              targetKey: created.profileId,
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          action: 'provider-profile.updated.authorized',
+          actor: 'hosted:provider-profile-test:admin',
+          targetType: 'provider-profile',
+          targetId: created.profileId,
+          metadata: expect.objectContaining({
+            decisionRecord: expect.objectContaining({
+              surface: 'provider_config',
+              operation: 'provider_config.write',
+              state: 'allow',
+              targetKey: created.profileId,
+              metadata: expect.objectContaining({ mutation: 'update' }),
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          action: 'provider-profile.updated',
+          actor: 'hosted:provider-profile-test:admin',
+          targetType: 'provider-profile',
+          targetId: created.profileId,
+          metadata: expect.objectContaining({
+            decisionRecord: expect.objectContaining({
+              surface: 'provider_config',
+              operation: 'provider_config.write',
+              state: 'allow',
+              targetKey: created.profileId,
+            }),
+          }),
           }),
         ]),
       )

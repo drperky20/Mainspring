@@ -15,6 +15,7 @@ Mainspring treats agents as untrusted workers.
 - console snapshot/read-model preview redaction for browser-unsafe path markers and common provider key environment markers
 - shared pure provider-marker helper for gateway and console browser-boundary checks
 - managed local provider secrets
+- hash-only, pre-mutation provider-profile authority records with hosted-principal attribution
 - local gateway hosted-auth mode
 - hosted gateway admin/operator/viewer route authorization with fail-closed mutation classification
 - admin-only hosted user management, final-active-admin protection, and session revocation after password changes or account disabling
