@@ -77,6 +77,12 @@ test.describe('operator console', () => {
     await expect(runRow.getByText('completed', { exact: true })).toBeVisible({ timeout: 15_000 })
     await runRow.click()
     await expect(page.locator('code').getByText(startedRun.runId, { exact: true })).toBeVisible()
+    const deepLink = new URL(page.url())
+    expect(deepLink.searchParams.get('screen')).toBe('activity')
+    expect(deepLink.searchParams.get('activity')).toBe('runs')
+    expect(deepLink.searchParams.get('runId')).toBe(startedRun.runId)
+    await page.reload()
+    await expect(page.locator('code').getByText(startedRun.runId, { exact: true })).toBeVisible({ timeout: 15_000 })
     await page.screenshot({ path: testInfo.outputPath('desktop-run-detail.png') })
   })
 

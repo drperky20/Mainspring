@@ -78,6 +78,8 @@ import {
 } from './operatorConsoleViewModel'
 import './controlRoom.css'
 import { type ClientWorkspaceTab } from './ConsoleClientWorkspaceFrame'
+import { readConsoleLocation, writeConsoleLocation } from './ConsoleLocation'
+import { useCompatibilityRunEvents } from './useCompatibilityRunEvents'
 import {
   ClientsScreen,
   modelLabel,
@@ -96,20 +98,20 @@ const DEFAULT_GATEWAY_URL = localGatewayUrlFromEnv(
 const SETUP_STORAGE_KEY = 'mainspring.console.setup.v2'
 
 export function ConnectedConsoleApp() {
+  const initialLocation = readConsoleLocation(
+    typeof window === 'undefined' ? '' : window.location.search,
+  )
   const [gatewayUrl, setGatewayUrl] = useState(DEFAULT_GATEWAY_URL)
   const [sessionToken, setSessionToken] = useState<string>()
   const [setup, setSetup] = useState<SetupState>(() => readSetupState())
-  const [screen, setScreen] = useState<ConsoleScreen>('home')
-  const [activityTab, setActivityTab] = useState<ActivityTab>('runs')
+  const [screen, setScreen] = useState<ConsoleScreen>(initialLocation.screen)
+  const [activityTab, setActivityTab] = useState<ActivityTab>(initialLocation.activityTab)
   const [clientTab, setClientTab] = useState<ClientTab>('chat')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedClientId, setSelectedClientId] = useState<string>()
   const [selectedAgentId, setSelectedAgentId] = useState<string>()
   const [selectedProviderProfileId, setSelectedProviderProfileId] = useState<string>()
-  const [selectedRunId, setSelectedRunId] = useState<string>()
-  const [selectedRunEvents, setSelectedRunEvents] = useState<ConsoleGatewayRunEvent[]>([])
-  const [runEventsLoading, setRunEventsLoading] = useState(false)
-  const [runEventsError, setRunEventsError] = useState<string>()
+  const [selectedRunId, setSelectedRunId] = useState<string | undefined>(initialLocation.runId)
   const [toast, setToast] = useState<ToastState>()
   const [busy, setBusy] = useState(false)
   const [clientDialogOpen, setClientDialogOpen] = useState(false)
@@ -297,39 +299,58 @@ export function ConnectedConsoleApp() {
     revision: snapshot?.generatedAt,
     limit: 80,
   })
+  const compatibilityRunEvents = useCompatibilityRunEvents({
+    enabled: screen === 'activity'
+      && activityTab === 'runs'
+      && selectedRun?.source === 'compatibility',
+    gatewayClient,
+    sessionId: selectedRun?.source === 'compatibility' ? selectedRun.sessionId : undefined,
+    runId: selectedRun?.source === 'compatibility' ? selectedRun.runId : undefined,
+    revision: snapshot?.generatedAt,
+  })
 
-  const loadSelectedRunEvents = useCallback(async (run: OperatorRunRow | undefined) => {
-    if (!run || run.source === 'runlog') {
-      setSelectedRunEvents([])
-      setRunEventsError(undefined)
-      return
-    }
-    setRunEventsLoading(true)
-    setRunEventsError(undefined)
-    try {
-      const result = await gatewayClient.runEvents({
-        sessionId: run.sessionId,
-        runId: run.runId,
-      })
-      setSelectedRunEvents(result.events)
-    } catch (error) {
-      setSelectedRunEvents([])
-      setRunEventsError(errorMessage(error))
-    } finally {
-      setRunEventsLoading(false)
-    }
-  }, [gatewayClient])
-
-  const displayedRunEvents = runLogTraceEnabled ? runLogTrace.events : selectedRunEvents
-  const displayedRunEventsLoading = runLogTraceEnabled ? runLogTrace.loading : runEventsLoading
-  const displayedRunEventsError = runLogTraceEnabled ? runLogTrace.error : runEventsError
+  const displayedRunEvents = runLogTraceEnabled ? runLogTrace.events : compatibilityRunEvents.events
+  const displayedRunEventsLoading = runLogTraceEnabled
+    ? runLogTrace.loading
+    : compatibilityRunEvents.loading
+  const displayedRunEventsError = runLogTraceEnabled
+    ? runLogTrace.error
+    : compatibilityRunEvents.error
   const reloadSelectedRunEvents = useCallback(async () => {
     if (runLogTraceEnabled) {
       await runLogTrace.reload()
       return
     }
-    await loadSelectedRunEvents(selectedRun)
-  }, [loadSelectedRunEvents, runLogTrace.reload, runLogTraceEnabled, selectedRun])
+    await compatibilityRunEvents.reload()
+  }, [compatibilityRunEvents.reload, runLogTrace.reload, runLogTraceEnabled])
+
+  function navigateToScreen(nextScreen: ConsoleScreen) {
+    setScreen(nextScreen)
+    writeConsoleLocation({
+      screen: nextScreen,
+      activityTab,
+      ...(nextScreen === 'activity' && activityTab === 'runs' && selectedRunId
+        ? { runId: selectedRunId }
+        : {}),
+    })
+  }
+
+  function navigateToActivityTab(nextActivityTab: ActivityTab) {
+    setActivityTab(nextActivityTab)
+    setScreen('activity')
+    writeConsoleLocation({
+      screen: 'activity',
+      activityTab: nextActivityTab,
+      ...(nextActivityTab === 'runs' && selectedRunId ? { runId: selectedRunId } : {}),
+    })
+  }
+
+  function selectRun(runId?: string) {
+    setSelectedRunId(runId)
+    setActivityTab('runs')
+    setScreen('activity')
+    writeConsoleLocation({ screen: 'activity', activityTab: 'runs', ...(runId ? { runId } : {}) })
+  }
 
   useEffect(() => {
     if (selectedAgent && selectedAgent.agentId !== selectedAgentId) {
@@ -341,25 +362,26 @@ export function ConnectedConsoleApp() {
     if (!operatorModel) return
     if (selectedRunId && !operatorModel.runs.some((run) => run.runId === selectedRunId)) {
       setSelectedRunId(undefined)
+      if (screen === 'activity' && activityTab === 'runs') {
+        writeConsoleLocation({ screen: 'activity', activityTab: 'runs' })
+      }
       return
     }
     if (activityRunsEnabled && !runActivityPagesLoaded) return
     if (!selectedRunId && runListModel?.runs[0]) {
       setSelectedRunId(runListModel.runs[0]?.runId)
+      if (screen === 'activity' && activityTab === 'runs') {
+        writeConsoleLocation({ screen: 'activity', activityTab: 'runs', runId: runListModel.runs[0].runId })
+      }
     }
-  }, [activityRunsEnabled, operatorModel, runActivityPagesLoaded, runListModel, selectedRunId])
-
-  useEffect(() => {
-    if (screen !== 'activity' || activityTab !== 'runs') return
-    if (selectedRun?.source === 'runlog') return
-    void loadSelectedRunEvents(selectedRun)
-  }, [activityTab, loadSelectedRunEvents, screen, selectedRun?.runId, selectedRun?.source])
+  }, [activityRunsEnabled, activityTab, operatorModel, runActivityPagesLoaded, runListModel, screen, selectedRunId])
 
   async function completeSetup(next: SetupState) {
     await refresh()
     writeSetupState(next)
     setSetup(next)
     setScreen('home')
+    writeConsoleLocation({ screen: 'home', activityTab: 'runs' })
   }
 
   function applyGatewayUrl(value: string) {
@@ -391,7 +413,7 @@ export function ConnectedConsoleApp() {
         reason: 'Cancelled from the Mainspring console.',
       })
       await refresh()
-      await loadSelectedRunEvents(run)
+      await reloadSelectedRunEvents()
       setToast({ kind: 'ok', text: `Run ${shortId(run.runId)} cancelled.` })
     } catch (error) {
       setToast({ kind: 'error', text: errorMessage(error) })
@@ -486,15 +508,18 @@ export function ConnectedConsoleApp() {
     setSelectedRunId(runId)
     setActivityTab('runs')
     setScreen('activity')
+    writeConsoleLocation({ screen: 'activity', activityTab: 'runs', runId })
   }
 
   function navigateFromOverview(destination: 'clients' | 'runs' | 'approvals' | 'usage') {
     if (destination === 'clients') {
       setScreen('workspaces')
+      writeConsoleLocation({ screen: 'workspaces', activityTab: 'runs' })
       return
     }
     setActivityTab(destination)
     setScreen('activity')
+    writeConsoleLocation({ screen: 'activity', activityTab: destination })
   }
 
   async function createClient(draft: DraftClient) {
@@ -784,10 +809,10 @@ export function ConnectedConsoleApp() {
         setup={setup}
         onCollapse={() => setSidebarCollapsed((value) => !value)}
         onNewClient={() => setClientDialogOpen(true)}
-        onScreen={setScreen}
+        onScreen={navigateToScreen}
         onSelectClient={(clientId) => {
           setSelectedClientId(clientId)
-          setScreen('workspaces')
+          navigateToScreen('workspaces')
           setClientTab('chat')
         }}
       />
@@ -851,7 +876,7 @@ export function ConnectedConsoleApp() {
               activeRuns={operatorModel.counts.activeRuns}
               activeTab={activityTab}
               pendingApprovals={operatorModel.counts.pendingApprovals}
-              onTab={setActivityTab}
+              onTab={navigateToActivityTab}
             />
             {activityTab === 'runs' ? (
               <RunsScreen
@@ -876,7 +901,7 @@ export function ConnectedConsoleApp() {
                   ])
                 }}
                 onReloadEvents={() => void reloadSelectedRunEvents()}
-                onSelectRun={setSelectedRunId}
+                onSelectRun={selectRun}
               />
             ) : activityTab === 'tools' ? (
               <ToolCallsScreen

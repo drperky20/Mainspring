@@ -586,7 +586,11 @@ export interface LocalGatewayClient {
     approvals: GatewayApprovalHistoryItem[]
     nextCursor?: string
   }>
-  runEvents(input: { sessionId: string; runId: string }): Promise<{ events: ConsoleGatewayRunEvent[] }>
+  runEvents(input: {
+    sessionId: string
+    runId: string
+    signal?: AbortSignal
+  }): Promise<{ events: ConsoleGatewayRunEvent[] }>
   resolveApproval(input: {
     approvalId: string
     sessionId: string
@@ -979,7 +983,10 @@ export function createLocalGatewayClient(
       requestJson(
         fetchImpl,
         `${normalizedBaseUrl}/runs/${encodeURIComponent(input.runId)}/events?sessionId=${encodeURIComponent(input.sessionId)}`,
-        { headers: authHeaders() },
+        {
+          headers: authHeaders(),
+          ...(input.signal ? { signal: input.signal } : {}),
+        },
       ),
     resolveApproval: (input) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/approvals/${encodeURIComponent(input.approvalId)}/resolve`, {

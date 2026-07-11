@@ -25,6 +25,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - `ConsoleClientWorkspaceViews` now owns client chat, agent editing, automation
   testing, access preview, tool configuration, and their feature-local helpers,
   reducing the connected shell to composition and gateway state orchestration.
+- Console run detail navigation now preserves a validated screen/activity/run
+  deep link, and compatibility trace loading is session-bound and abortable so
+  fast run changes cannot apply stale event responses to the selected run.
 - Runtime kernel, SQLite mailbox, SDK, provider registry, tool registry, policy guard, approval receipts, and event journal package surfaces.
 - Prototype founder-cockpit console with explicit localStorage honesty and development gateway fixture previews.
 - Launch-baseline branding assets, examples, and open-source documentation set.
