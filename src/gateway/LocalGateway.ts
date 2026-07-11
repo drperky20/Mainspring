@@ -8,7 +8,6 @@ import {
   type RuntimePolicy,
 } from '#protocol'
 import fs from 'node:fs'
-import { createHash } from 'node:crypto'
 import path from 'node:path'
 import type {
   MainspringApprovalRecord,
@@ -76,9 +75,7 @@ import {
   type HyperCellSchedulerStatus,
 } from './HyperCellScheduler.js'
 import {
-  COMPATIBILITY_MAILBOX_REVISION_PROBE_MS,
   CompatibilityRunPageReader,
-  compatibilityMailboxFingerprint,
   type CompatibilityRunPage,
 } from './CompatibilityRunPage.js'
 import {
@@ -134,6 +131,7 @@ import { GatewayRunControl } from './GatewayRunControl.js'
 import { GatewayArtifactAccess, type LocalGatewayArtifactFile } from './GatewayArtifactAccess.js'
 import { GatewayArtifactProjection } from './GatewayArtifactProjection.js'
 import { GatewayUsageProjection } from './GatewayUsageProjection.js'
+import { GatewaySnapshotReader, projectLocalGatewayRunLogRun } from './GatewaySnapshotReader.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
@@ -829,50 +827,6 @@ function approvalPolicyFromGatewayMode(value: unknown): RuntimePolicy['approvalP
   return undefined
 }
 
-function projectLocalRunLogRun(projection: RunLogRunProjection): LocalGatewayRunLogRunProjection {
-  return {
-    runId: projection.run.runId,
-    sessionId: projection.run.sessionId,
-    agentId: projection.run.agentId,
-    status: projection.status,
-    ...(projection.run.workspaceId ? { workspaceId: projection.run.workspaceId } : {}),
-    ...(projection.run.providerId ? { providerId: projection.run.providerId } : {}),
-    ...(projection.run.modelId ? { modelId: projection.run.modelId } : {}),
-    createdAt: projection.run.createdAt,
-    updatedAt: projection.run.updatedAt,
-    assistantText: projection.assistantText,
-    latestSeq: projection.latestSeq,
-    eventCount: projection.eventCount,
-    ...(projection.events.at(-1)?.type ? { lastEventType: projection.events.at(-1)?.type } : {}),
-    pendingApprovals: projection.pendingApprovals.map((approval) => ({
-      ...(approval.approvalId ? { approvalId: approval.approvalId } : {}),
-      ...(approval.toolCallId ? { toolCallId: approval.toolCallId } : {}),
-    })),
-    approvalDecisions: projection.approvalDecisions.map((approval) => ({
-      ...(approval.approvalId ? { approvalId: approval.approvalId } : {}),
-      ...(approval.receiptId ? { receiptId: approval.receiptId } : {}),
-      decision: approval.decision,
-    })),
-    toolCalls: projection.toolCalls.map((call) => ({
-      ...(call.toolCallId ? { toolCallId: call.toolCallId } : {}),
-      ...(call.name ? { name: call.name } : {}),
-      status: call.status,
-    })),
-    checkpoints: projection.checkpoints.map((checkpoint) => ({
-      eventId: checkpoint.eventId,
-      seq: checkpoint.seq,
-      ...(checkpoint.kind ? { kind: checkpoint.kind } : {}),
-    })),
-    policyDecisions: projection.policyDecisions,
-    errors: projection.errors.map((error) => ({
-      eventId: error.eventId,
-      seq: error.seq,
-      type: error.type,
-      ...(error.message ? { message: error.message } : {}),
-    })),
-  }
-}
-
 function executionCellId(workspaceId: string, backendKey: string): string {
   return `cell_exec_${workspaceId}_${backendKey}`.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
@@ -999,8 +953,8 @@ export class LocalMainspringGateway {
   private readonly usageProjection?: GatewayUsageProjection<LocalGatewayBudgetEvaluation>
   private readonly budgetEvaluationStateById = new Map<string, LocalGatewayBudgetEvaluation['status']>()
   private readonly hyperCells?: HyperCellScheduler
-  private compatibilityMailboxRevision?: { checkedAtMs: number; fingerprint: string }
   private readonly compatibilityRunPageReader: CompatibilityRunPageReader<LocalGatewayRunProjection>
+  private readonly snapshotReader: GatewaySnapshotReader
   private snapshotReadCache?: LocalGatewaySnapshotReadCache
   private cronTimer: NodeJS.Timeout | null = null
   private cronLastTickAt?: string
@@ -1096,6 +1050,22 @@ export class LocalMainspringGateway {
             : {}),
         })
       : undefined
+    this.snapshotReader = new GatewaySnapshotReader({
+      runtime: this.runtime,
+      ...(this.runLogRuntime ? { runLog: this.runLogRuntime } : {}),
+      ...(this.appState ? { appState: this.appState } : {}),
+      inspectExecutionBackends: this.inspectExecutionBackends,
+      syncDerivedAppState: () => this.syncDerivedAppState(),
+      listSessions: () => this.sessions.list(),
+      listRuns: (sessionId, knownSession) => this.listRuns(sessionId, knownSession),
+      snapshotApprovals: () => this.snapshotApprovals(),
+      cronStatus: () => this.cron.status(),
+      pricingCatalog: this.pricingCatalogStatus,
+      usageStatus: () => this.usageStatus(),
+      budgetStatus: () => this.budgetStatus(),
+      cellStatus: () => this.cellStatus(),
+      workerState: () => this.runLogWorkerState,
+    })
     if (this.cronEnabled && this.appState) {
       this.startCronScheduler()
     }
@@ -1407,7 +1377,7 @@ export class LocalMainspringGateway {
       get: (runId: string): RunLogRunRecord | null => this.requireRunLogRuntime().store.getRun(runId),
       project: (runId: string): RunLogRunProjection => this.requireRunLogRuntime().project(runId),
       projectSummary: (runId: string, limit?: number): LocalGatewayRunLogRunProjection =>
-        projectLocalRunLogRun(this.requireRunLogRuntime().project(runId, limit)),
+        projectLocalGatewayRunLogRun(this.requireRunLogRuntime().project(runId, limit)),
       events: (input: {
         runId: string
         afterSeq?: number
@@ -1451,7 +1421,7 @@ export class LocalMainspringGateway {
         this.runLogWorkerState = 'stopped'
       }
     },
-    workerStatus: (): LocalGatewayRunLogWorkerStatus => this.runLogWorkerStatus(),
+    workerStatus: (): LocalGatewayRunLogWorkerStatus => this.snapshotReader.workerStatus(),
     toolCalls: {
       list: (input?: Parameters<RunLogMainspring['toolCalls']['list']>[0]) =>
         this.requireRunLogRuntime().toolCalls.list(input),
@@ -1644,46 +1614,9 @@ export class LocalMainspringGateway {
   }
 
   snapshot(): LocalGatewaySnapshot {
-    const sessions = this.sessions.list()
     this.snapshotReadCache = this.createSnapshotReadCache()
     try {
-      this.syncDerivedAppState()
-      // This aggregate has already synchronized derived state. Reuse its
-      // bounded reads rather than traversing every compatibility mailbox again.
-      const runs = sessions.flatMap((session) => this.listRuns(session.sessionId, session))
-      return {
-        generatedAt: new Date().toISOString(),
-        health: this.runtime.health(),
-        executionBackends: this.inspectExecutionBackends(),
-        appState: {
-          clients: this.appState?.clients.list() ?? [],
-          workspaces: this.appState?.workspaces.list() ?? [],
-          agents: this.appState?.agents.list() ?? [],
-          providerProfiles: this.appState?.providerProfiles.list() ?? [],
-          runs: this.appState?.runs.list() ?? [],
-          approvals: this.appState?.approvals.list() ?? [],
-          artifacts: this.appState?.artifacts.list() ?? [],
-          toolCalls: this.appState?.toolCalls.list() ?? [],
-          deploymentTargets: this.appState?.deploymentTargets.list() ?? [],
-          deploymentRuns: this.appState?.deploymentRuns.list() ?? [],
-          cells: this.appState?.cells.list() ?? [],
-          cellLeases: this.appState?.cellLeases.list() ?? [],
-          cellSnapshots: this.appState?.cellSnapshots.list() ?? [],
-          cronSchedules: this.appState?.cronSchedules.list() ?? [],
-          budgets: this.appState?.budgets.list() ?? [],
-          usageLedger: this.appState?.usageLedger.list() ?? [],
-          auditEvents: this.appState?.auditEvents.list() ?? [],
-        },
-        sessions,
-        runs,
-        approvals: this.snapshotApprovals(),
-        ...(this.runLogRuntime ? { runLog: this.projectRunLogSnapshot() } : {}),
-        cron: this.cron.status(),
-        pricingCatalog: this.pricingCatalogStatus,
-        usageStatus: this.usageStatus(),
-        budgetStatus: this.budgetStatus(),
-        cellStatus: this.cellStatus(),
-      }
+      return this.snapshotReader.snapshot()
     } finally {
       this.snapshotReadCache = undefined
     }
@@ -1702,103 +1635,7 @@ export class LocalMainspringGateway {
    * It intentionally contains no projection data, paths, or credentials.
    */
   snapshotRevision(): string {
-    const sessions = this.runtime.storage.stateStore.listSessions()
-    const runLog = this.runLogRuntime
-    const health = this.runtime.health()
-    const runLogRevision = runLog
-      ? runLog.runs.list().map((run) => [
-          run.runId,
-          run.status,
-          run.attemptCount,
-          runLog.store.latestEventSeq(run.runId),
-        ].join(':'))
-      : []
-    const revisionMaterial = JSON.stringify({
-      appStateRevision: this.appState?.revision() ?? 0,
-      health: {
-        ok: health.ok,
-        running: health.running,
-        activeSessions: health.activeSessions,
-      },
-      sessions: sessions.map((session) => ({
-        sessionId: session.sessionId,
-        status: session.status,
-        updatedAt: session.updatedAt,
-      })),
-      mailbox: this.mailboxRevision(sessions),
-      runLog: runLogRevision,
-      runLogWorkerState: this.runLogWorkerState,
-    })
-    return createHash('sha256').update(revisionMaterial).digest('base64url')
-  }
-
-  private mailboxRevision(sessions: MainspringSessionRecord[]): string {
-    const now = Date.now()
-    const cached = this.compatibilityMailboxRevision
-    const compatibilityRevision =
-      !cached || now - cached.checkedAtMs >= COMPATIBILITY_MAILBOX_REVISION_PROBE_MS
-        ? {
-            checkedAtMs: now,
-            fingerprint: sessions
-              .map((session) => compatibilityMailboxFingerprint(session.sessionPath))
-              .join('|'),
-          }
-        : cached
-    this.compatibilityMailboxRevision = compatibilityRevision
-    return `${MainspringMailbox.changeRevision()}:${compatibilityRevision.fingerprint}`
-  }
-
-  private projectRunLogSnapshot(): LocalGatewayRunLogSnapshot {
-    const runtime = this.runLogRuntime
-    if (!runtime) {
-      return {
-        configured: false,
-        worker: {
-          state: 'stopped',
-          queuedRuns: 0,
-          outbox: {
-            pending: 0,
-            claimed: 0,
-            retryable: 0,
-            completed: 0,
-            failed: 0,
-            cancelled: 0,
-          },
-        },
-        runs: [],
-      }
-    }
-    const runs = runtime.runs.list().flatMap((record) => {
-      try {
-        return [projectLocalRunLogRun(runtime.project(record.runId))]
-      } catch {
-        return []
-      }
-    })
-    return { configured: true, worker: this.runLogWorkerStatus(), runs }
-  }
-
-  private runLogWorkerStatus(): LocalGatewayRunLogWorkerStatus {
-    const runtime = this.runLogRuntime
-    const outbox = {
-      pending: 0,
-      claimed: 0,
-      retryable: 0,
-      completed: 0,
-      failed: 0,
-      cancelled: 0,
-    }
-    if (!runtime) {
-      return { state: 'stopped', queuedRuns: 0, outbox }
-    }
-    for (const item of runtime.store.listExecutionOutbox()) {
-      outbox[item.status] += 1
-    }
-    return {
-      state: this.runLogWorkerState,
-      queuedRuns: runtime.runs.list({ status: 'queued' }).length,
-      outbox,
-    }
+    return this.snapshotReader.revision()
   }
 
   private createSnapshotReadCache(): LocalGatewaySnapshotReadCache {

@@ -11,6 +11,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
   command so pull requests and release jobs exercise the same gates.
 
 ### Added
+- `GatewaySnapshotReader` now owns read-only aggregate snapshot assembly, RunLog
+  summary projection, worker/outbox status, and server-only revision-token caching,
+  leaving `LocalGateway` focused on stable facade and command orchestration.
 - Runtime kernel, SQLite mailbox, SDK, provider registry, tool registry, policy guard, approval receipts, and event journal package surfaces.
 - Prototype founder-cockpit console with explicit localStorage honesty and development gateway fixture previews.
 - Launch-baseline branding assets, examples, and open-source documentation set.

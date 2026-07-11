@@ -140,6 +140,10 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - All runnable examples now exercise the RunLog SDK host; the old mailbox/runtime path remains for legacy `createMainspring` SDK/gateway compatibility and tests.
 - The default gateway `/runs/start` route is RunLog-backed in the local dev server and in gateways configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways constructed without a RunLog host remain mailbox-compatible for migration tests and older embedders.
 - New non-tool mutation surfaces must use `createHostDecisionRecord`; provider-profile, provenance-review, deployment, cron, budget, run-ingress/approval, and operator-memory controls persist this decision shape with hash-only mutation evidence. The existing channel bridge remains compatibility-only until it gains a RunLog-native identity model.
+- `GatewaySnapshotReader` owns the broad read-only gateway aggregate, its RunLog
+  worker/outbox summary, and the server-only revision token. `LocalGateway` keeps
+  the stable public facade and command authority while its scoped compatibility
+  event cache remains local to the facade.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
 - Contributor, governance, operations, and security guidance now describe RunLog Fabric as canonical while keeping the mailbox/`RuntimeKernel` path compatibility-only.
