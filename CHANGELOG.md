@@ -21,6 +21,7 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Bounded `GatewayCronControl` ownership for cron schedule configuration and scoped grant issuance.
 - Bounded `GatewayBudgetControl` ownership for budget configuration, warning acknowledgement, and hard-block authority.
 - Bounded `GatewayProviderProfileControl` ownership for provider configuration and managed-secret authority.
+- Bounded `GatewayTopologyControl` ownership for client/workspace/agent/session topology, with cross-client binding checks and pre-mutation authority records.
 
 ### Changed
 - Verification lane standardized around `pnpm verify`.
@@ -36,3 +37,4 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Gateway cron schedule create/update/delete and grant issuance now persist hash-only pre-mutation host decisions; hosted session identity overrides a browser-supplied grant actor.
 - Gateway budget create/update/delete now persist hash-only `budget.write` authority before app-state mutation; warning acknowledgements and hard blocks record the matching pre-enqueue decision, with hosted identity supplied only by the authenticated gateway principal.
 - Gateway provider-profile create/update now persist hash-only `provider_config.write` authority before app-state mutation; managed-secret values remain host-side, and hosted identity replaces browser-supplied attribution.
+- Gateway client/workspace/agent/session topology mutations now persist hash-only `topology.write` authority before writes, reject cross-client workspace mutation, and use hosted session identity instead of browser attribution; workspace roots remain hash-only in audit evidence.

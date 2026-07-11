@@ -823,7 +823,7 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/clients') {
         const body = await this.readJson(request)
         const parsed = CreateClientRequestSchema.parse(body)
-        const created = this.createClient(parsed)
+        const created = this.createClient(parsed, principal?.actor)
         this.writeJson(response, 201, {
           client: consoleClient(created.client),
           ...(created.workspace ? { workspace: consoleWorkspace(created.workspace) } : {}),
@@ -834,7 +834,7 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'DELETE' && path.startsWith('/clients/')) {
         const clientId = decodeURIComponent(path.slice('/clients/'.length))
-        const deleted = this.deleteClient(clientId)
+        const deleted = this.deleteClient(clientId, principal?.actor)
         this.writeJson(response, 200, sanitizeGatewayResponse(deleted))
         return
       }
@@ -842,7 +842,7 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/workspaces') {
         const body = await this.readJson(request)
         const parsed = CreateWorkspaceRequestSchema.parse(body)
-        const created = this.createWorkspace(parsed)
+        const created = this.createWorkspace(parsed, principal?.actor)
         this.writeJson(response, 201, {
           workspace: consoleWorkspace(created.workspace),
           session: consoleSession(created.session),
@@ -852,7 +852,7 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'DELETE' && path.startsWith('/workspaces/')) {
         const workspaceId = decodeURIComponent(path.slice('/workspaces/'.length))
-        const deleted = this.deleteWorkspace(workspaceId)
+        const deleted = this.deleteWorkspace(workspaceId, principal?.actor)
         this.writeJson(response, 200, sanitizeGatewayResponse(deleted))
         return
       }
@@ -861,7 +861,7 @@ export class LocalGatewayHttpServer {
         const clientId = decodeURIComponent(path.slice('/clients/'.length))
         const body = await this.readJson(request)
         const parsed = UpdateClientRequestSchema.parse(body)
-        const updated = this.updateClient(clientId, parsed)
+        const updated = this.updateClient(clientId, parsed, principal?.actor)
         this.writeJson(response, 200, {
           client: consoleClient(updated.client),
           ...(updated.workspace ? { workspace: consoleWorkspace(updated.workspace) } : {}),
@@ -872,7 +872,7 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/agents') {
         const body = await this.readJson(request)
         const parsed = CreateAgentRequestSchema.parse(body)
-        const agent = this.createAgent(parsed)
+        const agent = this.createAgent(parsed, principal?.actor)
         this.writeJson(response, 201, { agent: consoleAgent(agent) })
         return
       }
@@ -909,7 +909,7 @@ export class LocalGatewayHttpServer {
         const agentId = decodeURIComponent(path.slice('/agents/'.length))
         const body = await this.readJson(request)
         const parsed = UpdateAgentRequestSchema.parse(body)
-        const agent = this.updateAgent(agentId, parsed)
+        const agent = this.updateAgent(agentId, parsed, principal?.actor)
         this.writeJson(response, 200, { agent: consoleAgent(agent) })
         return
       }
@@ -1327,27 +1327,28 @@ export class LocalGatewayHttpServer {
     return this.options.gateway.runs.start(gatewayInput)
   }
 
-  private createClient(input: CreateClientRequest) {
-    return this.options.gateway.clients.create(input)
+  private createClient(input: CreateClientRequest, actor?: string) {
+    return this.options.gateway.clients.create(actor ? { ...input, actor } : input)
   }
 
-  private updateClient(clientId: string, input: UpdateClientRequest) {
+  private updateClient(clientId: string, input: UpdateClientRequest, actor?: string) {
     return this.options.gateway.clients.update({
       clientId,
       ...input,
+      ...(actor ? { actor } : {}),
     })
   }
 
-  private deleteClient(clientId: string) {
-    return this.options.gateway.clients.delete(clientId)
+  private deleteClient(clientId: string, actor?: string) {
+    return this.options.gateway.clients.delete(clientId, actor)
   }
 
-  private createWorkspace(input: CreateWorkspaceRequest) {
-    return this.options.gateway.workspaces.create(input)
+  private createWorkspace(input: CreateWorkspaceRequest, actor?: string) {
+    return this.options.gateway.workspaces.create(actor ? { ...input, actor } : input)
   }
 
-  private deleteWorkspace(workspaceId: string) {
-    return this.options.gateway.workspaces.delete(workspaceId)
+  private deleteWorkspace(workspaceId: string, actor?: string) {
+    return this.options.gateway.workspaces.delete(workspaceId, actor)
   }
 
   private decideProvenanceReview(
@@ -1411,14 +1412,15 @@ export class LocalGatewayHttpServer {
     })
   }
 
-  private createAgent(input: CreateAgentRequest) {
-    return this.options.gateway.agents.create(input)
+  private createAgent(input: CreateAgentRequest, actor?: string) {
+    return this.options.gateway.agents.create(actor ? { ...input, actor } : input)
   }
 
-  private updateAgent(agentId: string, input: UpdateAgentRequest) {
+  private updateAgent(agentId: string, input: UpdateAgentRequest, actor?: string) {
     return this.options.gateway.agents.update({
       agentId,
       ...input,
+      ...(actor ? { actor } : {}),
     })
   }
 

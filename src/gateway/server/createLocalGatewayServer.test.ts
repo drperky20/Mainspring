@@ -4344,6 +4344,67 @@ describe('LocalGatewayHttpServer', () => {
         'content-type': 'application/json',
       }
 
+      const topologyRoot = path.join(root, 'topology-workspace')
+      const createdTopologyResponse = await fetch(`${started.url}/clients`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: 'Hosted topology client',
+          workspaceRoot: topologyRoot,
+          workspaceName: 'Hosted topology workspace',
+          actor: 'browser-spoofed-topology-operator',
+        }),
+      })
+      const createdTopology = await createdTopologyResponse.json() as {
+        client: { clientId: string }
+        workspace: { workspaceId: string }
+        session: { sessionId: string }
+      }
+      expect(createdTopologyResponse.status).toBe(201)
+
+      const createdTopologyAgentResponse = await fetch(`${started.url}/agents`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          workspaceId: createdTopology.workspace.workspaceId,
+          name: 'Hosted topology agent',
+          instructions: 'Keep topology state bounded.',
+          actor: 'browser-spoofed-topology-operator',
+        }),
+      })
+      const createdTopologyAgent = await createdTopologyAgentResponse.json() as {
+        agent: { agentId: string }
+      }
+      expect(createdTopologyAgentResponse.status).toBe(201)
+
+      const updatedTopologyAgentResponse = await fetch(
+        `${started.url}/agents/${encodeURIComponent(createdTopologyAgent.agent.agentId)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            name: 'Hosted topology agent v2',
+            actor: 'browser-spoofed-topology-operator',
+          }),
+        },
+      )
+      expect(updatedTopologyAgentResponse.status).toBe(200)
+
+      const updatedTopologyClientResponse = await fetch(
+        `${started.url}/clients/${encodeURIComponent(createdTopology.client.clientId)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            workspaceId: createdTopology.workspace.workspaceId,
+            workspaceName: 'Hosted topology workspace v2',
+            workspaceRoot: path.join(root, 'topology-workspace-v2'),
+            actor: 'browser-spoofed-topology-operator',
+          }),
+        },
+      )
+      expect(updatedTopologyClientResponse.status).toBe(200)
+
       const createdResponse = await fetch(`${started.url}/cron`, {
         method: 'POST',
         headers,
@@ -4535,6 +4596,28 @@ describe('LocalGatewayHttpServer', () => {
       expect(JSON.stringify(gatewayEvents)).not.toContain(hostedProviderSecret)
       expect(JSON.stringify(deploymentEvents)).not.toContain('browser-spoofed-deployment-operator')
       expect(JSON.stringify(deploymentEvents)).not.toContain('hosted-deployment-private-config')
+      const topologyEvents = gatewayEvents.filter((event) => (
+        event.action.startsWith('client.')
+        || event.action.startsWith('workspace.')
+        || event.action.startsWith('session.')
+        || event.action.startsWith('agent.')
+      ))
+      for (const [action, targetId] of [
+        ['client.created.authorized', createdTopology.client.clientId],
+        ['workspace.created.authorized', createdTopology.workspace.workspaceId],
+        ['session.created.authorized', createdTopology.session.sessionId],
+        ['agent.created.authorized', createdTopologyAgent.agent.agentId],
+        ['agent.updated.authorized', createdTopologyAgent.agent.agentId],
+        ['client.updated.authorized', createdTopology.client.clientId],
+        ['workspace.updated.authorized', createdTopology.workspace.workspaceId],
+      ] as const) {
+        expect(topologyEvents.find((event) => event.action === action && event.targetId === targetId)).toMatchObject({
+          actor: expect.stringMatching(/^hosted:[^:]+:admin$/),
+        })
+      }
+      expect(JSON.stringify(topologyEvents)).not.toContain('browser-spoofed-topology-operator')
+      expect(JSON.stringify(topologyEvents)).not.toContain(topologyRoot)
+      expect(JSON.stringify(topologyEvents)).not.toContain('topology-workspace-v2')
     } finally {
       await server.stop()
       runLog.close()

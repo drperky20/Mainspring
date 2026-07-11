@@ -121,6 +121,8 @@ When a gateway has a RunLog host, cron tick and run-now dispatch create ordinary
 
 `GatewayBudgetControl` owns budget create/update/delete and the budget decision immediately before a run can be queued. Configuration changes write a hash-only `budget.write` decision before mutation. A warning-band run records `budget.warning.acknowledge` as `requires_approval` or `allow`; a hard limit records `budget.run.block` as `hard_block`. The run binding is hashed only, so prompts and secret references never enter the control-plane audit record. Hosted budget routes attach the authenticated principal, not any browser-provided attribution.
 
+`GatewayTopologyControl` owns client, workspace, agent, and linked runtime-session topology. Client/workspace/agent IDs are resolved against host app state, workspace updates must remain attached to the selected client, and client/workspace/agent/session writes persist hash-only `topology.write` authorization before mutation. Workspace roots, agent instructions, and arbitrary metadata are represented by hashes in decision evidence; hosted routes attach the authenticated principal rather than a request-body actor. Deletion remains fail-closed while linked agents, runs, approvals, artifacts, usage, budgets, or runtime sessions exist.
+
 Staged memory/skill provenance reviews are exposed through local gateway routes:
 
 - `GET /provenance-reviews?workspaceId=...`

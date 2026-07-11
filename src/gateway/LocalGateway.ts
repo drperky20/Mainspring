@@ -133,6 +133,7 @@ import {
   type CreateLocalGatewayProviderProfileDraftInput,
   type UpdateLocalGatewayProviderProfileDraftInput,
 } from './GatewayProviderProfileControl.js'
+import { GatewayTopologyControl } from './GatewayTopologyControl.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
@@ -237,6 +238,8 @@ export interface CreateLocalGatewayClientWorkspaceInput {
   contact?: string
   billingLabel?: string
   metadata?: Record<string, unknown>
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface CreateLocalGatewayClientWorkspaceResult {
@@ -249,6 +252,8 @@ export interface CreateLocalGatewayWorkspaceSessionInput {
   clientId: string
   name: string
   workspaceRoot: string
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface CreateLocalGatewayWorkspaceSessionResult {
@@ -277,6 +282,8 @@ export interface UpdateLocalGatewayClientWorkspaceInput {
   workspaceRoot?: string
   workspaceStatus?: LocalGatewayWorkspaceRecord['status']
   metadata?: Record<string, unknown>
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface UpdateLocalGatewayClientWorkspaceResult {
@@ -296,6 +303,8 @@ export interface CreateLocalGatewayAgentDraftInput {
   modelLabel?: string
   skills?: Record<string, boolean>
   metadata?: Record<string, unknown>
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface UpdateLocalGatewayAgentDraftInput {
@@ -310,6 +319,8 @@ export interface UpdateLocalGatewayAgentDraftInput {
   modelLabel?: string
   skills?: Record<string, boolean>
   metadata?: Record<string, unknown>
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface LocalGatewaySessionProjection {
@@ -1117,14 +1128,15 @@ export class LocalMainspringGateway {
       this.createClientWorkspace(input),
     update: (input: UpdateLocalGatewayClientWorkspaceInput): UpdateLocalGatewayClientWorkspaceResult =>
       this.updateClientWorkspace(input),
-    delete: (clientId: string): DeleteLocalGatewayClientResult => this.deleteClient(clientId),
+    delete: (clientId: string, actor?: string): DeleteLocalGatewayClientResult =>
+      this.deleteClient(clientId, actor),
   }
 
   readonly workspaces = {
     create: (input: CreateLocalGatewayWorkspaceSessionInput): CreateLocalGatewayWorkspaceSessionResult =>
       this.createWorkspaceSession(input),
-    delete: (workspaceId: string): DeleteLocalGatewayWorkspaceResult =>
-      this.deleteWorkspace(workspaceId),
+    delete: (workspaceId: string, actor?: string): DeleteLocalGatewayWorkspaceResult =>
+      this.deleteWorkspace(workspaceId, actor),
   }
 
   readonly agents = {
@@ -2586,358 +2598,35 @@ export class LocalMainspringGateway {
   private createClientWorkspace(
     input: CreateLocalGatewayClientWorkspaceInput,
   ): CreateLocalGatewayClientWorkspaceResult {
-    const appState = this.requireAppState()
-    const clientMetadata = {
-      ...(input.contact ? { contact: input.contact } : {}),
-      ...(input.billingLabel ? { billingLabel: input.billingLabel } : {}),
-      ...(input.metadata ?? {}),
-    }
-    const client = appState.clients.create({
-      name: input.name,
-      ...(Object.keys(clientMetadata).length > 0 ? { metadata: clientMetadata } : {}),
-    })
-    const workspaceRoot = textValue(input.workspaceRoot)
-    const resolvedWorkspaceRoot = workspaceRoot
-      ? this.resolveGatewayWorkspaceRoot(workspaceRoot, 'Gateway workspace root')
-      : undefined
-    const workspace = workspaceRoot
-      ? appState.workspaces.create({
-          clientId: client.clientId,
-          name: textValue(input.workspaceName) ?? `${input.name} Workspace`,
-          root: resolvedWorkspaceRoot!,
-        })
-      : undefined
-    const session =
-      workspace
-        ? projectSession(
-            this.runtime.sessions.create({
-              workspace: { root: workspace.root },
-              metadata: {
-                clientId: client.clientId,
-                workspaceId: workspace.workspaceId,
-              },
-            }).record,
-          )
-        : undefined
-
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'client.created',
-      actor: 'local-gateway',
-      targetType: 'client',
-      targetId: client.clientId,
-      ...(workspace ? { metadata: { workspaceId: workspace.workspaceId } } : {}),
-    })
-    if (workspace) {
-      appState.auditEvents.create({
-        category: 'gateway',
-        action: 'workspace.created',
-        actor: 'local-gateway',
-        targetType: 'workspace',
-        targetId: workspace.workspaceId,
-        metadata: { clientId: client.clientId },
-      })
-    }
-    if (session) {
-      appState.auditEvents.create({
-        category: 'gateway',
-        action: 'session.created',
-        actor: 'local-gateway',
-        targetType: 'session',
-        targetId: session.sessionId,
-        sessionId: session.sessionId,
-        metadata: {
-          clientId: client.clientId,
-          ...(workspace ? { workspaceId: workspace.workspaceId } : {}),
-        },
-      })
-    }
-
-    return {
-      client,
-      ...(workspace ? { workspace } : {}),
-      ...(session ? { session } : {}),
-    }
+    return this.topologyControl().createClientWorkspace(input)
   }
 
   private createWorkspaceSession(
     input: CreateLocalGatewayWorkspaceSessionInput,
   ): CreateLocalGatewayWorkspaceSessionResult {
-    const appState = this.requireAppState()
-    const client = appState.clients.get(input.clientId)
-    if (!client) {
-      throw new Error(`Unknown gateway client: ${input.clientId}`)
-    }
-    const workspace = appState.workspaces.create({
-      clientId: client.clientId,
-      name: input.name,
-      root: this.resolveGatewayWorkspaceRoot(input.workspaceRoot, 'Gateway workspace root'),
-    })
-    const session = projectSession(
-      this.runtime.sessions.create({
-        workspace: { root: workspace.root },
-        metadata: {
-          clientId: client.clientId,
-          workspaceId: workspace.workspaceId,
-        },
-      }).record,
-    )
-
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'workspace.created',
-      actor: 'local-gateway',
-      targetType: 'workspace',
-      targetId: workspace.workspaceId,
-      metadata: { clientId: client.clientId },
-    })
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'session.created',
-      actor: 'local-gateway',
-      targetType: 'session',
-      targetId: session.sessionId,
-      sessionId: session.sessionId,
-      metadata: {
-        clientId: client.clientId,
-        workspaceId: workspace.workspaceId,
-      },
-    })
-
-    return { workspace, session }
+    return this.topologyControl().createWorkspaceSession(input)
   }
 
-  private deleteWorkspace(workspaceId: string): DeleteLocalGatewayWorkspaceResult {
-    const appState = this.requireAppState()
-    const workspace = appState.workspaces.get(workspaceId)
-    if (!workspace) {
-      throw new Error(`Unknown gateway workspace: ${workspaceId}`)
-    }
-    if (appState.agents.list({ workspaceId }).length > 0) {
-      throw new Error(`Workspace ${workspaceId} cannot be deleted while agents are attached.`)
-    }
-    if (appState.runs.list().some((run) => run.workspaceId === workspaceId)) {
-      throw new Error(`Workspace ${workspaceId} cannot be deleted while run metadata exists.`)
-    }
-    if (appState.approvals.list().some((approval) => approval.workspaceId === workspaceId)) {
-      throw new Error(`Workspace ${workspaceId} cannot be deleted while approval metadata exists.`)
-    }
-    if (appState.artifacts.list().some((artifact) => artifact.workspaceId === workspaceId)) {
-      throw new Error(`Workspace ${workspaceId} cannot be deleted while artifacts exist.`)
-    }
-    if (appState.usageLedger.list().some((entry) => entry.workspaceId === workspaceId)) {
-      throw new Error(`Workspace ${workspaceId} cannot be deleted while usage entries exist.`)
-    }
-    if (appState.budgets.list({ scopeType: 'workspace', scopeId: workspaceId }).length > 0) {
-      throw new Error(`Workspace ${workspaceId} cannot be deleted while budget records exist.`)
-    }
-    if (
-      this.runtime.storage.stateStore.listSessions().some((session) => {
-        const metadata =
-          session.metadata && typeof session.metadata === 'object'
-            ? (session.metadata as Record<string, unknown>)
-            : undefined
-        return metadata?.workspaceId === workspaceId
-      })
-    ) {
-      throw new Error(`Workspace ${workspaceId} cannot be deleted while runtime sessions are linked.`)
-    }
-
-    appState.workspaces.delete(workspaceId)
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'workspace.deleted',
-      actor: 'local-gateway',
-      targetType: 'workspace',
-      targetId: workspaceId,
-      metadata: {
-        ...(workspace.clientId ? { clientId: workspace.clientId } : {}),
-      },
-    })
-    return { workspaceId, deleted: true }
+  private deleteWorkspace(workspaceId: string, actor?: string): DeleteLocalGatewayWorkspaceResult {
+    return this.topologyControl().deleteWorkspace(workspaceId, actor)
   }
 
-  private deleteClient(clientId: string): DeleteLocalGatewayClientResult {
-    const appState = this.requireAppState()
-    const client = appState.clients.get(clientId)
-    if (!client) {
-      throw new Error(`Unknown gateway client: ${clientId}`)
-    }
-    if (appState.workspaces.list({ clientId }).length > 0) {
-      throw new Error(`Gateway client ${clientId} cannot be deleted while workspaces are attached.`)
-    }
-    if (
-      this.runtime.storage.stateStore.listSessions().some((session) => {
-        const metadata =
-          session.metadata && typeof session.metadata === 'object'
-            ? (session.metadata as Record<string, unknown>)
-            : undefined
-        return metadata?.clientId === clientId
-      })
-    ) {
-      throw new Error(`Gateway client ${clientId} cannot be deleted while runtime sessions are linked.`)
-    }
-    if (appState.budgets.list({ scopeType: 'client', scopeId: clientId }).length > 0) {
-      throw new Error(`Gateway client ${clientId} cannot be deleted while budget records exist.`)
-    }
-
-    appState.clients.delete(clientId)
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'client.deleted',
-      actor: 'local-gateway',
-      targetType: 'client',
-      targetId: clientId,
-    })
-    return { clientId, deleted: true }
+  private deleteClient(clientId: string, actor?: string): DeleteLocalGatewayClientResult {
+    return this.topologyControl().deleteClient(clientId, actor)
   }
 
   private updateClientWorkspace(
     input: UpdateLocalGatewayClientWorkspaceInput,
   ): UpdateLocalGatewayClientWorkspaceResult {
-    const appState = this.requireAppState()
-    const existingClient = appState.clients.get(input.clientId)
-    if (!existingClient) {
-      throw new Error(`Unknown gateway client: ${input.clientId}`)
-    }
-
-    const existingClientMetadata = recordValue(existingClient.metadata) ?? {}
-    const clientMetadata = {
-      ...existingClientMetadata,
-      ...(input.contact !== undefined ? { contact: input.contact } : {}),
-      ...(input.billingLabel !== undefined ? { billingLabel: input.billingLabel } : {}),
-      ...(input.metadata ?? {}),
-    }
-    const client = appState.clients.update({
-      clientId: existingClient.clientId,
-      ...(input.name ? { name: input.name } : {}),
-      ...(input.status ? { status: input.status } : {}),
-      metadata: clientMetadata,
-    })
-
-    const requestedWorkspaceId = textValue(input.workspaceId)
-    const workspaceFieldsRequested =
-      input.workspaceName !== undefined || input.workspaceRoot !== undefined
-    const resolvedWorkspaceId =
-      requestedWorkspaceId
-      ?? appState.workspaces.list({ clientId: existingClient.clientId })[0]?.workspaceId
-    const existingWorkspace = resolvedWorkspaceId
-      ? appState.workspaces.get(resolvedWorkspaceId)
-      : null
-
-    if (workspaceFieldsRequested && resolvedWorkspaceId && !existingWorkspace) {
-      throw new Error(`Unknown gateway workspace: ${resolvedWorkspaceId}`)
-    }
-
-    const workspace =
-      existingWorkspace && workspaceFieldsRequested
-        ? appState.workspaces.update({
-            workspaceId: existingWorkspace.workspaceId,
-            ...(input.workspaceName ? { name: input.workspaceName } : {}),
-            ...(input.workspaceRoot
-              ? { root: this.resolveGatewayWorkspaceRoot(input.workspaceRoot, 'Gateway workspace root') }
-              : {}),
-            ...(input.workspaceStatus || input.status
-              ? { status: input.workspaceStatus ?? input.status }
-              : {}),
-          })
-        : existingWorkspace ?? undefined
-
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'client.updated',
-      actor: 'local-gateway',
-      targetType: 'client',
-      targetId: client.clientId,
-      metadata: {
-        ...(workspace ? { workspaceId: workspace.workspaceId } : {}),
-      },
-    })
-    if (existingWorkspace && workspaceFieldsRequested) {
-      appState.auditEvents.create({
-        category: 'gateway',
-        action: 'workspace.updated',
-        actor: 'local-gateway',
-        targetType: 'workspace',
-        targetId: existingWorkspace.workspaceId,
-        metadata: { clientId: client.clientId },
-      })
-    }
-
-    return {
-      client,
-      ...(workspace ? { workspace } : {}),
-    }
+    return this.topologyControl().updateClientWorkspace(input)
   }
 
   private createAgentDraft(input: CreateLocalGatewayAgentDraftInput): LocalGatewayAgentRecord {
-    const appState = this.requireAppState()
-    const workspace = appState.workspaces.get(input.workspaceId)
-    if (!workspace) {
-      throw new Error(`Unknown gateway workspace: ${input.workspaceId}`)
-    }
-    const metadata = {
-      ...(input.instructions ? { instructions: input.instructions } : {}),
-      ...(input.outcome ? { outcome: input.outcome } : {}),
-      ...(input.voice ? { voice: input.voice } : {}),
-      ...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
-      ...(input.modelLabel ? { modelLabel: input.modelLabel } : {}),
-      ...(input.skills ? { skills: input.skills } : {}),
-      ...(input.metadata ?? {}),
-    }
-    const agent = appState.agents.create({
-      workspaceId: workspace.workspaceId,
-      name: input.name,
-      ...(input.version ? { version: input.version } : {}),
-      ...(input.defaultModelId ? { defaultModelId: input.defaultModelId } : {}),
-      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
-    })
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'agent.created',
-      actor: 'local-gateway',
-      targetType: 'agent',
-      targetId: agent.agentId,
-      metadata: { workspaceId: workspace.workspaceId },
-    })
-    return agent
+    return this.topologyControl().createAgentDraft(input)
   }
 
   private updateAgentDraft(input: UpdateLocalGatewayAgentDraftInput): LocalGatewayAgentRecord {
-    const appState = this.requireAppState()
-    const agent = appState.agents.get(input.agentId)
-    if (!agent) {
-      throw new Error(`Unknown gateway agent: ${input.agentId}`)
-    }
-    const existingMetadata = recordValue(agent.metadata) ?? {}
-    const metadata = {
-      ...existingMetadata,
-      ...(input.instructions ? { instructions: input.instructions } : {}),
-      ...(input.outcome ? { outcome: input.outcome } : {}),
-      ...(input.voice ? { voice: input.voice } : {}),
-      ...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
-      ...(input.modelLabel ? { modelLabel: input.modelLabel } : {}),
-      ...(input.skills ? { skills: input.skills } : {}),
-      ...(input.metadata ?? {}),
-    }
-    const updated = appState.agents.update({
-      agentId: agent.agentId,
-      ...(input.name ? { name: input.name } : {}),
-      ...(input.version ? { version: input.version } : {}),
-      ...(input.defaultModelId ? { defaultModelId: input.defaultModelId } : {}),
-      metadata,
-    })
-    appState.auditEvents.create({
-      category: 'gateway',
-      action: 'agent.updated',
-      actor: 'local-gateway',
-      targetType: 'agent',
-      targetId: updated.agentId,
-      metadata: {
-        ...(updated.workspaceId ? { workspaceId: updated.workspaceId } : {}),
-      },
-    })
-    return updated
+    return this.topologyControl().updateAgentDraft(input)
   }
 
   private resolveAppStateRunInput(input: LocalGatewayAppStateRunInput): LocalGatewayStartRunInput {
@@ -3069,6 +2758,22 @@ export class LocalMainspringGateway {
     if (scopeType === 'agent' && !appState.agents.get(scopeId)) {
       throw new Error(`Unknown gateway agent: ${scopeId}`)
     }
+  }
+
+  private topologyControl(): GatewayTopologyControl {
+    return new GatewayTopologyControl({
+      appState: this.requireAppState(),
+      resolveWorkspaceRoot: (value, label) => this.resolveGatewayWorkspaceRoot(value, label),
+      createSession: ({ sessionId, workspaceRoot, metadata }) =>
+        projectSession(
+          this.runtime.sessions.create({
+            sessionId,
+            workspace: { root: workspaceRoot },
+            metadata,
+          }).record,
+        ),
+      listRuntimeSessions: () => this.runtime.storage.stateStore.listSessions(),
+    })
   }
 
   private deploymentControl(): GatewayDeploymentControl {

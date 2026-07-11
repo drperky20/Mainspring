@@ -26,6 +26,7 @@ export type PolicyOperation =
   | 'budget.run.block'
   | 'deployment.target.write'
   | 'deployment.execute'
+  | 'topology.write'
 
 export interface RuntimePolicyDefaults {
   approvalPolicy?: RuntimePolicy['approvalPolicy']

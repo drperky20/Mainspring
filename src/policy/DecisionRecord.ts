@@ -26,6 +26,7 @@ export type DecisionRecordSurface =
   | 'artifact'
   | 'provider_config'
   | 'deployment'
+  | 'topology'
   | 'channel'
   | 'mcp'
   | 'unknown'
@@ -46,6 +47,7 @@ type HostDecisionSurfaceOperation =
   | { surface: 'budget'; operation: 'budget.run.block' }
   | { surface: 'deployment'; operation: 'deployment.target.write' }
   | { surface: 'deployment'; operation: 'deployment.execute' }
+  | { surface: 'topology'; operation: 'topology.write' }
 
 export interface DecisionRecord {
   decisionId: string
