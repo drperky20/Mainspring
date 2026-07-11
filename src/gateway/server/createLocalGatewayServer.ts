@@ -742,7 +742,7 @@ export class LocalGatewayHttpServer {
         )
         const body = await this.readJson(request)
         const parsed = ProvenanceReviewDecisionRequestSchema.parse(body)
-        const item = this.decideProvenanceReview(reviewId, parsed)
+        const item = this.decideProvenanceReview(reviewId, parsed, principal?.actor)
         this.writeJson(
           response,
           200,
@@ -762,7 +762,7 @@ export class LocalGatewayHttpServer {
         )
         const body = await this.readJson(request)
         const parsed = ApplyProvenanceReviewRequestSchema.parse(body)
-        const applied = this.applyProvenanceReview(reviewId, parsed)
+        const applied = this.applyProvenanceReview(reviewId, parsed, principal?.actor)
         this.writeJson(
           response,
           200,
@@ -1346,21 +1346,31 @@ export class LocalGatewayHttpServer {
     return this.options.gateway.workspaces.delete(workspaceId)
   }
 
-  private decideProvenanceReview(reviewId: string, input: ProvenanceReviewDecisionRequest) {
+  private decideProvenanceReview(
+    reviewId: string,
+    input: ProvenanceReviewDecisionRequest,
+    actor?: string,
+  ) {
     return this.options.gateway.provenanceReviews.decide({
       reviewId,
       workspaceId: input.workspaceId,
       decision: input.decision,
       reviewer: input.reviewer,
       reason: input.reason,
+      actor,
     })
   }
 
-  private applyProvenanceReview(reviewId: string, input: ApplyProvenanceReviewRequest) {
+  private applyProvenanceReview(
+    reviewId: string,
+    input: ApplyProvenanceReviewRequest,
+    actor?: string,
+  ) {
     return this.options.gateway.provenanceReviews.apply({
       reviewId,
       workspaceId: input.workspaceId,
       reviewer: input.reviewer,
+      actor,
     })
   }
 

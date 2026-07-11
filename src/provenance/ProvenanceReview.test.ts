@@ -6,12 +6,14 @@ import {
   applyApprovedMemoryReview,
   applyApprovedSkillReview,
   createProvenanceReviewQueue,
+  deriveProvenanceTrustMetadata,
   scanMemoryMutation,
   scanSkillManifest,
   scanTemplateCatalogEntry,
   stageProvenanceReview,
 } from './ProvenanceReview.js'
 import { listStoredMemoryEntries } from '../memory/MemoryStore.js'
+import { MemoryProvider } from '../memory/MemoryProvider.js'
 import type { SkillManifest } from '#protocol'
 
 const tempRoots: string[] = []
@@ -144,6 +146,81 @@ describe('provenance review', () => {
       },
     ])
     expect(createProvenanceReviewQueue(root).get(staged.reviewId)?.status).toBe('applied')
+    expect(applyApprovedMemoryReview({
+      workspaceRoot: root,
+      reviewId: staged.reviewId,
+      reviewer: 'operator',
+    })).toEqual(applied)
+    expect(listStoredMemoryEntries(root)).toHaveLength(1)
+  })
+
+  it('recovers a durable memory write when the process stops before the review journal update', () => {
+    const root = tempRoot()
+    const text = 'Recover this operator-approved memory exactly once.'
+    const scan = scanMemoryMutation({ text, scope: 'workspace', tags: ['recovery'] })
+    const staged = stageProvenanceReview({
+      workspaceRoot: root,
+      mutation: {
+        kind: 'memory',
+        text,
+        scope: 'workspace',
+        tags: ['recovery'],
+      },
+      scan,
+    })
+    createProvenanceReviewQueue(root).decide({
+      reviewId: staged.reviewId,
+      decision: 'approved',
+      reviewer: 'operator',
+    })
+    const durableEntry = new MemoryProvider({ workspaceRoot: root }).write({
+      text,
+      scope: 'workspace',
+      tags: ['recovery'],
+      metadata: {
+        provenance: deriveProvenanceTrustMetadata({
+          source: staged.source,
+          scan,
+          reviewed: true,
+          reviewId: staged.reviewId,
+          mutationKind: 'memory',
+        }),
+      },
+    })
+
+    const recovered = applyApprovedMemoryReview({
+      workspaceRoot: root,
+      reviewId: staged.reviewId,
+      reviewer: 'operator',
+    })
+    expect(recovered).toEqual({ reviewId: staged.reviewId, memoryId: durableEntry.entryId, applied: true })
+    expect(listStoredMemoryEntries(root)).toHaveLength(1)
+    expect(createProvenanceReviewQueue(root).get(staged.reviewId)?.status).toBe('applied')
+  })
+
+  it('fails closed when an applied memory review has no durable memory evidence', () => {
+    const root = tempRoot()
+    const text = 'Do not recreate memory from a stale applied journal marker.'
+    const staged = stageProvenanceReview({
+      workspaceRoot: root,
+      mutation: {
+        kind: 'memory',
+        text,
+        scope: 'workspace',
+        tags: ['fail-closed'],
+      },
+      scan: scanMemoryMutation({ text, scope: 'workspace', tags: ['fail-closed'] }),
+    })
+    const queue = createProvenanceReviewQueue(root)
+    queue.decide({ reviewId: staged.reviewId, decision: 'approved', reviewer: 'operator' })
+    queue.decide({ reviewId: staged.reviewId, decision: 'applied', reviewer: 'operator' })
+
+    expect(() => applyApprovedMemoryReview({
+      workspaceRoot: root,
+      reviewId: staged.reviewId,
+      reviewer: 'operator',
+    })).toThrow('has no matching durable memory record')
+    expect(listStoredMemoryEntries(root)).toEqual([])
   })
 
   it('rejected staged memory has no side effect', () => {
@@ -235,6 +312,62 @@ describe('provenance review', () => {
       applyApprovedSkillReview({ workspaceRoot: root, reviewId: rejected.reviewId }),
     ).toThrow('must be approved')
     expect(fs.existsSync(path.join(root, '.mainspring/skills/danger.skill/manifest.json'))).toBe(false)
+    expect(applyApprovedSkillReview({
+      workspaceRoot: root,
+      reviewId: staged.reviewId,
+      reviewer: 'operator',
+    })).toEqual(applied)
+  })
+
+  it('recovers a durable skill manifest when the process stops before the review journal update', () => {
+    const root = tempRoot()
+    const manifest = skill({ source: 'uploaded', version: '3.0.0' })
+    const scan = scanSkillManifest(manifest)
+    const staged = stageProvenanceReview({
+      workspaceRoot: root,
+      mutation: { kind: 'skill', action: 'updated', manifest },
+      scan,
+    })
+    createProvenanceReviewQueue(root).decide({
+      reviewId: staged.reviewId,
+      decision: 'approved',
+      reviewer: 'operator',
+    })
+    const manifestPath = path.join(root, '.mainspring', 'skills', manifest.key, 'manifest.json')
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true })
+    fs.writeFileSync(
+      manifestPath,
+      `${JSON.stringify({
+        ...manifest,
+        provenance: deriveProvenanceTrustMetadata({
+          source: staged.source,
+          scan,
+          reviewed: true,
+          reviewId: staged.reviewId,
+          mutationKind: 'skill',
+          manifest,
+        }),
+      }, null, 2)}\n`,
+      'utf8',
+    )
+
+    const recovered = applyApprovedSkillReview({
+      workspaceRoot: root,
+      reviewId: staged.reviewId,
+      reviewer: 'operator',
+    })
+    expect(recovered).toEqual({
+      reviewId: staged.reviewId,
+      skillKey: manifest.key,
+      action: 'updated',
+      applied: true,
+    })
+    expect(createProvenanceReviewQueue(root).get(staged.reviewId)?.status).toBe('applied')
+    expect(applyApprovedSkillReview({
+      workspaceRoot: root,
+      reviewId: staged.reviewId,
+      reviewer: 'operator',
+    })).toEqual(recovered)
   })
 
   it('scans local template catalog entries without blocking approval-gated tools', () => {

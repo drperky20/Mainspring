@@ -11,7 +11,11 @@ import {
 } from '#protocol'
 import { assertPathContained } from '#protocol/node'
 import { MemoryProvider } from '../memory/MemoryProvider.js'
-import type { MemoryScope } from '../memory/MemoryStore.js'
+import {
+  listStoredMemoryEntries,
+  type MemoryRecord,
+  type MemoryScope,
+} from '../memory/MemoryStore.js'
 
 export type ProvenanceMutationKind = 'memory' | 'skill' | 'template'
 export type ProvenanceFindingSeverity = 'info' | 'warning' | 'block'
@@ -505,6 +509,59 @@ function skillManifestPath(workspaceRoot: string, skillKey: string): string {
   )
 }
 
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function matchingAppliedMemoryEntry(
+  workspaceRoot: string,
+  item: ProvenanceReviewItem,
+): MemoryRecord | undefined {
+  if (item.mutation.kind !== 'memory') return undefined
+  return listStoredMemoryEntries(workspaceRoot).find((entry) => {
+    const provenance = recordValue(recordValue(entry.metadata)?.provenance)
+    return provenance?.reviewId === item.reviewId
+      && provenance.contentHash === item.scan.contentHash
+  })
+}
+
+function matchingAppliedSkillManifest(filePath: string, item: ProvenanceReviewItem): boolean {
+  if (item.mutation.kind !== 'skill' || !fs.existsSync(filePath)) return false
+  try {
+    const manifest = recordValue(JSON.parse(fs.readFileSync(filePath, 'utf8')))
+    const provenance = recordValue(manifest?.provenance)
+    return manifest?.key === item.mutation.manifest.key
+      && provenance?.reviewId === item.reviewId
+      && provenance.contentHash === item.scan.contentHash
+  } catch {
+    return false
+  }
+}
+
+function assertReviewCanApply(item: ProvenanceReviewItem): void {
+  if (item.status !== 'approved' && item.status !== 'applied') {
+    throw new Error('Provenance review item must be approved before apply.')
+  }
+  assertScanCanProceed(item.scan)
+}
+
+function markReviewApplied(input: {
+  queue: JsonlProvenanceReviewQueue
+  item: ProvenanceReviewItem
+  reviewer?: string
+  reason: string
+}): void {
+  if (input.item.status === 'applied') return
+  input.queue.decide({
+    reviewId: input.item.reviewId,
+    decision: 'applied',
+    reviewer: input.reviewer ?? 'operator',
+    reason: input.reason,
+  })
+}
+
 export function applyApprovedMemoryReview(input: {
   workspaceRoot: string
   reviewId: string
@@ -513,9 +570,21 @@ export function applyApprovedMemoryReview(input: {
   const queue = createProvenanceReviewQueue(input.workspaceRoot)
   const item = queue.get(input.reviewId)
   if (!item) throw new Error(`Unknown provenance review item: ${input.reviewId}`)
-  if (item.status !== 'approved') throw new Error('Provenance review item must be approved before apply.')
   if (item.mutation.kind !== 'memory') throw new Error('Provenance review item is not a memory mutation.')
-  assertScanCanProceed(item.scan)
+  assertReviewCanApply(item)
+  const recovered = matchingAppliedMemoryEntry(input.workspaceRoot, item)
+  if (recovered) {
+    markReviewApplied({
+      queue,
+      item,
+      reviewer: input.reviewer,
+      reason: 'Recovered applied memory review from durable memory journal.',
+    })
+    return { reviewId: input.reviewId, memoryId: recovered.entryId, applied: true }
+  }
+  if (item.status === 'applied') {
+    throw new Error('Applied provenance memory review has no matching durable memory record.')
+  }
   const provider = new MemoryProvider({
     workspaceRoot: input.workspaceRoot,
     ...(item.mutation.sessionId ? { sessionId: item.mutation.sessionId } : {}),
@@ -535,10 +604,10 @@ export function applyApprovedMemoryReview(input: {
       }),
     },
   })
-  queue.decide({
-    reviewId: input.reviewId,
-    decision: 'applied',
-    reviewer: input.reviewer ?? 'operator',
+  markReviewApplied({
+    queue,
+    item,
+    reviewer: input.reviewer,
     reason: 'Applied approved memory review.',
   })
   return { reviewId: input.reviewId, memoryId: entry.entryId, applied: true }
@@ -552,9 +621,8 @@ export function applyApprovedSkillReview(input: {
   const queue = createProvenanceReviewQueue(input.workspaceRoot)
   const item = queue.get(input.reviewId)
   if (!item) throw new Error(`Unknown provenance review item: ${input.reviewId}`)
-  if (item.status !== 'approved') throw new Error('Provenance review item must be approved before apply.')
   if (item.mutation.kind !== 'skill') throw new Error('Provenance review item is not a skill mutation.')
-  assertScanCanProceed(item.scan)
+  assertReviewCanApply(item)
   const filePath = skillManifestPath(input.workspaceRoot, item.mutation.manifest.key)
   const manifest: SkillManifest = {
     ...item.mutation.manifest,
@@ -567,12 +635,29 @@ export function applyApprovedSkillReview(input: {
       manifest: item.mutation.manifest,
     }),
   }
+  if (matchingAppliedSkillManifest(filePath, item)) {
+    markReviewApplied({
+      queue,
+      item,
+      reviewer: input.reviewer,
+      reason: 'Recovered applied skill review from durable skill manifest.',
+    })
+    return {
+      reviewId: input.reviewId,
+      skillKey: item.mutation.manifest.key,
+      action: item.mutation.action,
+      applied: true,
+    }
+  }
+  if (item.status === 'applied') {
+    throw new Error('Applied provenance skill review has no matching durable skill manifest.')
+  }
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
-  queue.decide({
-    reviewId: input.reviewId,
-    decision: 'applied',
-    reviewer: input.reviewer ?? 'operator',
+  markReviewApplied({
+    queue,
+    item,
+    reviewer: input.reviewer,
     reason: `Applied approved skill ${item.mutation.action}.`,
   })
   return {

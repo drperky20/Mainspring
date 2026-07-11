@@ -121,8 +121,8 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - staged review records persist in `.mainspring/provenance-review.jsonl`.
   - `memory.write` and `skills.install` / `skills.update` scan before persistence, block high-risk findings, and stage review findings.
   - JSONL memory correction/deletion now appends `memory.replaced` or `memory.deleted` journal rows rather than rewriting source rows. Replay ignores incomplete trailing rows, normalizes legacy no-ID rows to stable host-only identities, and only applies an unambiguous active target. Gateway corrections rescan the replacement, preserve a fresh operator-reviewed provenance record, and persist hash-only host-decision evidence in both the memory journal and gateway audit store.
-  - approved staged memory and skill writes can be applied through exported review helpers.
-  - the local gateway and React console can list, approve, reject, and apply staged memory/skill review records through sanitized browser DTOs.
+  - approved staged memory and skill writes use replay-safe exported review helpers: if a process stops after the durable memory/skill write but before the review journal update, the next apply finds the matching review ID/content hash, marks the review applied, and does not write a duplicate; already-applied matching records also replay without a second write.
+  - `GatewayProvenanceReviewControl` owns local gateway review decisions and applies. It records hash-only `provenance.review.decide` or `provenance.review.apply` host decisions in app-state audit before mutating the review queue or reaching a memory/skill writer; hosted requests use the authenticated session actor rather than a caller-provided reviewer. The React console can list, approve, reject, and apply staged memory/skill review records through sanitized browser DTOs that omit decision metadata.
   - persisted memory records and skill manifests carry advisory provenance/taint metadata for future policy and context assembly.
   - `pnpm skills:check` scans local example templates and runs inside `pnpm verify` and `pnpm release:check`.
 
@@ -132,7 +132,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - The compatibility runner resolves each mailbox session to its persisted SDK workspace record. Metadata-free legacy/channel sessions receive separate per-session workspace directories beneath `MAINSPRING_WORKSPACE_ROOT`; this path separation is not a sandbox, and the runner no longer shares one workspace root across all sessions.
 - All runnable examples now exercise the RunLog SDK host; the old mailbox/runtime path remains for legacy `createMainspring` SDK/gateway compatibility and tests.
 - The default gateway `/runs/start` route is RunLog-backed in the local dev server and in gateways configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways constructed without a RunLog host remain mailbox-compatible for migration tests and older embedders.
-- New non-tool mutation surfaces must use `createHostDecisionRecord`; provider-profile and operator memory corrections/deletions persist this decision shape with hash-only mutation evidence. The existing channel bridge remains compatibility-only until it gains a RunLog-native identity model.
+- New non-tool mutation surfaces must use `createHostDecisionRecord`; provider-profile, provenance-review, deployment, and operator-memory controls persist this decision shape with hash-only mutation evidence. The existing channel bridge remains compatibility-only until it gains a RunLog-native identity model.
 - Desktop packaging is experimental and Windows-focused.
 - Provider auth and renderer storage must continue moving toward env/local-secret/external-secret adapters.
 - Contributor, governance, operations, and security guidance now describe RunLog Fabric as canonical while keeping the mailbox/`RuntimeKernel` path compatibility-only.

@@ -18,6 +18,7 @@ export type DecisionRecordSurface =
   | 'browser'
   | 'network'
   | 'memory'
+  | 'provenance'
   | 'skill'
   | 'cron'
   | 'subagent'
@@ -35,6 +36,8 @@ type HostDecisionSurfaceOperation =
   | { surface: 'channel'; operation: 'channel.send' }
   | { surface: 'memory'; operation: 'memory.replace' }
   | { surface: 'memory'; operation: 'memory.delete' }
+  | { surface: 'provenance'; operation: 'provenance.review.decide' }
+  | { surface: 'provenance'; operation: 'provenance.review.apply' }
   | { surface: 'deployment'; operation: 'deployment.target.write' }
   | { surface: 'deployment'; operation: 'deployment.execute' }
 

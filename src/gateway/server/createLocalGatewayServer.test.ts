@@ -4851,4 +4851,115 @@ describe('LocalGatewayHttpServer', () => {
       await mainspring.stop()
     }
   })
+
+  it('uses hosted session identity instead of a browser-supplied provenance reviewer', async () => {
+    const root = makeTempRoot('mainspring-gateway-hosted-provenance-identity-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    fs.mkdirSync(workspaceRoot, { recursive: true })
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider([]),
+      pollIntervalMs: 10,
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })
+    const server = createLocalGatewayServer({
+      gateway,
+      host: '127.0.0.1',
+      port: 0,
+      auth: { mode: 'hosted', trustedOrigins: ['http://127.0.0.1:5173'] },
+    })
+
+    try {
+      const workspace = appState.workspaces.create({
+        workspaceId: 'workspace_hosted_provenance',
+        name: 'Hosted Provenance Workspace',
+        root: workspaceRoot,
+      })
+      const text = 'Persist this only after the hosted operator reviews it.'
+      const staged = stageProvenanceReview({
+        workspaceRoot,
+        mutation: {
+          kind: 'memory',
+          text,
+          scope: 'workspace',
+          tags: ['hosted-review'],
+        },
+        scan: scanMemoryMutation({ text, scope: 'workspace', tags: ['hosted-review'] }),
+      })
+      const started = await server.start()
+      const bootstrap = await fetch(`${started.url}/auth/bootstrap`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Admin', password: 'HostedReviewPass123' }),
+      })
+      expect(bootstrap.status).toBe(201)
+      const login = await fetch(`${started.url}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Admin', password: 'HostedReviewPass123' }),
+      })
+      const token = login.headers.get('x-mainspring-auth-token')
+      expect(login.status).toBe(200)
+      expect(token).toMatch(/^[a-f0-9]{64}$/)
+      const headers = {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      }
+
+      const approvedResponse = await fetch(
+        `${started.url}/provenance-reviews/${encodeURIComponent(staged.reviewId)}/decision`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            workspaceId: workspace.workspaceId,
+            decision: 'approved',
+            reviewer: 'browser-spoofed-reviewer',
+          }),
+        },
+      )
+      const approved = await approvedResponse.json() as {
+        provenanceReview: { decision?: { reviewer?: string } }
+      }
+      expect(approvedResponse.status).toBe(200)
+      expect(approved.provenanceReview.decision?.reviewer).toMatch(/^hosted:[^:]+:admin$/)
+      expect(approved.provenanceReview.decision?.reviewer).not.toBe('browser-spoofed-reviewer')
+
+      const appliedResponse = await fetch(
+        `${started.url}/provenance-reviews/${encodeURIComponent(staged.reviewId)}/apply`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            workspaceId: workspace.workspaceId,
+            reviewer: 'browser-spoofed-reviewer',
+          }),
+        },
+      )
+      expect(appliedResponse.status).toBe(200)
+      const provenanceEvents = appState.auditEvents.list({ category: 'provenance' })
+      expect(provenanceEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          action: 'review.approved.authorized',
+          actor: expect.stringMatching(/^hosted:[^:]+:admin$/),
+          targetId: staged.reviewId,
+        }),
+        expect.objectContaining({
+          action: 'review.apply.authorized',
+          actor: expect.stringMatching(/^hosted:[^:]+:admin$/),
+          targetId: staged.reviewId,
+        }),
+      ]))
+      expect(JSON.stringify(provenanceEvents)).not.toContain('browser-spoofed-reviewer')
+    } finally {
+      await server.stop()
+      appState.close()
+      await mainspring.stop()
+    }
+  })
 })

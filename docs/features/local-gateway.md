@@ -123,7 +123,7 @@ Staged memory/skill provenance reviews are exposed through local gateway routes:
 - `POST /provenance-reviews/:reviewId/decision`
 - `POST /provenance-reviews/:reviewId/apply`
 
-These routes read the workspace-local `.mainspring/provenance-review.jsonl` queue, return sanitized browser DTOs, and apply only previously approved staged memory/skill mutations. The React console has matching controls to load the queue, approve/reject a pending item, and apply an approved item. This is local operator review, not a remote skill reputation service.
+These routes read the workspace-local `.mainspring/provenance-review.jsonl` queue, return sanitized browser DTOs, and apply only previously approved staged memory/skill mutations. `GatewayProvenanceReviewControl` records a hash-only `provenance.review.decide` decision before changing the queue and a `provenance.review.apply` decision before reaching the memory or skill writer. Its audit evidence binds the selected workspace and a review-content hash; browser DTOs omit that decision metadata. If a process stops after a durable memory/skill write but before the review journal becomes `applied`, a later apply detects the matching review ID/content hash and completes the journal without a duplicate write. Replaying an already-applied matching review is also side-effect free. The React console has matching controls to load the queue, approve/reject a pending item, and apply an approved item. This is local operator review, not a remote skill reputation service.
 
 Deployment target configuration and driver execution are owned by
 `GatewayDeploymentControl`. Target create/update writes persist a
@@ -148,7 +148,7 @@ Hosted browser-access URLs are short-lived local bearer URLs for artifact previe
 
 Hosted-auth bootstrap and login are still local operator flows, but browser-origin requests now use an explicit localhost/loopback allowlist instead of wildcard CORS. Requests without an `Origin` header remain available for CLI and server-side local tooling; browser requests from non-local origins are rejected before route handling.
 
-Hosted login failures are rate-limited in the running gateway process, and approval decisions record the authenticated hosted-session identity instead of caller-provided approval text. Hosted sessions carry one of three persisted roles: viewers can read gateway state, operators can also start/cancel runs and perform approval, cron-grant, and provenance-review operations, and admins can use every route. Unclassified mutations fail closed to admin.
+Hosted login failures are rate-limited in the running gateway process, and approval plus provenance-review decisions record the authenticated hosted-session identity instead of caller-provided approval/reviewer text. Hosted sessions carry one of three persisted roles: viewers can read gateway state, operators can also start/cancel runs and perform approval, cron-grant, and provenance-review operations, and admins can use every route. Unclassified mutations fail closed to admin.
 
 Admins can manage hosted users through `GET /auth/users`, `POST /auth/users`, and `PATCH /auth/users/:userId`. Responses omit password verifier material. The final active admin cannot be disabled or demoted, and password changes or account disabling revoke that user's active sessions. This is local gateway authorization, not tenant isolation, enterprise SSO, or a cloud identity control plane.
 

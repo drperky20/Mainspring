@@ -17,6 +17,8 @@ export type PolicyOperation =
   | 'channel.send'
   | 'memory.replace'
   | 'memory.delete'
+  | 'provenance.review.decide'
+  | 'provenance.review.apply'
   | 'deployment.target.write'
   | 'deployment.execute'
 
