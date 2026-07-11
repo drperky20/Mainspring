@@ -15,6 +15,8 @@ export type PolicyOperation =
   | 'provider_config.write'
   | 'artifact.publish'
   | 'channel.send'
+  | 'memory.replace'
+  | 'memory.delete'
 
 export interface RuntimePolicyDefaults {
   approvalPolicy?: RuntimePolicy['approvalPolicy']

@@ -14,6 +14,7 @@ import type {
   OperatorUsageRow,
 } from './operatorConsoleViewModel'
 import { humanizeStatus } from './operatorConsoleViewModel'
+import { Dialog } from './ConsoleWorkflowPrimitives'
 
 export type ConsoleConnectionState =
   | 'loading'
@@ -869,23 +870,57 @@ export function AuditScreen({
 }
 
 export function MemoryScreen({
+  actionBusy = false,
   entries = [],
   error,
   hasMore = false,
   loading = false,
+  onCorrect,
+  onDelete,
   onLoadMore,
   workspaceId,
   workspaceName,
 }: {
+  actionBusy?: boolean
   entries?: ConsoleGatewayMemoryEntry[]
   error?: string
   hasMore?: boolean
   loading?: boolean
+  onCorrect?: (entry: ConsoleGatewayMemoryEntry, text: string, reason?: string) => void | Promise<void>
+  onDelete?: (entry: ConsoleGatewayMemoryEntry, reason?: string) => void | Promise<void>
   onLoadMore?: () => void
   workspaceId?: string
   workspaceName?: string
 }) {
+  const [mutation, setMutation] = useState<{
+    kind: 'correct' | 'delete'
+    entry: ConsoleGatewayMemoryEntry
+  }>()
+  const [replacementText, setReplacementText] = useState('')
+  const [reason, setReason] = useState('')
   const selectedWorkspaceLabel = workspaceName ? ` for ${workspaceName}` : ''
+  const canMutate = Boolean(workspaceId && onCorrect && onDelete)
+
+  function openMutation(kind: 'correct' | 'delete', entry: ConsoleGatewayMemoryEntry) {
+    setMutation({ kind, entry })
+    setReplacementText('')
+    setReason('')
+  }
+
+  async function submitMutation(): Promise<void> {
+    if (!mutation) return
+    const normalizedReason = reason.trim() || undefined
+    if (mutation.kind === 'correct') {
+      const text = replacementText.trim()
+      if (!text || !onCorrect) return
+      await onCorrect(mutation.entry, text, normalizedReason)
+    } else {
+      if (!onDelete) return
+      await onDelete(mutation.entry, normalizedReason)
+    }
+    setMutation(undefined)
+  }
+
   return (
     <section className="control-screen memory-screen" aria-labelledby="memory-title">
       <header className="control-screen-header">
@@ -918,7 +953,7 @@ export function MemoryScreen({
         ) : (
           <div className="control-row-list">
             {entries.map((entry) => (
-              <div className="control-data-row static" key={entry.entryId}>
+              <div className="control-data-row static control-memory-row" key={entry.entryId}>
                 <StatusDot status="neutral" />
                 <span>
                   <strong>{entry.textPreview}</strong>
@@ -931,6 +966,26 @@ export function MemoryScreen({
                   <strong>{entry.scope === 'session' ? 'Session' : 'Workspace'}</strong>
                   <small>{formatDateTime(entry.createdAt)}</small>
                 </span>
+                {canMutate ? (
+                  <span className="control-memory-actions">
+                    <button
+                      className="simple-secondary"
+                      disabled={actionBusy}
+                      type="button"
+                      onClick={() => openMutation('correct', entry)}
+                    >
+                      Correct
+                    </button>
+                    <button
+                      className="control-danger-button"
+                      disabled={actionBusy}
+                      type="button"
+                      onClick={() => openMutation('delete', entry)}
+                    >
+                      Delete
+                    </button>
+                  </span>
+                ) : null}
               </div>
             ))}
           </div>
@@ -946,6 +1001,69 @@ export function MemoryScreen({
           </button>
         ) : null}
       </section>
+      {mutation ? (
+        <Dialog
+          title={mutation.kind === 'correct' ? 'Correct memory' : 'Delete memory'}
+          onClose={() => setMutation(undefined)}
+        >
+          <form
+            className="control-memory-dialog"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void submitMutation()
+            }}
+          >
+            <p className="control-memory-dialog-preview">
+              Current browser-safe preview: <strong>{mutation.entry.textPreview}</strong>
+            </p>
+            {mutation.kind === 'correct' ? (
+              <label>
+                Replacement memory
+                <textarea
+                  disabled={actionBusy}
+                  maxLength={8_000}
+                  placeholder="Enter the corrected memory. The existing value is not sent back to the browser."
+                  required
+                  value={replacementText}
+                  onChange={(event) => setReplacementText(event.target.value)}
+                />
+              </label>
+            ) : (
+              <p>
+                This appends a durable deletion record. It removes the entry from future memory reads without
+                exposing its source metadata or workspace path here.
+              </p>
+            )}
+            <label>
+              Decision note <span>optional</span>
+              <textarea
+                disabled={actionBusy}
+                maxLength={500}
+                placeholder="Why this correction or deletion is appropriate."
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+              />
+            </label>
+            <div className="control-memory-dialog-actions">
+              <button
+                className="simple-secondary"
+                disabled={actionBusy}
+                type="button"
+                onClick={() => setMutation(undefined)}
+              >
+                Keep memory
+              </button>
+              <button
+                className={mutation.kind === 'delete' ? 'control-danger-button' : 'control-primary-button'}
+                disabled={actionBusy || (mutation.kind === 'correct' && !replacementText.trim())}
+                type="submit"
+              >
+                {mutation.kind === 'delete' ? 'Delete memory' : 'Save correction'}
+              </button>
+            </div>
+          </form>
+        </Dialog>
+      ) : null}
     </section>
   )
 }

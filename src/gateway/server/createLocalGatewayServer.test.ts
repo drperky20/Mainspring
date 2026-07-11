@@ -1233,6 +1233,40 @@ describe('LocalGatewayHttpServer', () => {
       expect(JSON.stringify(firstBody)).not.toContain('workspaceRoot')
       expect(snapshotCalls).toBe(0)
 
+      const targetEntryId = firstBody.entries[0]!.entryId
+      const correctedText = `Corrected workspace memory ${'x'.repeat(180)}`
+      const invalidMutation = await fetch(`${started.url}/memory-history/${encodeURIComponent(targetEntryId)}/correct`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: 'workspace_memory_history',
+          text: 'This body must reject browser-supplied metadata.',
+          metadata: { ignored: false },
+        }),
+      })
+      expect(invalidMutation.status).toBe(400)
+
+      const corrected = await fetch(`${started.url}/memory-history/${encodeURIComponent(targetEntryId)}/correct`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: 'workspace_memory_history',
+          text: correctedText,
+          reason: 'The operator corrected this workspace memory.',
+        }),
+      })
+      expect(corrected.status).toBe(200)
+      const correctedBody = await corrected.json() as {
+        entry?: { entryId?: string; textPreview?: string; metadata?: unknown; workspaceRoot?: unknown }
+      }
+      expect(correctedBody.entry).toMatchObject({ entryId: targetEntryId })
+      expect(correctedBody.entry?.textPreview).toContain('Corrected workspace memory')
+      expect(correctedBody.entry?.metadata).toBeUndefined()
+      expect(correctedBody.entry?.workspaceRoot).toBeUndefined()
+      expect(JSON.stringify(correctedBody)).not.toContain(correctedText)
+      expect(JSON.stringify(correctedBody)).not.toContain('memory-history-private')
+      expect(snapshotCalls).toBe(0)
+
       const second = await fetch(
         `${started.url}/memory-history?workspaceId=workspace_memory_history&limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? '')}`,
       )
@@ -1244,6 +1278,24 @@ describe('LocalGatewayHttpServer', () => {
       expect(secondBody.entries).toMatchObject([{ textPreview: 'Oldest workspace note.' }])
       expect(secondBody.entries[0]?.entryId).not.toBe('memory_3')
       expect(secondBody.nextCursor).toBeUndefined()
+      expect(snapshotCalls).toBe(0)
+
+      const deleted = await fetch(`${started.url}/memory-history/${encodeURIComponent(targetEntryId)}/delete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: 'workspace_memory_history' }),
+      })
+      expect(deleted.status).toBe(200)
+      expect(await deleted.json()).toMatchObject({
+        workspaceId: 'workspace_memory_history',
+        entryId: targetEntryId,
+        deleted: true,
+        deletedAt: expect.any(String),
+      })
+      const afterDelete = await fetch(`${started.url}/memory-history?workspaceId=workspace_memory_history&limit=3`)
+      expect(afterDelete.status).toBe(200)
+      const afterDeleteBody = await afterDelete.json() as { entries: Array<{ entryId: string }> }
+      expect(afterDeleteBody.entries.map((entry) => entry.entryId)).not.toContain(targetEntryId)
       expect(snapshotCalls).toBe(0)
 
       const invalidCursor = await fetch(`${started.url}/memory-history?workspaceId=workspace_memory_history&cursor=not-a-valid-cursor`)
@@ -1286,6 +1338,21 @@ describe('LocalGatewayHttpServer', () => {
       expect(response.status).toBe(501)
       expect(await response.json()).toMatchObject({
         error: 'Memory history pagination requires the gateway app-state store.',
+      })
+      const mutation = await fetch(
+        `${started.url}/memory-history/memory_${'a'.repeat(43)}/correct`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: 'workspace_memory_history',
+            text: 'This mutation cannot run without app state.',
+          }),
+        },
+      )
+      expect(mutation.status).toBe(501)
+      expect(await mutation.json()).toEqual({
+        error: 'Memory mutation requires the gateway app-state store.',
       })
       expect(snapshotCalls).toBe(0)
     } finally {

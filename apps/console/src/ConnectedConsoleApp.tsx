@@ -1,6 +1,10 @@
 import type { DragEvent } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ConsoleGatewayRunEvent, ConsoleGatewaySnapshot } from 'mainspring/gateway'
+import type {
+  ConsoleGatewayMemoryEntry,
+  ConsoleGatewayRunEvent,
+  ConsoleGatewaySnapshot,
+} from 'mainspring/gateway'
 import {
   createLocalGatewayClient,
   type LocalGatewayClient,
@@ -440,6 +444,57 @@ export function ConnectedConsoleApp() {
         kind: 'ok',
         text: `${decision === 'approved' ? 'Approved' : 'Denied'} ${approval.targetKey ?? 'the requested action'}.`,
       })
+    } catch (error) {
+      setToast({ kind: 'error', text: errorMessage(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function correctWorkspaceMemory(
+    entry: ConsoleGatewayMemoryEntry,
+    text: string,
+    reason?: string,
+  ) {
+    const workspaceId = selectedWorkspace?.workspaceId
+    if (!workspaceId) {
+      setToast({ kind: 'error', text: 'Select a workspace before correcting memory.' })
+      return
+    }
+    setBusy(true)
+    try {
+      await gatewayClient.correctMemoryEntry({
+        workspaceId,
+        entryId: entry.entryId,
+        text,
+        ...(reason ? { reason } : {}),
+      })
+      await memoryHistory.reload()
+      void refresh().catch(() => undefined)
+      setToast({ kind: 'ok', text: 'Memory correction saved.' })
+    } catch (error) {
+      setToast({ kind: 'error', text: errorMessage(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function deleteWorkspaceMemory(entry: ConsoleGatewayMemoryEntry, reason?: string) {
+    const workspaceId = selectedWorkspace?.workspaceId
+    if (!workspaceId) {
+      setToast({ kind: 'error', text: 'Select a workspace before deleting memory.' })
+      return
+    }
+    setBusy(true)
+    try {
+      await gatewayClient.deleteMemoryEntry({
+        workspaceId,
+        entryId: entry.entryId,
+        ...(reason ? { reason } : {}),
+      })
+      await memoryHistory.reload()
+      void refresh().catch(() => undefined)
+      setToast({ kind: 'ok', text: 'Memory deleted.' })
     } catch (error) {
       setToast({ kind: 'error', text: errorMessage(error) })
     } finally {
@@ -890,12 +945,15 @@ export function ConnectedConsoleApp() {
               />
             ) : (
               <MemoryScreen
+                actionBusy={busy}
                 entries={memoryHistory.entries}
                 error={memoryHistoryEnabled ? memoryHistory.error : undefined}
                 hasMore={memoryHistoryEnabled && Boolean(memoryHistory.nextCursor)}
                 loading={memoryHistoryEnabled && memoryHistory.loading}
                 workspaceId={selectedWorkspace?.workspaceId}
                 workspaceName={selectedWorkspace?.name}
+                onCorrect={(entry, text, reason) => correctWorkspaceMemory(entry, text, reason)}
+                onDelete={(entry, reason) => deleteWorkspaceMemory(entry, reason)}
                 onLoadMore={() => void memoryHistory.loadMore()}
               />
             )}

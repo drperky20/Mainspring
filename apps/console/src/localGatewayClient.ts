@@ -321,6 +321,22 @@ export interface LocalGatewayClient {
     limit?: number
     signal?: AbortSignal
   }): Promise<{ entries: GatewayMemoryHistoryItem[]; nextCursor?: string }>
+  correctMemoryEntry(input: {
+    workspaceId: string
+    entryId: string
+    text: string
+    reason?: string
+  }): Promise<{ entry: GatewayMemoryHistoryItem }>
+  deleteMemoryEntry(input: {
+    workspaceId: string
+    entryId: string
+    reason?: string
+  }): Promise<{
+    workspaceId: string
+    entryId: string
+    deleted: true
+    deletedAt: string
+  }>
   cronStatus(): Promise<{
     cron: { enabled: boolean; running: boolean; pollIntervalMs: number; lastTickAt?: string; lastError?: string }
   }>
@@ -789,6 +805,18 @@ export function createLocalGatewayClient(
       })}`, {
         headers: authHeaders(),
         ...(input.signal ? { signal: input.signal } : {}),
+      }),
+    correctMemoryEntry: ({ entryId, ...input }) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/memory-history/${encodeURIComponent(entryId)}/correct`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(input),
+      }),
+    deleteMemoryEntry: ({ entryId, ...input }) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/memory-history/${encodeURIComponent(entryId)}/delete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(input),
       }),
     cronStatus: () => requestJson(fetchImpl, `${normalizedBaseUrl}/cron/status`, { headers: authHeaders() }),
     deleteClient: ({ clientId }) =>

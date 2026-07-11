@@ -14,6 +14,7 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Configurable bounded RunLog worker concurrency with same-workspace process-local serialization and deterministic performance coverage.
 - `ConsoleNavigation` and `useConsoleRunActivity` boundaries for the connected operator shell.
 - Workspace-scoped, cursor-paginated memory history with browser-safe previews and no browser-supplied host paths.
+- Durable operator memory correction and deletion with append-only JSONL replacement/tombstone records, opaque workspace-scoped gateway routes, provenance-aware corrections, audit evidence, and console confirmation dialogs.
 - Durable, restart-safe canonical RunLog tool-call summaries with a dedicated cursor, bounded `GET /runlog/tool-calls` history route, opaque browser IDs, and an incremental Activity view.
 
 ### Changed
@@ -24,3 +25,4 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 ### Security
 - Security language now consistently states that host shell execution is not a sandbox and browser-side provider auth remains prototype-only.
 - Gateway error bodies now pass through the same path/credential sanitizer as successful browser responses.
+- Memory correction/deletion routes accept only opaque browser IDs scoped to registered workspaces; raw JSONL IDs, workspace roots, source metadata, and full values remain host-side.

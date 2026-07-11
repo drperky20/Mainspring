@@ -100,6 +100,35 @@ test.describe('operator console', () => {
     await page.getByRole('button', { name: 'Memory', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Memory', exact: true })).toBeVisible()
 
+    const correctMemory = page.getByRole('button', { name: 'Correct', exact: true })
+    await correctMemory.click()
+    const correctionDialog = page.getByRole('dialog', { name: 'Correct memory' })
+    await expect(correctionDialog.getByRole('button', { name: 'Close' })).toBeFocused()
+    await correctionDialog.getByRole('textbox').first().fill('Weekly intake handoff was completed.')
+    const corrected = page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return /\/memory-history\/memory_[A-Za-z0-9_-]+\/correct$/.test(url.pathname)
+        && response.status() === 200
+    })
+    await correctionDialog.getByRole('button', { name: 'Save correction', exact: true }).click()
+    await corrected
+    await expect(page.getByText('Memory correction saved.', { exact: true })).toBeVisible()
+
+    await page.getByRole('button', { name: 'Delete', exact: true }).click()
+    const deletionDialog = page.getByRole('dialog', { name: 'Delete memory' })
+    const deleted = page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return /\/memory-history\/memory_[A-Za-z0-9_-]+\/delete$/.test(url.pathname)
+        && response.status() === 200
+    })
+    await deletionDialog.getByRole('button', { name: 'Delete memory', exact: true }).click()
+    await deleted
+    await expect(page.getByText('Memory deleted.', { exact: true })).toBeVisible()
+    await expect(page.getByText('No memory recorded', { exact: true })).toBeVisible()
+    await expect.poll(() => page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    )).toBe(false)
+
     await page.getByRole('button', { name: 'Workspaces', exact: true }).click()
     const opener = page.getByRole('button', { name: 'New client', exact: true })
     await opener.click()

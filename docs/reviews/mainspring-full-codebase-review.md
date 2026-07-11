@@ -106,7 +106,7 @@ so deleting them would be an unsafe breaking change.
 | --- | --- | --- | --- |
 | Shell, terminal, file, browser, web | ToolRegistry plus RuntimePolicyGuard; DecisionRecord before protected work; scoped approvals. | Tool outputs and gateway responses are redacted and bounded. | Host execution and browser automation are not sandboxes. |
 | Provider credentials | Opaque credential references with host-side resolution. | Keys never belong in prompts, events, URLs, or renderer storage. | No hosted KMS or desktop vault. |
-| Memory and skills | Policy, provenance scan, staged review, durable review record. | Sanitized review DTOs; no automatic activation. | Taint is advisory; no hosted reputation/revocation service. |
+| Memory and skills | Policy, provenance scan, staged review, durable review record, and append-only operator correction/deletion journal. | Sanitized review and memory-mutation DTOs use opaque IDs; source metadata, host roots, raw JSONL IDs, and full stored values remain host-side. | Taint is advisory; no hosted reputation/revocation service. |
 | Remote templates | Pinned Ed25519 catalog, bounded HTTPS fetch, expiry/hash checks, scan, atomic install. | Catalog content/URLs stay host-side. | Integrity is not publisher reputation or key revocation. |
 | Cron | Scoped, expiring grants and RunLog decisions before side-effecting dispatch. | Grant projections omit private hashes. | Compatibility gateway cron remains mailbox-backed without a RunLog host. |
 | Child runs | RunLog child creation narrows inherited parent context and records a decision. | Credential references stay opaque. | No remote cross-host identity/dispatch fabric. |
@@ -125,14 +125,15 @@ row and executable regression or an explicit limitation.
 | Select client/workspace/agent | Live gateway selections are scoped by client/workspace. | Remaining chat/agent/automation panels are still in the shell. | `ConsoleClientForms` owns client editing; retain Home, Workspaces, Activity, and Settings as the first navigation layer. |
 | Start, watch, and stop work | Durable RunLog starts, cancellation, SSE run events, and merged cursor-paginated canonical/compatibility Activity rows exist. | The broad snapshot remains a compatibility source for unrelated summary data. | Retain explicit run/event actions and migrate the next aggregate collections only with concrete UI callers. |
 | Approval | Prominent approvals and RunLog receipt flow are present. | Detailed policy data can compete with the normal task workflow. | Approval history is cursor-paginated and RunLog-preferred; keep action cards visible and raw traces behind inspection. |
-| Inspect outcomes | Runs, canonical tool-call history, artifacts, checkpoints, usage, audit, memory, and trace panels exist. | Detailed memory inspection requires selecting a workspace; its JSONL source is not yet globally indexed. | Public RunLog trace, tool-call, usage, artifact, audit, and per-workspace memory pages are bounded; progressively narrow the compatible aggregate only with migration evidence. |
+| Inspect outcomes | Runs, canonical tool-call history, artifacts, checkpoints, usage, audit, memory, and trace panels exist. | Detailed memory inspection requires selecting a workspace; its JSONL source is not yet globally indexed. | Public RunLog trace, tool-call, usage, artifact, audit, and per-workspace memory pages are bounded; memory can be explicitly corrected or tombstoned through opaque workspace-scoped controls without exposing the stored source. Progressively narrow the compatible aggregate only with migration evidence. |
 | Offline/stale behavior | Loading, offline, stale, and unauthorized states exist. | Full snapshots are still expensive when state changes. | Complete visibility-aware, abortable, non-overlapping revalidation with bounded backoff. |
 
 The shared dialog now has a labelled focus target, local Tab cycling, Escape
 dismissal, and opener-focus restoration; narrow client tabs form a two-column
 grid at phone widths. The console E2E suite now verifies 390px Activity
-navigation (including canonical Tool Calls and Memory), no document overflow,
-and dialog focus return.
+navigation (including canonical Tool Calls and Memory), opaque memory
+correction/deletion confirmation, no document overflow, and dialog focus
+return.
 Broader status-announcement coverage remains a P2 follow-up after the shell is
 decomposed further.
 

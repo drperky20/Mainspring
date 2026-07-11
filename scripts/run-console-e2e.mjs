@@ -64,6 +64,22 @@ function startPnpm(args, environment) {
     : start(pnpmExecutable, args, environment)
 }
 
+function seedConsoleMemory(workspaceRoot) {
+  const memoryDirectory = path.join(workspaceRoot, '.mainspring')
+  fs.mkdirSync(memoryDirectory, { recursive: true })
+  fs.writeFileSync(
+    path.join(memoryDirectory, 'memory.jsonl'),
+    `${JSON.stringify({
+      entryId: 'memory_console_e2e',
+      workspaceRoot,
+      scope: 'workspace',
+      text: 'Review the weekly intake handoff before Monday.',
+      tags: ['handoff', 'weekly'],
+      createdAt: '2026-07-10T12:00:00.000Z',
+    })}\n`,
+  )
+}
+
 function waitFor(url, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs
   return new Promise((resolve, reject) => {
@@ -125,6 +141,7 @@ async function main() {
 
   start(process.execPath, ['dist/gateway/server/dev.js'], gatewayEnvironment)
   await waitFor(`${gatewayUrl}/health`)
+  seedConsoleMemory(path.join(temporaryRoot, 'workspaces', 'northline'))
   startPnpm(
     ['--filter', '@mainspring/console', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(consolePort)],
     process.env,

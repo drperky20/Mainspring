@@ -18,6 +18,8 @@ const OPERATOR_MUTATIONS = [
   /^POST \/cron\/[^/]+\/grant$/,
   /^POST \/provenance-reviews\/[^/]+\/decision$/,
   /^POST \/provenance-reviews\/[^/]+\/apply$/,
+  /^POST \/memory-history\/[^/]+\/correct$/,
+  /^POST \/memory-history\/[^/]+\/delete$/,
 ]
 
 export function requiredGatewayPermission(method: string, path: string): GatewayPermission {

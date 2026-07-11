@@ -195,6 +195,45 @@ async function main() {
       'browser-surface-memory-private-sentinel',
     ])
 
+    const opaqueMemoryEntryId = memoryHistory.entries?.[0]?.entryId
+    assert(opaqueMemoryEntryId, 'memory history did not return an opaque entry ID for mutation checks')
+    const correctedMemoryText = `Corrected browser memory ${'x'.repeat(180)}`
+    const correctedMemory = await requestJson(
+      `${started.url}/memory-history/${encodeURIComponent(opaqueMemoryEntryId)}/correct`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          text: correctedMemoryText,
+          reason: 'Local operator corrected the browser-surface fixture.',
+        }),
+      },
+    )
+    assert(correctedMemory.entry?.entryId === opaqueMemoryEntryId, 'memory correction changed the opaque entry ID')
+    assert(correctedMemory.entry?.metadata === undefined, 'memory correction exposed memory metadata')
+    assert(correctedMemory.entry?.workspaceRoot === undefined, 'memory correction exposed workspace root')
+    assert(!JSON.stringify(correctedMemory).includes(correctedMemoryText), 'memory correction exposed full replacement text')
+    assertNoBrowserLeak('memory correction response', correctedMemory, [
+      root.replaceAll('\\', '\\\\'),
+      'browser-surface-memory-private-sentinel',
+    ])
+
+    const deletedMemory = await requestJson(
+      `${started.url}/memory-history/${encodeURIComponent(opaqueMemoryEntryId)}/delete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, reason: 'Fixture memory is no longer relevant.' }),
+      },
+    )
+    assert(deletedMemory.entryId === opaqueMemoryEntryId, 'memory deletion did not preserve opaque target identity')
+    assert(deletedMemory.deleted === true, 'memory deletion did not report completion')
+    assertNoBrowserLeak('memory deletion response', deletedMemory, [
+      root.replaceAll('\\', '\\\\'),
+      'browser-surface-memory-private-sentinel',
+    ])
+
     const snapshot = await requestJson(`${started.url}/snapshot`)
     assert(snapshot.counts?.clients >= 1, 'snapshot response did not include client counts')
     assertNoBrowserLeak('snapshot response', snapshot, [root.replaceAll('\\', '\\\\')])

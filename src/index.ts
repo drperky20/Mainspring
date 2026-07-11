@@ -239,12 +239,21 @@ export { createMemoryContext } from './memory/MemoryContext.js'
 export type { MemoryContext, MemoryContextOptions } from './memory/MemoryContext.js'
 export { MemoryProvider } from './memory/MemoryProvider.js'
 export type { MemoryProviderOptions } from './memory/MemoryProvider.js'
-export { createJsonlMemoryStore, JsonlMemoryStore, listStoredMemoryEntries } from './memory/MemoryStore.js'
+export {
+  createJsonlMemoryStore,
+  isMutableMemoryStore,
+  JsonlMemoryStore,
+  listStoredMemoryEntries,
+} from './memory/MemoryStore.js'
 export type {
+  DeleteMemoryInput,
   ListMemoryInput,
+  MemoryDeletionResult,
   MemoryRecord,
   MemoryScope,
   MemoryStore,
+  MutableMemoryStore,
+  ReplaceMemoryInput,
   WriteMemoryInput,
 } from './memory/MemoryStore.js'
 export {

@@ -34,6 +34,7 @@ import {
   consoleDeploymentTarget,
   consoleMarketplaceInstall,
   consoleMarketplaceTemplate,
+  consoleMemoryEntry,
   consoleProvenanceReview,
   consoleProviderProfile,
   consoleRun,
@@ -76,6 +77,7 @@ import {
   ApplyProvenanceReviewRequestSchema,
   CreateBudgetRequestSchema,
   CreateClientRequestSchema,
+  CorrectMemoryEntryRequestSchema,
   CreateCronGrantRequestSchema,
   CreateCronScheduleRequestSchema,
   CreateDeploymentTargetRequestSchema,
@@ -83,6 +85,7 @@ import {
   CreateWorkspaceRequestSchema,
   CreateHostedAuthUserRequestSchema,
   DeploymentPlanRequestSchema,
+  DeleteMemoryEntryRequestSchema,
   ExecuteDeploymentRequestSchema,
   InstallMarketplaceTemplateRequestSchema,
   ResolveApprovalRequestSchema,
@@ -99,12 +102,14 @@ import {
   type CreateAgentRequest,
   type CreateBudgetRequest,
   type CreateClientRequest,
+  type CorrectMemoryEntryRequest,
   type CreateCronGrantRequest,
   type CreateCronScheduleRequest,
   type CreateDeploymentTargetRequest,
   type CreateProviderProfileRequest,
   type CreateWorkspaceRequest,
   type DeploymentPlanRequest,
+  type DeleteMemoryEntryRequest,
   type ExecuteDeploymentRequest,
   type InstallMarketplaceTemplateRequest,
   type ResolveApprovalRequest,
@@ -526,6 +531,31 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'GET' && path === '/memory-history') {
         this.writeMemoryHistoryPage(response, url)
+        return
+      }
+
+      const memoryMutationRoute = request.method === 'POST'
+        ? /^\/memory-history\/([^/]+)\/(correct|delete)$/.exec(path)
+        : null
+      if (memoryMutationRoute) {
+        const entryId = memoryHistoryEntryId(memoryMutationRoute[1]!)
+        const body = await this.readJson(request)
+        if (memoryMutationRoute[2] === 'correct') {
+          const parsed = CorrectMemoryEntryRequestSchema.parse(body)
+          const corrected = this.correctMemory(entryId, parsed, principal?.actor)
+          this.writeJson(response, 200, sanitizeGatewayResponse({
+            entry: consoleMemoryEntry(corrected.entry, corrected.workspaceId),
+          }))
+          return
+        }
+        const parsed = DeleteMemoryEntryRequestSchema.parse(body)
+        const deleted = this.deleteMemory(entryId, parsed, principal?.actor)
+        this.writeJson(response, 200, sanitizeGatewayResponse({
+          workspaceId: deleted.workspaceId,
+          entryId: deleted.entryId,
+          deleted: true,
+          deletedAt: deleted.deletedAt,
+        }))
         return
       }
 
@@ -1334,6 +1364,39 @@ export class LocalGatewayHttpServer {
     })
   }
 
+  private correctMemory(
+    entryId: string,
+    input: CorrectMemoryEntryRequest,
+    actor?: string,
+  ) {
+    if (!this.options.gateway.appState) {
+      throw new GatewayHttpError(501, 'Memory mutation requires the gateway app-state store.')
+    }
+    return this.options.gateway.memory.correct({
+      workspaceId: input.workspaceId,
+      entryId,
+      text: input.text,
+      reason: input.reason,
+      actor,
+    })
+  }
+
+  private deleteMemory(
+    entryId: string,
+    input: DeleteMemoryEntryRequest,
+    actor?: string,
+  ) {
+    if (!this.options.gateway.appState) {
+      throw new GatewayHttpError(501, 'Memory mutation requires the gateway app-state store.')
+    }
+    return this.options.gateway.memory.delete({
+      workspaceId: input.workspaceId,
+      entryId,
+      reason: input.reason,
+      actor,
+    })
+  }
+
   private createAgent(input: CreateAgentRequest) {
     return this.options.gateway.agents.create(input)
   }
@@ -2125,6 +2188,18 @@ function memoryHistoryWorkspaceId(value: string | null): string {
     throw new GatewayHttpError(400, 'Memory history workspaceId is required.')
   }
   return workspaceId
+}
+
+function memoryHistoryEntryId(value: string): string {
+  try {
+    const entryId = decodeURIComponent(value).trim()
+    if (!/^memory_[A-Za-z0-9_-]{43}$/.test(entryId)) {
+      throw new Error('invalid memory entry id')
+    }
+    return entryId
+  } catch {
+    throw new GatewayHttpError(400, 'Memory history entryId is invalid.')
+  }
 }
 
 function encodeRunLogActivityCursor(run: Pick<RunLogRunRecord, 'createdAt' | 'runId'>): string {

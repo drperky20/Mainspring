@@ -311,6 +311,65 @@ describe('createLocalGatewayClient', () => {
     })
   })
 
+  it('corrects and deletes memory through opaque browser-safe entry routes', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      expect(init?.headers).toEqual({
+        'content-type': 'application/json',
+        authorization: 'Bearer hosted_token_1',
+      })
+      if (url.endsWith('/memory-history/memory_opaque_1/correct')) {
+        expect(init?.method).toBe('POST')
+        expect(init?.body).toBe(JSON.stringify({
+          workspaceId: 'workspace_memory_1',
+          text: 'Corrected preference.',
+          reason: 'Operator correction.',
+        }))
+        return new Response(JSON.stringify({
+          entry: {
+            entryId: 'memory_opaque_1',
+            workspaceId: 'workspace_memory_1',
+            scope: 'workspace',
+            textPreview: 'Corrected preference.',
+            tags: ['preference'],
+            createdAt: '2026-07-10T00:00:00.000Z',
+          },
+        }), { status: 200 })
+      }
+      expect(url).toBe('http://127.0.0.1:8787/memory-history/memory_opaque_1/delete')
+      expect(init?.method).toBe('POST')
+      expect(init?.body).toBe(JSON.stringify({
+        workspaceId: 'workspace_memory_1',
+        reason: 'No longer relevant.',
+      }))
+      return new Response(JSON.stringify({
+        workspaceId: 'workspace_memory_1',
+        entryId: 'memory_opaque_1',
+        deleted: true,
+        deletedAt: '2026-07-10T00:05:00.000Z',
+      }), { status: 200 })
+    })
+    const client = createLocalGatewayClient('http://127.0.0.1:8787', fetchImpl as typeof fetch)
+    client.setSessionToken('hosted_token_1')
+
+    await expect(client.correctMemoryEntry({
+      workspaceId: 'workspace_memory_1',
+      entryId: 'memory_opaque_1',
+      text: 'Corrected preference.',
+      reason: 'Operator correction.',
+    })).resolves.toMatchObject({
+      entry: expect.objectContaining({ entryId: 'memory_opaque_1' }),
+    })
+    await expect(client.deleteMemoryEntry({
+      workspaceId: 'workspace_memory_1',
+      entryId: 'memory_opaque_1',
+      reason: 'No longer relevant.',
+    })).resolves.toMatchObject({
+      entryId: 'memory_opaque_1',
+      deleted: true,
+    })
+  })
+
   it('fetches snapshot, run events, run start, and approval resolution through the expected routes', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

@@ -23,6 +23,12 @@ export type MemoryHistoryPage = {
   nextCursor?: MemoryHistoryCursor
 }
 
+export type ResolvedMemoryHistoryEntry = {
+  workspaceId: string
+  workspaceRoot: string
+  record: MemoryRecord
+}
+
 /**
  * Browser-safe, reverse-paginated memory history for one gateway-registered
  * workspace. The browser supplies an opaque workspace ID, never a host path;
@@ -52,6 +58,28 @@ export function listMemoryHistoryPage(input: {
     ...(hasMore && last
       ? { nextCursor: { createdAt: last.record.createdAt, entryId: last.cursorEntryId } }
       : {}),
+  }
+}
+
+/**
+ * Resolves a browser-visible opaque memory identifier only through a
+ * gateway-registered workspace. Callers receive the host record only after
+ * both the workspace and the opaque entry identity match exactly.
+ */
+export function resolveMemoryHistoryEntry(input: {
+  source: MemoryHistoryPageSource
+  workspaceId: string
+  entryId: string
+}): ResolvedMemoryHistoryEntry | null {
+  const workspace = input.source.workspaces.get(input.workspaceId)
+  if (!workspace) return null
+  const matches = listStoredMemoryEntries(workspace.root)
+    .filter((record) => consoleMemoryEntryId(record.entryId) === input.entryId)
+  if (matches.length !== 1) return null
+  return {
+    workspaceId: workspace.workspaceId,
+    workspaceRoot: workspace.root,
+    record: matches[0]!,
   }
 }
 

@@ -32,6 +32,8 @@ type HostDecisionSurfaceOperation =
   | { surface: 'provider_config'; operation: 'provider_config.write' }
   | { surface: 'artifact'; operation: 'artifact.publish' }
   | { surface: 'channel'; operation: 'channel.send' }
+  | { surface: 'memory'; operation: 'memory.replace' }
+  | { surface: 'memory'; operation: 'memory.delete' }
 
 export interface DecisionRecord {
   decisionId: string

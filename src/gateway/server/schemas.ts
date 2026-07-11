@@ -288,6 +288,23 @@ export const ApplyProvenanceReviewRequestSchema = z.object({
   reviewer: OptionalTrimmedString,
 })
 
+const MemoryHistoryWorkspaceIdSchema = z.string().trim().min(1).max(160)
+const MemoryMutationReasonSchema = z.string().trim().max(500).optional().transform((value) => {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : undefined
+})
+
+export const CorrectMemoryEntryRequestSchema = z.object({
+  workspaceId: MemoryHistoryWorkspaceIdSchema,
+  text: z.string().trim().min(1).max(8_000),
+  reason: MemoryMutationReasonSchema,
+}).strict()
+
+export const DeleteMemoryEntryRequestSchema = z.object({
+  workspaceId: MemoryHistoryWorkspaceIdSchema,
+  reason: MemoryMutationReasonSchema,
+}).strict()
+
 export const UpdateBudgetRequestSchema = z
   .object({
     label: OptionalTrimmedString,
@@ -320,6 +337,8 @@ export type UpdateCronScheduleRequest = z.infer<typeof UpdateCronScheduleRequest
 export type CreateCronGrantRequest = z.infer<typeof CreateCronGrantRequestSchema>
 export type ProvenanceReviewDecisionRequest = z.infer<typeof ProvenanceReviewDecisionRequestSchema>
 export type ApplyProvenanceReviewRequest = z.infer<typeof ApplyProvenanceReviewRequestSchema>
+export type CorrectMemoryEntryRequest = z.infer<typeof CorrectMemoryEntryRequestSchema>
+export type DeleteMemoryEntryRequest = z.infer<typeof DeleteMemoryEntryRequestSchema>
 export type CreateBudgetRequest = z.infer<typeof CreateBudgetRequestSchema>
 export type UpdateBudgetRequest = z.infer<typeof UpdateBudgetRequestSchema>
 export type CreateDeploymentTargetRequest = z.infer<typeof CreateDeploymentTargetRequestSchema>

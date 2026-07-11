@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createMemoryContext } from './MemoryContext.js'
-import { createJsonlMemoryStore } from './MemoryStore.js'
+import { createJsonlMemoryStore, listStoredMemoryEntries } from './MemoryStore.js'
 
 const tempRoots: string[] = []
 
@@ -148,5 +148,106 @@ describe('JsonlMemoryStore', () => {
         metadata: { authorization: 'Bearer sk-or-secret' },
       }),
     ).toThrow('raw secret material')
+  })
+
+  it('replays append-only corrections and tombstones across store restarts', () => {
+    const workspaceRoot = makeWorkspaceRoot()
+    const store = createJsonlMemoryStore()
+    const original = store.write({
+      workspaceRoot,
+      entryId: 'memory_operator_note',
+      text: 'The launch checklist is ready for review.',
+      tags: ['launch'],
+      metadata: { source: 'operator-note' },
+      createdAt: '2026-07-10T12:00:00.000Z',
+    })
+
+    const corrected = store.replace({
+      workspaceRoot,
+      entryId: original.entryId,
+      text: 'The launch checklist is approved for the next scheduled review.',
+      tags: ['launch', 'approved'],
+      actor: 'operator_1',
+      reason: 'The review status changed.',
+      replacedAt: '2026-07-10T12:05:00.000Z',
+    })
+
+    expect(corrected).toMatchObject({
+      entryId: original.entryId,
+      text: 'The launch checklist is approved for the next scheduled review.',
+      tags: ['launch', 'approved'],
+      createdAt: original.createdAt,
+      metadata: { source: 'operator-note' },
+    })
+    expect(createJsonlMemoryStore().list({ workspaceRoot, limit: 10 })).toEqual([corrected])
+
+    const memoryPath = path.join(workspaceRoot, '.mainspring', 'memory.jsonl')
+    const journal = fs.readFileSync(memoryPath, 'utf8')
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    expect(journal).toHaveLength(2)
+    expect(journal[1]).toMatchObject({
+      kind: 'memory.replaced',
+      targetEntryId: original.entryId,
+      actor: 'operator_1',
+      reason: 'The review status changed.',
+    })
+
+    // A partial final line is ignored on recovery, so a process interruption
+    // never applies half of a correction.
+    fs.appendFileSync(memoryPath, '{"kind":"memory.replaced"')
+    expect(listStoredMemoryEntries(workspaceRoot)).toEqual([corrected])
+
+    const deletion = store.delete({
+      workspaceRoot,
+      entryId: original.entryId,
+      actor: 'operator_1',
+      reason: 'The memory is no longer needed.',
+      deletedAt: '2026-07-10T12:10:00.000Z',
+    })
+    expect(deletion).toEqual({
+      entryId: original.entryId,
+      deletedAt: '2026-07-10T12:10:00.000Z',
+    })
+    expect(createJsonlMemoryStore().list({ workspaceRoot, limit: 10 })).toEqual([])
+  })
+
+  it('keeps legacy entries without stored IDs stable and rejects secret journal metadata', () => {
+    const workspaceRoot = makeWorkspaceRoot()
+    const memoryDirectory = path.join(workspaceRoot, '.mainspring')
+    fs.mkdirSync(memoryDirectory, { recursive: true })
+    fs.writeFileSync(
+      path.join(memoryDirectory, 'memory.jsonl'),
+      `${JSON.stringify({
+        workspaceRoot: 'C:\\untrusted\\workspace',
+        scope: 'workspace',
+        text: 'Legacy memory remains available for correction.',
+        tags: ['legacy'],
+        createdAt: '2026-07-10T12:00:00.000Z',
+      })}\n`,
+    )
+
+    const first = listStoredMemoryEntries(workspaceRoot)
+    const second = listStoredMemoryEntries(workspaceRoot)
+    expect(first).toHaveLength(1)
+    expect(first[0]?.entryId).toMatch(/^memory_legacy_[A-Za-z0-9_-]{43}$/)
+    expect(second[0]?.entryId).toBe(first[0]?.entryId)
+    expect(first[0]?.workspaceRoot).toBe(fs.realpathSync.native(workspaceRoot))
+
+    const store = createJsonlMemoryStore()
+    expect(() => store.delete({
+      workspaceRoot,
+      entryId: first[0]!.entryId,
+      reason: 'token=sk-or-secret',
+    })).toThrow('raw secret material')
+    expect(store.replace({
+      workspaceRoot,
+      entryId: first[0]!.entryId,
+      text: 'Corrected legacy memory remains durable.',
+    })).toMatchObject({
+      entryId: first[0]!.entryId,
+      text: 'Corrected legacy memory remains durable.',
+    })
   })
 })

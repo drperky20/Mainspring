@@ -637,6 +637,61 @@ button.control-data-row:hover {
   text-align: right;
 }
 
+.control-memory-row {
+  grid-template-columns: 12px minmax(0, 1fr) auto auto;
+}
+
+.control-data-row > span.control-memory-actions,
+.control-memory-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.control-memory-actions .simple-secondary,
+.control-memory-actions .control-danger-button {
+  min-height: 31px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.control-memory-dialog {
+  display: grid;
+  gap: 13px;
+}
+
+.control-memory-dialog > p,
+.control-memory-dialog label {
+  margin: 0;
+  color: #bdc9c2;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.control-memory-dialog label {
+  display: grid;
+  gap: 7px;
+}
+
+.control-memory-dialog label span {
+  color: var(--simple-muted);
+  font-weight: 400;
+}
+
+.control-memory-dialog textarea {
+  min-height: 84px;
+}
+
+.control-memory-dialog-preview {
+  border-left: 2px solid rgba(118, 214, 158, 0.55);
+  background: rgba(118, 214, 158, 0.055);
+  padding: 9px 11px;
+}
+
+.control-memory-dialog-preview strong {
+  color: var(--simple-ink);
+}
+
 .control-activity-list,
 .control-timeline {
   list-style: none;
@@ -1671,10 +1726,19 @@ button.control-data-row:hover {
     grid-template-columns: 10px minmax(0, 1fr);
   }
 
+  .control-memory-row {
+    grid-template-columns: 10px minmax(0, 1fr);
+  }
+
   .control-row-meta {
     grid-column: 2;
     justify-items: start;
     text-align: left;
+  }
+
+  .control-memory-actions {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 
   .control-activity-list li {

@@ -10,6 +10,7 @@ import {
   scanMemoryMutation,
   stageProvenanceReview,
 } from '../provenance/ProvenanceReview.js'
+import { createJsonlMemoryStore, listStoredMemoryEntries } from '../memory/MemoryStore.js'
 import { createMainspring } from '../sdk/Mainspring.js'
 import { createRunLogMainspring } from '../sdk/RunLogMainspring.js'
 import { executionBackendCapabilities } from '../tools/ExecutionBackend.js'
@@ -18,6 +19,7 @@ import {
   createSqliteLocalGatewayAppStateStore,
   gatewaySnapshotToConsoleState,
 } from './index.js'
+import { consoleMemoryEntryId } from './ConsoleSnapshotAdapter.js'
 
 const tempRoots: string[] = []
 
@@ -3971,6 +3973,125 @@ describe('LocalMainspringGateway', () => {
           }),
         ]),
       )
+    } finally {
+      appState.close()
+    }
+  })
+
+  it('corrects and deletes opaque workspace memory with durable decision evidence', () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-memory-mutations-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, appState })
+
+    try {
+      const workspace = appState.workspaces.create({
+        workspaceId: 'workspace_memory_mutation',
+        name: 'Memory Mutation Workspace',
+        root: workspaceRoot,
+      })
+      const original = createJsonlMemoryStore().write({
+        workspaceRoot,
+        text: 'The launch brief is awaiting final approval.',
+        scope: 'workspace',
+        tags: ['launch'],
+      })
+      const entryId = consoleMemoryEntryId(original.entryId)
+
+      const corrected = gateway.memory.correct({
+        workspaceId: workspace.workspaceId,
+        entryId,
+        text: 'The launch brief is approved and scheduled for delivery.',
+        reason: 'The approval decision is final.',
+        actor: 'operator_memory',
+      })
+      expect(corrected).toMatchObject({
+        workspaceId: workspace.workspaceId,
+        entry: {
+          entryId: original.entryId,
+          text: 'The launch brief is approved and scheduled for delivery.',
+          tags: ['launch'],
+          metadata: {
+            provenance: expect.objectContaining({
+              source: 'gateway.memory.correct',
+              reviewed: true,
+              scanStatus: 'pass',
+            }),
+          },
+        },
+      })
+      expect(listStoredMemoryEntries(workspaceRoot)).toEqual([corrected.entry])
+
+      const journalPath = path.join(workspaceRoot, '.mainspring', 'memory.jsonl')
+      const correctedJournal = fs.readFileSync(journalPath, 'utf8')
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      expect(correctedJournal.at(-1)).toMatchObject({
+        kind: 'memory.replaced',
+        targetEntryId: original.entryId,
+        actor: 'operator_memory',
+        metadata: {
+          operation: 'memory.replace',
+          state: 'allow',
+        },
+      })
+
+      const correctionAudit = appState.auditEvents.list({ category: 'memory' })
+      expect(correctionAudit).toEqual([
+        expect.objectContaining({
+          action: 'entry.corrected',
+          actor: 'operator_memory',
+          targetType: 'memory-entry',
+          targetId: entryId,
+          metadata: expect.objectContaining({
+            workspaceId: workspace.workspaceId,
+            decisionRecord: expect.objectContaining({
+              operation: 'memory.replace',
+              inputHash: expect.any(String),
+            }),
+          }),
+        }),
+      ])
+      expect(JSON.stringify(correctionAudit)).not.toContain('The launch brief is approved')
+
+      const deleted = gateway.memory.delete({
+        workspaceId: workspace.workspaceId,
+        entryId,
+        actor: 'operator_memory',
+      })
+      expect(deleted).toMatchObject({
+        workspaceId: workspace.workspaceId,
+        entryId,
+        deletedAt: expect.any(String),
+      })
+      expect(listStoredMemoryEntries(workspaceRoot)).toEqual([])
+      expect(appState.auditEvents.list({ category: 'memory' })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            action: 'entry.deleted',
+            targetId: entryId,
+            metadata: expect.objectContaining({
+              decisionRecord: expect.objectContaining({ operation: 'memory.delete' }),
+            }),
+          }),
+        ]),
+      )
+
+      expect(() => gateway.memory.correct({
+        workspaceId: workspace.workspaceId,
+        entryId,
+        text: 'apiKey=sk-or-secret',
+      })).toThrow('Memory entry is unavailable')
     } finally {
       appState.close()
     }
