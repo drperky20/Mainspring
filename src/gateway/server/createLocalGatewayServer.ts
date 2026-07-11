@@ -888,7 +888,7 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/cron') {
         const body = await this.readJson(request)
         const parsed = CreateCronScheduleRequestSchema.parse(body)
-        const schedule = this.createCronSchedule(parsed)
+        const schedule = this.createCronSchedule(parsed, principal?.actor)
         this.writeJson(response, 201, sanitizeGatewayResponse({
           cronSchedule: consoleCronSchedule(schedule),
         }))
@@ -927,7 +927,7 @@ export class LocalGatewayHttpServer {
         const scheduleId = decodeURIComponent(path.slice('/cron/'.length))
         const body = await this.readJson(request)
         const parsed = UpdateCronScheduleRequestSchema.parse(body)
-        const schedule = this.updateCronSchedule(scheduleId, parsed)
+        const schedule = this.updateCronSchedule(scheduleId, parsed, principal?.actor)
         this.writeJson(response, 200, sanitizeGatewayResponse({
           cronSchedule: consoleCronSchedule(schedule),
         }))
@@ -1108,7 +1108,7 @@ export class LocalGatewayHttpServer {
         const scheduleId = decodeURIComponent(path.slice('/cron/'.length, -'/grant'.length))
         const body = await this.readJson(request)
         const parsed = CreateCronGrantRequestSchema.parse(body)
-        const preview = this.createCronGrant(scheduleId, parsed)
+        const preview = this.createCronGrant(scheduleId, parsed, principal?.actor)
         const schedule = this.options.gateway.cron.list().find((record) => record.scheduleId === scheduleId)
         this.writeJson(
           response,
@@ -1123,7 +1123,7 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'DELETE' && path.startsWith('/cron/')) {
         const scheduleId = decodeURIComponent(path.slice('/cron/'.length))
-        this.writeJson(response, 200, sanitizeGatewayResponse(this.deleteCronSchedule(scheduleId)))
+        this.writeJson(response, 200, sanitizeGatewayResponse(this.deleteCronSchedule(scheduleId, principal?.actor)))
         return
       }
 
@@ -1462,8 +1462,8 @@ export class LocalGatewayHttpServer {
     return { providerId: 'openrouter', source: 'openrouter-models-api', models }
   }
 
-  private createCronSchedule(input: CreateCronScheduleRequest) {
-    return this.options.gateway.cron.create(input)
+  private createCronSchedule(input: CreateCronScheduleRequest, actor?: string) {
+    return this.options.gateway.cron.create({ ...input, ...(actor ? { actor } : {}) })
   }
 
   private createBudget(input: CreateBudgetRequest) {
@@ -1479,10 +1479,11 @@ export class LocalGatewayHttpServer {
     })
   }
 
-  private updateCronSchedule(scheduleId: string, input: UpdateCronScheduleRequest) {
+  private updateCronSchedule(scheduleId: string, input: UpdateCronScheduleRequest, actor?: string) {
     return this.options.gateway.cron.update({
       scheduleId,
       ...input,
+      ...(actor ? { actor } : {}),
     })
   }
 
@@ -1504,8 +1505,8 @@ export class LocalGatewayHttpServer {
     })
   }
 
-  private deleteCronSchedule(scheduleId: string) {
-    return this.options.gateway.cron.delete(scheduleId)
+  private deleteCronSchedule(scheduleId: string, actor?: string) {
+    return this.options.gateway.cron.delete(scheduleId, actor)
   }
 
   private deleteBudget(budgetId: string) {
@@ -1523,7 +1524,7 @@ export class LocalGatewayHttpServer {
     return this.options.gateway.cron.grantPreview(scheduleId)
   }
 
-  private createCronGrant(scheduleId: string, input: CreateCronGrantRequest) {
+  private createCronGrant(scheduleId: string, input: CreateCronGrantRequest, actor?: string) {
     if (!this.options.gateway.runLog.available()) {
       throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
     }
@@ -1532,7 +1533,7 @@ export class LocalGatewayHttpServer {
       expiresAt: input.expiresAt,
       expiresInMs: input.expiresInMs,
       maxExecutionCount: input.maxExecutionCount,
-      actor: input.actor,
+      actor: actor ?? input.actor,
     })
   }
 

@@ -38,6 +38,8 @@ type HostDecisionSurfaceOperation =
   | { surface: 'memory'; operation: 'memory.delete' }
   | { surface: 'provenance'; operation: 'provenance.review.decide' }
   | { surface: 'provenance'; operation: 'provenance.review.apply' }
+  | { surface: 'cron'; operation: 'cron.schedule.write' }
+  | { surface: 'cron'; operation: 'cron.grant.create' }
   | { surface: 'deployment'; operation: 'deployment.target.write' }
   | { surface: 'deployment'; operation: 'deployment.execute' }
 

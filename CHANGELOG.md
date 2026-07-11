@@ -18,6 +18,7 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Durable, restart-safe canonical RunLog tool-call summaries with a dedicated cursor, bounded `GET /runlog/tool-calls` history route, opaque browser IDs, and an incremental Activity view.
 - Bounded `GatewayDeploymentControl` ownership for deployment target configuration and driver execution.
 - Bounded `GatewayProvenanceReviewControl` ownership for staged review decisions and durable memory/skill applies.
+- Bounded `GatewayCronControl` ownership for cron schedule configuration and scoped grant issuance.
 
 ### Changed
 - Verification lane standardized around `pnpm verify`.
@@ -30,3 +31,4 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Memory correction/deletion routes accept only opaque browser IDs scoped to registered workspaces; raw JSONL IDs, workspace roots, source metadata, and full values remain host-side.
 - Deployment target writes and exact-confirmed driver invocations now persist bound host decision records before external execution; browser DTOs omit decision and configuration metadata.
 - Provenance review decisions and applies now persist hash-only host decision evidence before queue or workspace mutation, recover a write interrupted before the review journal update, and use the hosted session actor instead of a browser-supplied reviewer.
+- Gateway cron schedule create/update/delete and grant issuance now persist hash-only pre-mutation host decisions; hosted session identity overrides a browser-supplied grant actor.

@@ -19,6 +19,8 @@ export type PolicyOperation =
   | 'memory.delete'
   | 'provenance.review.decide'
   | 'provenance.review.apply'
+  | 'cron.schedule.write'
+  | 'cron.grant.create'
   | 'deployment.target.write'
   | 'deployment.execute'
 

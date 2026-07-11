@@ -98,6 +98,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - attenuated child-run creation appends a public `subagent.create` decision to the parent RunLog before creating the child; the decision binds the generated child run id and records inherited authority without exposing credentials or workspace roots.
   - local gateway provider-profile create/update mutations store a `provider_config.write` decision inside the corresponding audit row; mutation input is represented only by its hash.
   - `GatewayDeploymentControl` persists `deployment.target.write` decisions with target configuration mutations and records a `deployment.execute` decision, bound to resolved target and preflight-plan hashes, in both the pre-driver audit trail and the deployment-run metadata before an exact-confirmed driver invocation.
+  - `GatewayCronControl` records hash-only `cron.schedule.write` decisions before schedule create/update/delete and `cron.grant.create` before a scoped grant can change schedule metadata. Hosted gateway routes supply the authenticated principal as the actor, overriding a request-body grant actor.
   - artifact handling in the gateway is read-only indexing of runtime-created artifacts; the gateway has no artifact-publish mutation surface.
   - channel sends remain explicitly on the legacy mailbox compatibility path and are not presented as RunLog-native authority.
 - RunLog cron rows now fail closed at the schedule-to-run boundary:
@@ -110,6 +111,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - side-effecting schedules fail closed without a scoped grant.
   - `GET /cron/:scheduleId/grant` previews the current scoped grant decision without returning the raw prompt.
   - `POST /cron/:scheduleId/grant` derives an expiring scoped grant from the current schedule, agent, prompt hash, schedule hash, workspace, and allowed tools.
+  - `GatewayCronControl` owns schedule/grant control-plane mutations; preview is read-only and does not synchronize an agent record. Its audit records contain only decision and binding hashes, never raw prompts or grant inputs.
   - sanitized cron schedule DTOs expose grant id, expiry, execution counts, allowed tools, and last decision state.
   - the React console exposes dedicated controls to review the current grant decision and create a short-lived scoped grant without showing raw prompt hashes or secret refs.
   - gateways constructed without a RunLog host keep the mailbox compatibility dispatch path for older embedders and migration verifiers.

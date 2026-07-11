@@ -3701,18 +3701,32 @@ describe('LocalMainspringGateway', () => {
     })
 
     try {
+      const client = appState.clients.create({ name: 'Cron Control Client' })
+      const workspace = appState.workspaces.create({
+        clientId: client.clientId,
+        name: 'Cron Control Workspace',
+        root: workspaceRoot,
+      })
+      const agent = appState.agents.create({
+        agentId: 'agent_cron_grant_control',
+        workspaceId: workspace.workspaceId,
+        name: 'Cron Grant Control Agent',
+      })
       const session = mainspring.sessions.create({
         sessionId: 'cron-runlog-grant-session',
         workspace: { root: workspaceRoot },
       })
       const schedule = gateway.cron.create({
         sessionId: session.record.sessionId,
+        workspaceId: workspace.workspaceId,
+        agentId: agent.agentId,
         label: 'Grant headless schedule',
         prompt: 'Run a granted file-capable schedule.',
         cronExpr: '0 * * * *',
         allowedTools: ['file.write'],
       })
 
+      expect(runLog.store.getAgent(agent.agentId)).toBeNull()
       const before = gateway.cron.grantPreview(schedule.scheduleId)
       expect(before).toMatchObject({
         scheduleId: schedule.scheduleId,
@@ -3721,6 +3735,7 @@ describe('LocalMainspringGateway', () => {
         scheduleKey: '0 * * * *|local',
         decision: expect.objectContaining({ state: 'deny' }),
       })
+      expect(runLog.store.getAgent(agent.agentId)).toBeNull()
 
       const granted = gateway.cron.createGrant({
         scheduleId: schedule.scheduleId,
@@ -3740,8 +3755,10 @@ describe('LocalMainspringGateway', () => {
           allowedTools: ['file.write'],
         }),
       })
+      expect(runLog.store.getAgent(agent.agentId)).toBeNull()
       const run = gateway.cron.runNow(schedule.scheduleId)
       expect(run.status).toBe('queued')
+      expect(runLog.store.getAgent(agent.agentId)).toMatchObject({ agentId: agent.agentId })
       await runLog.drainUntilIdle()
       const completed = runLog.store.getRun(run.runId)
       expect(completed?.status).toBe('completed')

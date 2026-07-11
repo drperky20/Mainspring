@@ -4267,6 +4267,118 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
+  it('uses hosted identity instead of a browser-supplied cron grant actor', async () => {
+    const root = makeTempRoot('mainspring-gateway-hosted-cron-identity-')
+    const sessionsRoot = path.join(root, 'sessions')
+    const workspaceRoot = path.join(root, 'workspace')
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const runtime = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new MockProvider([]),
+      pollIntervalMs: 10,
+    })
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider([]),
+      approvalReceiptKey: 'gateway-hosted-cron-identity-test-key',
+    })
+    const session = runtime.sessions.create({
+      sessionId: 'session_hosted_cron_identity',
+      workspace: { root: workspaceRoot },
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
+    const server = createLocalGatewayServer({
+      gateway,
+      host: '127.0.0.1',
+      port: 0,
+      auth: { mode: 'hosted', trustedOrigins: ['http://127.0.0.1:5173'] },
+    })
+
+    const started = await server.start()
+    try {
+      const bootstrap = await fetch(`${started.url}/auth/bootstrap`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Admin', password: 'HostedCronPass123' }),
+      })
+      expect(bootstrap.status).toBe(201)
+      const login = await fetch(`${started.url}/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Admin', password: 'HostedCronPass123' }),
+      })
+      const token = login.headers.get('x-mainspring-auth-token')
+      expect(login.status).toBe(200)
+      expect(token).toMatch(/^[a-f0-9]{64}$/)
+      const headers = {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      }
+
+      const createdResponse = await fetch(`${started.url}/cron`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sessionId: session.record.sessionId,
+          label: 'Hosted cron',
+          prompt: 'Write a hosted cron report. secretRef=env:HOSTED_CRON_TEST_SECRET',
+          cronExpr: '0 * * * *',
+          allowedTools: ['file.write'],
+        }),
+      })
+      const created = await createdResponse.json() as { cronSchedule: { scheduleId: string } }
+      expect(createdResponse.status).toBe(201)
+
+      const updatedResponse = await fetch(`${started.url}/cron/${encodeURIComponent(created.cronSchedule.scheduleId)}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ label: 'Hosted cron v2' }),
+      })
+      expect(updatedResponse.status).toBe(200)
+
+      const grantedResponse = await fetch(
+        `${started.url}/cron/${encodeURIComponent(created.cronSchedule.scheduleId)}/grant`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            expiresInMs: 60_000,
+            maxExecutionCount: 1,
+            actor: 'browser-spoofed-cron-operator',
+          }),
+        },
+      )
+      expect(grantedResponse.status).toBe(201)
+
+      const deletedResponse = await fetch(`${started.url}/cron/${encodeURIComponent(created.cronSchedule.scheduleId)}`, {
+        method: 'DELETE',
+        headers,
+      })
+      expect(deletedResponse.status).toBe(200)
+
+      const events = appState.auditEvents.list({ category: 'cron' })
+      for (const action of [
+        'schedule.created.authorized',
+        'schedule.updated.authorized',
+        'schedule.grant.created.authorized',
+        'schedule.deleted.authorized',
+      ]) {
+        expect(events.find((event) => (
+          event.action === action && event.targetId === created.cronSchedule.scheduleId
+        ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
+      }
+      expect(JSON.stringify(events)).not.toContain('browser-spoofed-cron-operator')
+      expect(JSON.stringify(events)).not.toContain('HOSTED_CRON_TEST_SECRET')
+    } finally {
+      await server.stop()
+      runLog.close()
+      appState.close()
+    }
+  })
+
   it('routes deployment target create/update/plan/execute through the gateway deployment lane', async () => {
     const createInputs: unknown[] = []
     const updateInputs: unknown[] = []
