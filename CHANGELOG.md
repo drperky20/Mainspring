@@ -16,6 +16,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - `GatewaySnapshotReader` now owns read-only aggregate snapshot assembly, RunLog
   summary projection, worker/outbox status, and server-only revision-token caching,
   leaving `LocalGateway` focused on stable facade and command orchestration.
+- `GatewayProjectionSynchronizer` now owns restart-safe catch-up of approval,
+  usage, tool-call, artifact, execution-cell, and terminal-lease projections;
+  `LocalGateway` supplies read-only runtime readers and keeps the public facade.
 - `ConsoleClientWorkspaceFrame` now owns the selected-client header, workspace
   context, client tabs, and two-column shell while the connected app retains
   feature state and command orchestration.

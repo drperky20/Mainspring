@@ -16,7 +16,6 @@ import type {
   RunRecord,
   RuntimeHealth,
   StartRunInput,
-  UsageUpdatedRunEventPayload,
 } from '../contracts/runtime.js'
 import { latestProviderInitDetailFromRunEvents } from '../contracts/runtime.js'
 import {
@@ -133,6 +132,7 @@ import { GatewayArtifactProjection } from './GatewayArtifactProjection.js'
 import { GatewayUsageProjection } from './GatewayUsageProjection.js'
 import { GatewaySnapshotReader, projectLocalGatewayRunLogRun } from './GatewaySnapshotReader.js'
 import { GatewayBudgetEvaluator } from './GatewayBudgetEvaluator.js'
+import { GatewayProjectionSynchronizer } from './GatewayProjectionSynchronizer.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
@@ -770,20 +770,6 @@ function providerInitProjectionFromEvents(
   }
 }
 
-function approvalIdFromEvent(event: RunEvent): string | null {
-  if (
-    event.type !== 'approval.requested'
-    && event.type !== 'approval.approved'
-    && event.type !== 'approval.denied'
-  ) {
-    return null
-  }
-  const payload = event.payload as Record<string, unknown>
-  if (typeof payload.id === 'string') return payload.id
-  if (typeof payload.approvalId === 'string') return payload.approvalId
-  return null
-}
-
 function runLogCapabilitiesFromGatewayInput(input: LocalGatewayStartRunInput): RunLogCapability[] {
   const capabilities = new Set<RunLogCapability>(['provider'])
   const allowedTools = input.allowedTools ?? []
@@ -828,14 +814,6 @@ function approvalPolicyFromGatewayMode(value: unknown): RuntimePolicy['approvalP
   return undefined
 }
 
-function executionCellId(workspaceId: string, backendKey: string): string {
-  return `cell_exec_${workspaceId}_${backendKey}`.replace(/[^a-zA-Z0-9_-]/g, '_')
-}
-
-function executionLeaseId(toolCallId: string, backendSessionId?: string): string {
-  return `lease_exec_${(backendSessionId ?? toolCallId)}`.replace(/[^a-zA-Z0-9_-]/g, '_')
-}
-
 function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -861,34 +839,6 @@ function nearestExistingPath(target: string): string | null {
     if (parent === current) return null
     current = parent
   }
-}
-
-function stringListValue(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-    : []
-}
-
-function backendCapabilityMetadata(value: unknown): Record<string, unknown> | undefined {
-  const record = recordValue(value)
-  if (!record) return undefined
-  const metadata: Record<string, unknown> = {}
-  for (const key of [
-    'isolationKind',
-    'isolationStrength',
-    'securityBoundary',
-    'networkPolicy',
-    'workspaceMapping',
-  ]) {
-    const text = textValue(record[key])
-    if (text) metadata[key] = text
-  }
-  for (const key of ['requiresApproval', 'unsafeFallback']) {
-    if (typeof record[key] === 'boolean') metadata[key] = record[key]
-  }
-  const limits = stringListValue(record.limits)
-  if (limits.length > 0) metadata.limits = limits
-  return Object.keys(metadata).length > 0 ? metadata : undefined
 }
 
 function emptyUsageRollup(): LocalGatewayUsageRollup {
@@ -949,6 +899,7 @@ export class LocalMainspringGateway {
   private readonly compatibilityRunPageReader: CompatibilityRunPageReader<LocalGatewayRunProjection>
   private readonly snapshotReader: GatewaySnapshotReader
   private readonly budgetEvaluator = new GatewayBudgetEvaluator()
+  private readonly projectionSynchronizer?: GatewayProjectionSynchronizer<LocalGatewayBudgetEvaluation>
   private snapshotReadCache?: LocalGatewaySnapshotReadCache
   private cronTimer: NodeJS.Timeout | null = null
   private cronLastTickAt?: string
@@ -1042,6 +993,28 @@ export class LocalMainspringGateway {
           ...(typeof options.cells?.maxActiveLeasesPerCell === 'number'
             ? { maxActiveLeasesPerCell: options.cells.maxActiveLeasesPerCell }
             : {}),
+        })
+      : undefined
+    this.projectionSynchronizer = appState
+      ? new GatewayProjectionSynchronizer<LocalGatewayBudgetEvaluation>({
+          appState,
+          listSessions: () => this.runtime.storage.stateStore.listSessions(),
+          runMetadataByRunId: (sessionId) => this.runMetadataByRunId(sessionId),
+          nativeMailboxEvents: (session) => this.nativeMailboxEvents(session),
+          nativeSessionEvents: (sessionId, knownSession) => this.nativeSessionEvents(sessionId, knownSession),
+          ...(this.runLogRuntime ? { runLog: this.runLogRuntime } : {}),
+          ...(this.usageProjection ? { usageProjection: this.usageProjection } : {}),
+          ...(this.artifactProjection ? { artifactProjection: this.artifactProjection } : {}),
+          ...(this.hyperCells ? { hyperCells: this.hyperCells } : {}),
+          loadRunEventsForLease: (lease) =>
+            lease.runId && lease.sessionId
+              ? this.runtime.storage.eventStore.listRunEvents({
+                  sessionId: lease.sessionId,
+                  runId: lease.runId,
+                  limit: 500,
+                })
+              : [],
+          statusFromEvents: gatewayRunStatusFromEvents,
         })
       : undefined
     this.snapshotReader = new GatewaySnapshotReader({
@@ -1946,350 +1919,6 @@ export class LocalMainspringGateway {
     })
   }
 
-  private syncApprovalMetadata(): void {
-    if (!this.appState) return
-
-    for (const session of this.runtime.storage.stateStore.listSessions()) {
-      const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
-      const events = this.nativeSessionEvents(session.sessionId, session)
-
-      for (const event of events) {
-        const approvalId = approvalIdFromEvent(event)
-        if (!approvalId) continue
-
-        const runMetadata = runMetadataByRunId.get(event.runId)
-        const existing = this.appState.approvals.get(approvalId)
-        const payload = event.payload as Record<string, unknown>
-        const targetKey =
-          typeof payload.targetKey === 'string'
-            ? payload.targetKey
-            : existing?.targetKey
-        const status =
-          event.type === 'approval.requested'
-            ? existing && existing.status !== 'pending'
-              ? existing.status
-              : 'pending'
-            : event.type === 'approval.approved'
-              ? 'approved'
-              : 'denied'
-        const resolvedAt =
-          event.type === 'approval.approved' || event.type === 'approval.denied'
-            ? event.timestamp
-            : existing && existing.status !== 'pending'
-              ? existing.resolvedAt
-              : undefined
-
-        this.appState.approvals.upsert({
-          approvalId,
-          runId: event.runId,
-          sessionId: event.sessionId,
-          ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
-          ...(runMetadata?.agentId ? { agentId: runMetadata.agentId } : {}),
-          status,
-          ...(targetKey ? { targetKey } : {}),
-          requestedAt: existing?.requestedAt ?? event.timestamp,
-          ...(resolvedAt ? { resolvedAt } : {}),
-          metadata: {
-            ...(Array.isArray(payload.reasons)
-              ? { reasons: payload.reasons.map(String) }
-              : existing?.metadata && typeof existing.metadata === 'object'
-                ? existing.metadata
-                : {}),
-            ...(Array.isArray(payload.permissionCategories)
-              ? { permissionCategories: payload.permissionCategories.map(String) }
-              : {}),
-          },
-        })
-      }
-    }
-  }
-
-  private syncUsageLedger(): void {
-    const appState = this.appState
-    const projection = this.usageProjection
-    if (!appState || !projection) return
-
-    for (const session of this.runtime.storage.stateStore.listSessions()) {
-      const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
-      const sessionEvents = this.nativeSessionEvents(session.sessionId, session)
-      const usageEvents = sessionEvents.filter(
-        (event): event is RunEvent<UsageUpdatedRunEventPayload> => event.type === 'usage.updated',
-      )
-
-      for (const event of usageEvents) {
-        const runMetadata = runMetadataByRunId.get(event.runId)
-        const providerInitDetail = latestProviderInitDetailFromRunEvents(
-          sessionEvents.filter((candidate) => candidate.runId === event.runId),
-        )
-        projection.projectNativeEvent({
-          event,
-          runMetadata,
-          ...(providerInitDetail ? { providerInitDetail } : {}),
-        })
-      }
-    }
-
-    this.syncRunLogUsageLedger()
-  }
-
-  private syncRunLogUsageLedger(): void {
-    const runtime = this.runLogRuntime
-    const appState = this.appState
-    const projection = this.usageProjection
-    if (!runtime || !appState || !projection) return
-
-    for (const run of runtime.runs.list()) {
-      const runMetadata = appState.runs.get(run.runId) ?? undefined
-      const providerInit = runtime.store
-        .listEvents({ runId: run.runId, types: ['provider.init'], limit: 500 })
-        .at(-1)
-      const providerInitPayload = recordValue(providerInit?.payload)
-      const usageEvents = runtime.store.listEvents({
-        runId: run.runId,
-        types: ['usage.reported'],
-        limit: 10_000,
-      })
-
-      for (const event of usageEvents) {
-        projection.projectRunLogEvent({
-          event,
-          run,
-          runMetadata,
-          ...(providerInitPayload ? { providerInitPayload } : {}),
-        })
-      }
-    }
-  }
-
-  private syncToolCalls(): void {
-    if (!this.appState) return
-
-    for (const session of this.runtime.storage.stateStore.listSessions()) {
-      const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
-      const events = this.nativeSessionEvents(session.sessionId, session)
-
-      for (const event of events) {
-        let status: LocalGatewayToolCallRecord['status'] | null = null
-        if (event.type === 'tool.call.requested') status = 'requested'
-        if (event.type === 'tool.call.updated') status = 'updated'
-        if (event.type === 'tool.call.completed') status = 'completed'
-        if (event.type === 'tool.call.failed') status = 'failed'
-        if (event.type === 'tool.call.blocked') status = 'blocked'
-        if (!status) continue
-
-        const payload = recordValue(event.payload)
-        const toolCallId = textValue(payload?.toolCallId)
-        if (!toolCallId) continue
-        const existingToolCall = this.appState.toolCalls.get(toolCallId)
-        const toolName = textValue(payload?.name) ?? existingToolCall?.toolName ?? toolCallId
-
-        const runMetadata = runMetadataByRunId.get(event.runId)
-        const outputRecord =
-          event.type === 'tool.call.completed' || event.type === 'tool.call.failed'
-            ? recordValue(payload?.output)
-            : event.type === 'tool.call.blocked'
-              ? recordValue(payload?.output)
-              : null
-        const outputRef =
-          textValue(outputRecord?.artifactId)
-          ?? textValue(outputRecord?.artifact)
-          ?? textValue(outputRecord?.url)
-
-        this.appState.toolCalls.upsert({
-          toolCallId,
-          runId: event.runId,
-          sessionId: event.sessionId,
-          toolName,
-          status,
-          ...(runMetadata?.agentId ? { agentId: runMetadata.agentId } : {}),
-          ...(runMetadata?.workspaceId ? { workspaceId: runMetadata.workspaceId } : {}),
-          ...(outputRef ? { outputRef } : {}),
-          metadata: {
-            sourceEventId: event.eventId,
-            sourceSeq: event.seq,
-            ...(event.type === 'tool.call.blocked' && typeof payload?.status === 'string'
-              ? { blockedStatus: payload.status }
-              : {}),
-          },
-        })
-        this.syncExecutionCellProjection({
-          event,
-          runMetadata,
-          toolCallId,
-          toolName,
-          outputRecord,
-        })
-      }
-    }
-  }
-
-  private syncExecutionCellProjection(input: {
-    event: RunEvent
-    runMetadata: LocalGatewayRunMetadataRecord | undefined
-    toolCallId: string
-    toolName: string
-    outputRecord: Record<string, unknown> | null
-  }): void {
-    if (!this.appState || !input.runMetadata?.workspaceId || !input.outputRecord) return
-
-    const backendKey = textValue(input.outputRecord.backend)
-    const backendLabel = textValue(input.outputRecord.backendLabel)
-    if (!backendKey || !backendLabel) return
-
-    const workspaceId = input.runMetadata.workspaceId
-    const executionCellRecord = recordValue(input.outputRecord.executionCell)
-    const executionLeaseRecord = recordValue(input.outputRecord.executionLease)
-    const cellId = executionCellId(workspaceId, backendKey)
-    const backendSessionId = textValue(input.outputRecord.sessionId)
-    const executionStatus = textValue(input.outputRecord.status) ?? 'observed'
-    const backendUnsafe = input.outputRecord.backendUnsafe === true
-    const backendCapabilities =
-      backendCapabilityMetadata(input.outputRecord.backendCapabilities)
-      ?? backendCapabilityMetadata(executionCellRecord?.backendCapabilities)
-    const leaseId =
-      textValue(executionLeaseRecord?.leaseId)
-      ?? executionLeaseId(input.toolCallId, backendSessionId)
-    const existingCell = this.appState.cells.get(cellId)
-
-    if (existingCell) {
-      this.appState.cells.update({
-        cellId,
-        workspaceId,
-        label: backendLabel,
-        status: 'active',
-        metadata: {
-          source: 'execution-backend',
-          backend: backendKey,
-          backendLabel,
-          backendUnsafe,
-          ...(backendCapabilities ? { backendCapabilities } : {}),
-          ...(textValue(executionCellRecord?.cellKey)
-            ? { runtimeCellKey: textValue(executionCellRecord?.cellKey) }
-            : {}),
-          latestToolCallId: input.toolCallId,
-          latestExecutionStatus: executionStatus,
-        },
-      })
-    } else {
-      this.appState.cells.create({
-        cellId,
-        workspaceId,
-        label: backendLabel,
-        metadata: {
-          source: 'execution-backend',
-          backend: backendKey,
-          backendLabel,
-          backendUnsafe,
-          ...(backendCapabilities ? { backendCapabilities } : {}),
-          ...(textValue(executionCellRecord?.cellKey)
-            ? { runtimeCellKey: textValue(executionCellRecord?.cellKey) }
-            : {}),
-          latestToolCallId: input.toolCallId,
-          latestExecutionStatus: executionStatus,
-        },
-      })
-    }
-
-    this.appState.cellLeases.upsert({
-      leaseId,
-      cellId,
-      runId: input.event.runId,
-      sessionId: input.event.sessionId,
-      status: executionStatus === 'running' ? 'active' : 'released',
-      metadata: {
-        source: 'execution-backend',
-        toolCallId: input.toolCallId,
-        toolName: input.toolName,
-        backend: backendKey,
-        backendLabel,
-        backendUnsafe,
-        ...(backendCapabilities ? { backendCapabilities } : {}),
-        ...(textValue(executionLeaseRecord?.cellKey)
-          ? { runtimeCellKey: textValue(executionLeaseRecord?.cellKey) }
-          : {}),
-        ...(textValue(executionLeaseRecord?.status)
-          ? { runtimeLeaseStatus: textValue(executionLeaseRecord?.status) }
-          : {}),
-        ...(textValue(executionLeaseRecord?.acquiredAt)
-          ? { runtimeLeaseAcquiredAt: textValue(executionLeaseRecord?.acquiredAt) }
-          : {}),
-        ...(textValue(executionLeaseRecord?.releasedAt)
-          ? { runtimeLeaseReleasedAt: textValue(executionLeaseRecord?.releasedAt) }
-          : {}),
-        sourceEventId: input.event.eventId,
-        sourceSeq: input.event.seq,
-      },
-    })
-
-    const snapshotId = `cell_snapshot_${input.event.eventId}`.replace(/[^a-zA-Z0-9_-]/g, '_')
-    if (!this.appState.cellSnapshots.get(snapshotId)) {
-      this.appState.cellSnapshots.create({
-        snapshotId,
-        cellId,
-        leaseId,
-        label: `${backendLabel} ${executionStatus}`,
-        metadata: {
-          source: 'execution-backend',
-          toolCallId: input.toolCallId,
-          toolName: input.toolName,
-          backend: backendKey,
-          backendLabel,
-          backendUnsafe,
-          ...(backendCapabilities ? { backendCapabilities } : {}),
-          ...(textValue(executionCellRecord?.cellKey)
-            ? { runtimeCellKey: textValue(executionCellRecord?.cellKey) }
-            : {}),
-          ...(textValue(executionLeaseRecord?.leaseId)
-            ? { runtimeLeaseId: textValue(executionLeaseRecord?.leaseId) }
-            : {}),
-          executionStatus,
-        },
-      })
-    }
-  }
-
-  private syncArtifacts(): void {
-    const projection = this.artifactProjection
-    if (!projection) return
-
-    for (const session of this.runtime.storage.stateStore.listSessions()) {
-      const runMetadataByRunId = this.runMetadataByRunId(session.sessionId)
-      const rows = this.nativeMailboxEvents(session)
-
-      for (const row of rows) {
-        projection.project({
-          row,
-          ...('runId' in row.event && row.event.runId
-            ? { runMetadata: runMetadataByRunId.get(row.event.runId) }
-            : {}),
-        })
-      }
-    }
-  }
-
-  private syncRunCellLeases(): void {
-    this.hyperCells?.releaseTerminalRunLeases({
-      loadRunEvents: (lease) =>
-        lease.runId && lease.sessionId
-          ? this.runtime.storage.eventStore.listRunEvents({
-              sessionId: lease.sessionId,
-              runId: lease.runId,
-              limit: 500,
-            })
-          : [],
-      statusFromEvents: gatewayRunStatusFromEvents,
-    })
-  }
-
-  private syncDerivedAppState(): void {
-    if (!this.appState) return
-    this.syncApprovalMetadata()
-    this.syncToolCalls()
-    this.syncUsageLedger()
-    this.syncArtifacts()
-    this.syncRunCellLeases()
-  }
-
   private startCronScheduler(): void {
     if (this.cronTimer || !this.appState) return
     this.cronTimer = setInterval(() => {
@@ -2325,6 +1954,10 @@ export class LocalMainspringGateway {
     })()
 
     await this.cronTickInFlight
+  }
+
+  private syncDerivedAppState(): void {
+    this.projectionSynchronizer?.sync()
   }
 
   private requireAppState(): LocalGatewayAppStateStore {
