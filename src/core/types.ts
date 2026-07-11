@@ -453,6 +453,34 @@ export interface RunLogStore {
   markApprovalReceiptUsed(receiptId: string, runId: string): boolean
 }
 
+/**
+ * A per-execution tool session can add run-scoped tools (for example, a
+ * browser lease) and release them when the execution attempt ends. Session
+ * events are appended through the executor's run-bound emitter so adapters
+ * cannot write facts into another run.
+ */
+export type RuntimeToolSessionEvent = Omit<AppendRunEventInput, 'runId'>
+
+export type RuntimeToolSessionEventEmitter = (
+  event: RuntimeToolSessionEvent,
+) => RunLogEvent
+
+export interface RuntimeToolSession {
+  tools: RuntimeTool[]
+  close?: () => void | Promise<void>
+}
+
+export interface RuntimeToolSessionFactoryInput {
+  run: RunRecord
+  workspaceRoot: string
+  signal: AbortSignal
+  emitEvent: RuntimeToolSessionEventEmitter
+}
+
+export type RuntimeToolSessionFactory = (
+  input: RuntimeToolSessionFactoryInput,
+) => RuntimeToolSession | Promise<RuntimeToolSession>
+
 export interface ProviderRouter {
   resolve(input: {
     run: RunRecord
@@ -518,6 +546,8 @@ export interface RunExecutorOptions {
   approvalReceiptKeyMode?: 'local-dev' | 'configured'
   secretResolver?: RuntimeSecretResolver
   maxToolIterations?: number
+  /** Creates run-scoped tools and releases their external resources per attempt. */
+  toolSessionFactory?: RuntimeToolSessionFactory
 }
 
 export interface RunExecutionSummary {

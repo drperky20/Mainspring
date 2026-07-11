@@ -96,12 +96,16 @@ export class GatewayArtifactProjection {
       const artifactId = textValue(payload.artifactId)
       const kind = textValue(payload.kind)
       if (!artifactId || !kind) return
+      const label = textValue(payload.artifactLabel) ?? textValue(payload.label)
+      const mediaType = textValue(payload.mediaType)
       this.projectArtifact({
         artifactId,
         runId: input.run.runId,
         sessionId: input.run.sessionId,
         ...(workspaceId ? { workspaceId } : {}),
         kind,
+        ...(label ? { label } : {}),
+        ...(mediaType ? { mediaType } : {}),
         metadata: {
           runtime: 'runlog',
           sourceEventId: input.event.eventId,

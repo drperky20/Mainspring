@@ -15,7 +15,7 @@ Tool areas:
 - skills
 - diagnostics
 
-Browser tools validate initial `browser.open` targets as public HTTP(S) URLs and, when the adapter exposes `currentUrl`, re-check the adapter-reported page URL after open and before/after click, type, snapshot, and screenshot actions. This reduces localhost/metadata drift after redirects or in-page navigation, but it is still browser automation, not a security boundary.
+Browser tools validate initial `browser.open` targets as public HTTP(S) URLs and, when the adapter exposes `currentUrl`, re-check the adapter-reported page URL after open and before/after click, type, snapshot, and screenshot actions. `PlaywrightBrowserRuntimeAdapter` is an optional host-owned lease implementation: it starts/stops Playwright tracing, assigns bounded snapshot element refs, writes screenshots and traces below a configured artifact root, and emits run-bound `browser.lease.*` / `artifact.created` events without returning host paths to the provider. `createPlaywrightBrowserToolSessionFactory` attaches one such lease to a RunLog execution attempt and releases it on completion, cancellation, or approval pause. This is still browser automation, not a security boundary or VM isolation product.
 
 Process tools can target:
 
@@ -37,6 +37,9 @@ Execution backends are resolved through `ExecutionBackendRegistry`. The bundled 
 - WSL and Docker routes are not full VM isolation.
 - `HyperCellScheduler` is not a full HyperCell VM pool.
 - `cells:check:integration` intentionally refuses host execution.
+- Playwright browser leases are optional host adapters; they do not provide a browser sandbox, hosted identity, or cross-restart page persistence.
+- A browser lease is scoped to one execution attempt. Approval pauses release
+  the page/context, and a resumed attempt must create a fresh lease.
 
 ## How To Verify
 

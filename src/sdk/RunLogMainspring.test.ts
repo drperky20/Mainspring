@@ -337,4 +337,72 @@ describe('RunLogMainspring SDK host', () => {
     expect(app.runs.project(run.record.runId).run.computerId).toBe('computer_wsl')
     expect(seenComputerIds).toEqual(['computer_wsl'])
   })
+
+  it('creates and closes run-scoped tool sessions with run-bound lifecycle events', async () => {
+    const root = tempRoot()
+    const lifecycle = { created: 0, closed: 0 }
+    const sessionTool: RuntimeTool = {
+      manifest: builtinManifest({
+        key: 'session.scoped',
+        name: 'Session Scoped Tool',
+        description: 'A tool created only for one execution attempt.',
+        permissions: { filesystem: 'read' },
+        approval: {},
+        toolType: 'builtin',
+      }),
+      execute: () => ({ session: 'active' }),
+    }
+    const app = runtime({
+      rootPath: root,
+      provider: new MockProvider((input) => {
+        const hasToolResult = input.messages?.some((message) => message.role === 'tool')
+        return hasToolResult
+          ? [{ type: 'event', event: { type: 'result', text: 'session complete' } }]
+          : [{
+              type: 'event',
+              event: {
+                type: 'tool_call',
+                name: 'session.scoped',
+                toolCallId: 'session_scoped_call',
+                input: {},
+              },
+            }]
+      }),
+      tools: [],
+      toolSessionFactory: async ({ emitEvent }) => {
+        lifecycle.created += 1
+        emitEvent({
+          type: 'browser.lease.created',
+          visibility: 'public',
+          payload: { leaseId: 'lease_session_scoped' },
+        })
+        return {
+          tools: [sessionTool],
+          close: () => {
+            lifecycle.closed += 1
+            emitEvent({
+              type: 'browser.lease.released',
+              visibility: 'public',
+              payload: { leaseId: 'lease_session_scoped', status: 'released' },
+            })
+          },
+        }
+      },
+      agent: {
+        agentId: 'agent_session_scoped',
+        instructions: 'Use the scoped session tool.',
+        tools: ['session.scoped'],
+        capabilities: ['provider', 'tools', 'browser'],
+      },
+    })
+
+    const run = app.runs.start({ input: 'Use the session tool.' })
+    await run.drainUntilIdle()
+
+    expect(run.status()).toBe('completed')
+    expect(lifecycle).toEqual({ created: 1, closed: 1 })
+    expect(run.events().map((event) => event.type)).toEqual(
+      expect.arrayContaining(['browser.lease.created', 'browser.lease.released']),
+    )
+  })
 })

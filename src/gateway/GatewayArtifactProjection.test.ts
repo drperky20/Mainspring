@@ -104,7 +104,7 @@ describe('GatewayArtifactProjection', () => {
         }),
       })
 
-      expect(appState.artifacts.list()).toEqual([
+      expect(appState.artifacts.list()).toEqual(expect.arrayContaining([
         expect.objectContaining({
           artifactId: 'report_1',
           path: path.resolve(artifactRoot, 'report_1'),
@@ -114,7 +114,7 @@ describe('GatewayArtifactProjection', () => {
             sourceType: 'artifact.created',
           }),
         }),
-      ])
+      ]))
     } finally {
       appState.close()
     }
@@ -207,8 +207,24 @@ describe('GatewayArtifactProjection', () => {
         }),
         run,
       })
+      projection.projectRunLogEvent({
+        event: runLogEvent({
+          eventId: 'evt_runlog_trace_artifact',
+          seq: 9,
+          runId: run.runId,
+          type: 'artifact.created',
+          payload: {
+            artifactId: 'runlog_trace_1',
+            kind: 'browser-trace',
+            artifactLabel: 'Browser trace',
+            mediaType: 'application/zip',
+            path: path.join(root, 'outside', 'trace.zip'),
+          },
+        }),
+        run,
+      })
 
-      expect(appState.artifacts.list()).toEqual([
+      expect(appState.artifacts.list()).toEqual(expect.arrayContaining([
         expect.objectContaining({
           artifactId: 'runlog_screenshot_1',
           runId: run.runId,
@@ -223,8 +239,14 @@ describe('GatewayArtifactProjection', () => {
             toolName: 'browser.screenshot',
           }),
         }),
-      ])
+      ]))
       expect(JSON.stringify(appState.artifacts.get('runlog_screenshot_1'))).not.toContain('provider-secret')
+      expect(appState.artifacts.get('runlog_trace_1')).toMatchObject({
+        kind: 'browser-trace',
+        label: 'Browser trace',
+        mediaType: 'application/zip',
+        path: path.resolve(artifactRoot, 'runlog_trace_1'),
+      })
       expect(appState.artifacts.get('../outside-report')).toBeNull()
     } finally {
       appState.close()

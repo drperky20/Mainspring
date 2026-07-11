@@ -26,6 +26,7 @@ import type {
   RunLogEvent,
   RunLogStore,
   RunRecord,
+  RuntimeToolSession,
   WorkspaceAdapter,
   WorkspaceLease,
 } from './types.js'
@@ -67,7 +68,15 @@ function defaultPolicy(agent: AgentSpec, run: RunRecord, policy?: RuntimePolicy)
 function toolSchemaSubset(tools: readonly RuntimeTool[], allowedTools: readonly string[]): RuntimeTool[] {
   if (allowedTools.length === 0) return []
   const allowed = new Set(allowedTools)
-  return tools.filter((tool) => allowed.has(tool.manifest.key))
+  const selected: RuntimeTool[] = []
+  const seen = new Set<string>()
+  for (let index = tools.length - 1; index >= 0; index -= 1) {
+    const tool = tools[index]
+    if (!tool || !allowed.has(tool.manifest.key) || seen.has(tool.manifest.key)) continue
+    selected.unshift(tool)
+    seen.add(tool.manifest.key)
+  }
+  return selected
 }
 
 function fallbackWorkspaceRoot(run: RunRecord, root?: string): string {
@@ -249,6 +258,7 @@ export class RunLogExecutor {
     let checkpointsAppended = 0
     let workspaceLease: WorkspaceLease | null = null
     let workspaceLock: WorkspaceExecutionLock | null = null
+    let toolSession: RuntimeToolSession | null = null
     let finalStatus = run.status
 
     try {
@@ -274,8 +284,19 @@ export class RunLogExecutor {
           if (this.store.getRun(run.runId)?.status === 'cancelled') {
             finalStatus = 'cancelled'
           } else {
+            toolSession = this.options.toolSessionFactory
+              ? await this.options.toolSessionFactory({
+                  run,
+                  workspaceRoot: workspaceLease.root,
+                  signal: executionController.signal,
+                  emitEvent: (event) => this.store.appendEvent({ runId: run.runId, ...event }),
+                })
+              : null
+            const executionTools = toolSession
+              ? [...this.tools, ...toolSession.tools]
+              : this.tools
             const allowedTools = effectiveAllowedTools(agent, run, this.options.policy)
-            const selectedTools = toolSchemaSubset(this.tools, allowedTools)
+            const selectedTools = toolSchemaSubset(executionTools, allowedTools)
             const policy = defaultPolicy(agent, run, this.options.policy)
             const approvedReceipt = this.store.getApprovedUnusedReceipt(run.runId)
 
@@ -344,6 +365,20 @@ export class RunLogExecutor {
       }
       if (this.activeExecutionControllers.get(run.runId) === executionController) {
         this.activeExecutionControllers.delete(run.runId)
+      }
+      if (toolSession?.close) {
+        try {
+          await toolSession.close()
+        } catch {
+          this.store.appendEvent({
+            runId: run.runId,
+            type: 'runtime.warning',
+            payload: {
+              message: 'A run-scoped tool session failed to close cleanly.',
+              phase: 'runtime.tool_session.close',
+            },
+          })
+        }
       }
       if (workspaceLease) {
         await workspaceLease.release()

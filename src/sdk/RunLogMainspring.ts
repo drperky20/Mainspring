@@ -18,6 +18,7 @@ import {
   type RunLogStore,
   type RunLogToolCallSummary,
   type RunRecord,
+  type RuntimeToolSessionFactory,
 } from '../core/index.js'
 import {
   projectRunLogRun,
@@ -57,6 +58,7 @@ export interface CreateRunLogMainspringOptions {
   retryBaseMs?: number
   retryCapMs?: number
   maxToolIterations?: number
+  toolSessionFactory?: RuntimeToolSessionFactory
 }
 
 export type StartRunLogRunInput = Omit<RunIntent, 'agentId'> & {
@@ -161,6 +163,7 @@ export class RunLogMainspring {
       retryBaseMs: options.retryBaseMs,
       retryCapMs: options.retryCapMs,
       maxToolIterations: options.maxToolIterations,
+      toolSessionFactory: options.toolSessionFactory,
     })
 
     this.putAgent({

@@ -379,6 +379,23 @@ export {
 } from './tools/BrowserTool.js'
 export type { BrowserRuntimeAdapter, BrowserToolOptions } from './tools/BrowserTool.js'
 export {
+  PlaywrightBrowserRuntimeAdapter,
+  createPlaywrightBrowserRuntimeAdapter,
+  createPlaywrightBrowserToolSession,
+  createPlaywrightBrowserToolSessionFactory,
+} from './tools/PlaywrightBrowserAdapter.js'
+export type {
+  CreatePlaywrightBrowserToolSessionFactoryOptions,
+  PlaywrightBrowserArtifact,
+  PlaywrightBrowserContextLike,
+  PlaywrightBrowserElementRef,
+  PlaywrightBrowserLeaseCloseResult,
+  PlaywrightBrowserLocatorLike,
+  PlaywrightBrowserPageLike,
+  PlaywrightBrowserRuntimeAdapterOptions,
+  PlaywrightBrowserTracingLike,
+} from './tools/PlaywrightBrowserAdapter.js'
+export {
   createMainspringDiagnosticsTool,
   createMainspringEventTailTool,
   createMainspringTools,

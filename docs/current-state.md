@@ -124,7 +124,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - `GatewayCronScheduler` owns polling timer lifecycle, due-row filtering, overlapping-tick coalescing, and last-error/last-tick status; `LocalGateway` retains the policy decision, schedule cursor, and runtime dispatch authority.
 - Local-agent security regression coverage now exists in `src/security/agent-security-regression.test.ts` with a companion matrix in `docs/security-redteam-matrix.md`.
   - The focused corpus covers host shell approval, loader/env-var injection, network-to-shell hard blocks, path traversal, symlink/junction escape, workspace mutation approval, browser/local URL policy, web-fetch SSRF rejection, memory and skill write approval, MCP/tool bridge policy routing, headless cron denial, cron grant mutation, and budget control/acknowledgement authority.
-  - The matrix explicitly records partial/deferred classes such as cross-agent spoofing, subagent privilege expansion, remote skill trust, hosted provenance trust, and browser trace/artifact policy.
+  - The optional `PlaywrightBrowserRuntimeAdapter` provides a host-owned, run-scoped browser lease with bounded refs, public-target enforcement, screenshot/trace artifact events, and release hooks. The matrix records that browser automation is not an isolation boundary and keeps hosted browser identity and browser persistence outside this package.
 - Memory, skill, and local template provenance now has a canonical module:
   - `src/provenance/ProvenanceReview.ts` scans memory mutations, skill manifests, and local template catalog entries with deterministic content hashes.
   - staged review records persist in `.mainspring/provenance-review.jsonl`.
@@ -159,7 +159,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Broader provider-account auth beyond env/local managed refs, such as OAuth provider auth or hosted KMS.
 - AI SDK streaming transport endpoint for the console chat surface; the UI package dependency exists, but gateway chat dispatch still goes through `/runs/start`.
 - Postgres, Redis/BullMQ, S3/R2/MinIO, and managed-cloud control-plane adapters. Docker execution plus local/container/VPS/Kubernetes deployment drivers exist, but the Kubernetes driver has not been certified against a real production cluster and none of these are VM isolation.
-- Browser lease adapter with Playwright trace/artifact capture.
+- The package does not implement hosted browser process ownership, browser identity, cross-restart page persistence, or browser process isolation.
 - Browser/page multimodal context and provider-specific content-part adapters.
 - Per-provider and richer usage projections beyond the persisted run-summary and tool-call cursors.
 - Remote skill marketplace trust, hosted key revocation/discovery, payments, and third-party reputation. Signed remote template catalog distribution is implemented separately with explicit publisher/key pins.

@@ -135,7 +135,7 @@ Current Mainspring response:
 | RuntimeKernel/mailbox retirement | `docs/migration-runlog.md` says legacy path remains compatibility; `src/runner/main.ts`, `src/sdk/Mainspring.ts`, and gateway tests still import it. | Keep compatibility; plan removal only after gateway/SDK behavior is RunLog-backed. |
 | Non-tool host side-effect policy | Backlog tracks channel sends/provider config/artifact publish/future subagents as pending DecisionRecord adapters. | Add one adapter slice at a time with tests. |
 | Taint labels | Security matrix says taint beyond scan findings remains incomplete. | Add taint metadata for web/email/file-derived memory/skill writes. |
-| Browser lease/artifact traces | Current docs mark browser lease adapter and trace artifacts incomplete. | Implement lazy browser lease artifact slice before claiming browser trace coverage. |
+| Browser lease/artifact traces | The optional host-owned Playwright adapter now provides bounded refs, public-target revalidation, screenshot/trace artifacts, and run-bound lease events. | Keep browser process ownership, hosted identity, and cross-restart page persistence in a future host adapter; a future isolation adapter must remain explicit. |
 | Subagents | Data model hints exist, helper API incomplete. | Implement child RunLog runs with parent authority attenuation. |
 | Final release audit | `release:check` passes, but final report cannot claim full completion until all required artifacts exist. | Continue completion audit after research/reviews land. |
 

@@ -68,6 +68,10 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Canonical RunLog artifact-created and completed-tool outputs now feed the gateway
   artifact inventory through the same bounded-ID/path-derived projection seam as
   compatibility events.
+- Optional host-owned Playwright browser leases now create bounded fresh element
+  refs, revalidate public navigation targets, capture root-contained screenshots
+  and traces, and emit run-bound lease/artifact events. RunLog can attach and
+  release these tools per execution attempt through `toolSessionFactory`.
 
 ### Changed
 - Verification lane standardized around `pnpm verify`.
@@ -88,5 +92,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Pinned remote-catalog sync and verified local/signed-remote marketplace installs now persist hash-only `marketplace.catalog.sync`/`marketplace.install` authority before registry or file writes, propagate hosted identity through topology provisioning, and record failures without raw template content or workspace roots.
 - Gateway compatibility and RunLog ingress now persist hash-only `run.enqueue` authority before runtime enqueue, `run.cancel` before mailbox or RunLog cancellation, and `approval.resolve` before legacy lifecycle mutation or RunLog receipt creation; run/session bindings fail closed, outcome/failure rows retain decision links, and hosted principals replace browser attribution.
 - Gateway audit timestamps now advance past the latest durable row so same-tick authorization and outcome records retain observable insertion order.
+- Browser lease artifacts never return host paths to the provider; screenshot and
+  trace IDs are opaque, size-bounded, and projected beneath the configured
+  artifact root. Browser automation remains an explicit host adapter, not a
+  security boundary.
 - Artifact downloads now resolve against the runtime artifact root after realpath validation and stream an already-open file handle; untrusted media types fall back to `application/octet-stream`.
 - App-state artifact and usage mutations are separated from their read surfaces through an explicit runtime projection namespace; invalid negative, fractional, non-finite, or oversized numeric values are rejected before ledger writes.
