@@ -22,6 +22,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - `GatewayRunInputResolver` now owns the shared session, workspace/client,
   agent, provider-profile, and runtime-profile binding checks used by gateway
   and RunLog ingress plus cron preparation.
+- `GatewayCronScheduler` now owns bounded cron polling lifecycle, due-row
+  selection, overlapping-tick coalescing, timer cleanup, and operator-visible
+  tick errors while `LocalGateway` retains policy and run orchestration.
 - `ConsoleClientWorkspaceFrame` now owns the selected-client header, workspace
   context, client tabs, and two-column shell while the connected app retains
   feature state and command orchestration.

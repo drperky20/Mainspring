@@ -128,6 +128,7 @@ import { GatewayTopologyControl } from './GatewayTopologyControl.js'
 import { GatewayMarketplaceControl } from './GatewayMarketplaceControl.js'
 import { GatewayRunControl } from './GatewayRunControl.js'
 import { GatewayRunInputResolver } from './GatewayRunInputResolver.js'
+import { GatewayCronScheduler } from './GatewayCronScheduler.js'
 import { GatewayArtifactAccess, type LocalGatewayArtifactFile } from './GatewayArtifactAccess.js'
 import { GatewayArtifactProjection } from './GatewayArtifactProjection.js'
 import { GatewayUsageProjection } from './GatewayUsageProjection.js'
@@ -879,8 +880,6 @@ type LocalGatewaySnapshotReadCache = {
  */
 export class LocalMainspringGateway {
   readonly appState?: LocalGatewayAppStateStore
-  private readonly cronEnabled: boolean
-  private readonly cronPollIntervalMs: number
   private readonly now: () => Date
   private readonly deploymentRepoRoot: string
   private readonly deploymentCommandRunner?: LocalGatewayDeploymentCommandRunner
@@ -902,11 +901,8 @@ export class LocalMainspringGateway {
   private readonly budgetEvaluator = new GatewayBudgetEvaluator()
   private readonly runInputResolver?: GatewayRunInputResolver
   private readonly projectionSynchronizer?: GatewayProjectionSynchronizer<LocalGatewayBudgetEvaluation>
+  private readonly cronScheduler: GatewayCronScheduler
   private snapshotReadCache?: LocalGatewaySnapshotReadCache
-  private cronTimer: NodeJS.Timeout | null = null
-  private cronLastTickAt?: string
-  private cronLastError?: string
-  private cronTickInFlight: Promise<void> | null = null
 
   constructor(
     private readonly runtime: Mainspring,
@@ -932,8 +928,6 @@ export class LocalMainspringGateway {
       projectSession: (sessionId, knownSession) => this.listRuns(sessionId, knownSession),
       projectionFromMetadata: compatibilityRunProjectionFromMetadata,
     })
-    this.cronEnabled = options.cron?.enabled ?? false
-    this.cronPollIntervalMs = Math.max(1_000, options.cron?.pollIntervalMs ?? 30_000)
     this.now = options.cron?.now ?? (() => new Date())
     this.deploymentRepoRoot = options.deployments?.repoRoot ?? process.cwd()
     this.deploymentCommandRunner = options.deployments?.commandRunner
@@ -1024,8 +1018,19 @@ export class LocalMainspringGateway {
                 })
               : [],
           statusFromEvents: gatewayRunStatusFromEvents,
-        })
+      })
       : undefined
+    this.cronScheduler = new GatewayCronScheduler({
+      enabled: options.cron?.enabled ?? false,
+      pollIntervalMs: options.cron?.pollIntervalMs ?? 30_000,
+      now: this.now,
+      ...(this.appState
+        ? { listSchedules: () => this.appState!.cronSchedules.list({ enabled: true }) }
+        : {}),
+      runSchedule: (scheduleId, now) => {
+        this.runCronScheduleNow(scheduleId, 'scheduler', now)
+      },
+    })
     this.snapshotReader = new GatewaySnapshotReader({
       runtime: this.runtime,
       ...(this.runLogRuntime ? { runLog: this.runLogRuntime } : {}),
@@ -1042,9 +1047,7 @@ export class LocalMainspringGateway {
       cellStatus: () => this.cellStatus(),
       workerState: () => this.runLogWorkerState,
     })
-    if (this.cronEnabled && this.appState) {
-      this.startCronScheduler()
-    }
+    this.cronScheduler.start()
   }
 
   private readonly runLogRuntime?: RunLogMainspring
@@ -1118,15 +1121,9 @@ export class LocalMainspringGateway {
       this.cronControl().previewGrant(scheduleId),
     createGrant: (input: LocalGatewayCreateCronGrantInput): LocalGatewayCronGrantPreview =>
       this.cronControl().createGrant(input),
-    status: (): LocalGatewayCronStatus => ({
-      enabled: this.cronEnabled,
-      running: this.cronTimer !== null,
-      pollIntervalMs: this.cronPollIntervalMs,
-      ...(this.cronLastTickAt ? { lastTickAt: this.cronLastTickAt } : {}),
-      ...(this.cronLastError ? { lastError: this.cronLastError } : {}),
-    }),
+    status: (): LocalGatewayCronStatus => this.cronScheduler.status(),
     tick: async (): Promise<void> => {
-      await this.runCronTick()
+      await this.cronScheduler.tick()
     },
   }
 
@@ -1926,43 +1923,6 @@ export class LocalMainspringGateway {
         : {}),
       ...(Object.keys(runMetadata).length > 0 ? { metadata: runMetadata } : {}),
     })
-  }
-
-  private startCronScheduler(): void {
-    if (this.cronTimer || !this.appState) return
-    this.cronTimer = setInterval(() => {
-      void this.runCronTick()
-    }, this.cronPollIntervalMs)
-    this.cronTimer.unref?.()
-  }
-
-  private async runCronTick(): Promise<void> {
-    if (!this.appState) return
-    if (this.cronTickInFlight) {
-      await this.cronTickInFlight
-      return
-    }
-
-    this.cronTickInFlight = (async () => {
-      const now = this.now()
-      const nowIso = now.toISOString()
-      try {
-        for (const schedule of this.appState!.cronSchedules.list({ enabled: true })) {
-          if (!schedule.nextRunAt || schedule.nextRunAt > nowIso) continue
-          this.runCronScheduleNow(schedule.scheduleId, 'scheduler', now)
-        }
-        this.cronLastTickAt = nowIso
-        this.cronLastError = undefined
-      } catch (error) {
-        this.cronLastTickAt = nowIso
-        this.cronLastError = error instanceof Error ? error.message : String(error)
-        throw error
-      } finally {
-        this.cronTickInFlight = null
-      }
-    })()
-
-    await this.cronTickInFlight
   }
 
   private syncDerivedAppState(): void {

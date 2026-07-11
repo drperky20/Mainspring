@@ -112,7 +112,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - scoped cron grants bind agent, prompt hash, schedule hash, allowed tools, expiration, and execution count.
   - due cron rows append `policy.decision.recorded` before `run.queued` or `run.failed`.
   - prompt mutation, grant expiry, execution-limit exhaustion, and schedule mismatch fail closed in focused tests.
-- Gateway cron scheduling now uses the same RunLog cron policy path when the gateway is configured with a RunLog host:
+  - Gateway cron scheduling now uses the same RunLog cron policy path when the gateway is configured with a RunLog host:
   - provider-only schedules become ordinary RunLog runs with `cron.due` and `policy.decision.recorded` events.
   - side-effecting schedules fail closed without a scoped grant.
   - `GET /cron/:scheduleId/grant` previews the current scoped grant decision without returning the raw prompt.
@@ -121,6 +121,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - sanitized cron schedule DTOs expose grant id, expiry, execution counts, allowed tools, and last decision state.
   - the React console exposes dedicated controls to review the current grant decision and create a short-lived scoped grant without showing raw prompt hashes or secret refs.
   - gateways constructed without a RunLog host keep the mailbox compatibility dispatch path for older embedders and migration verifiers.
+  - `GatewayCronScheduler` owns polling timer lifecycle, due-row filtering, overlapping-tick coalescing, and last-error/last-tick status; `LocalGateway` retains the policy decision, schedule cursor, and runtime dispatch authority.
 - Local-agent security regression coverage now exists in `src/security/agent-security-regression.test.ts` with a companion matrix in `docs/security-redteam-matrix.md`.
   - The focused corpus covers host shell approval, loader/env-var injection, network-to-shell hard blocks, path traversal, symlink/junction escape, workspace mutation approval, browser/local URL policy, web-fetch SSRF rejection, memory and skill write approval, MCP/tool bridge policy routing, headless cron denial, cron grant mutation, and budget control/acknowledgement authority.
   - The matrix explicitly records partial/deferred classes such as cross-agent spoofing, subagent privilege expansion, remote skill trust, hosted provenance trust, and browser trace/artifact policy.
