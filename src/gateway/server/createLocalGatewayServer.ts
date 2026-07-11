@@ -898,7 +898,7 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/budgets') {
         const body = await this.readJson(request)
         const parsed = CreateBudgetRequestSchema.parse(body)
-        const budget = this.createBudget(parsed)
+        const budget = this.createBudget(parsed, principal?.actor)
         this.writeJson(response, 201, sanitizeGatewayResponse({
           budget: consoleBudget(budget),
         }))
@@ -938,7 +938,7 @@ export class LocalGatewayHttpServer {
         const budgetId = decodeURIComponent(path.slice('/budgets/'.length))
         const body = await this.readJson(request)
         const parsed = UpdateBudgetRequestSchema.parse(body)
-        const budget = this.updateBudget(budgetId, parsed)
+        const budget = this.updateBudget(budgetId, parsed, principal?.actor)
         this.writeJson(response, 200, sanitizeGatewayResponse({
           budget: consoleBudget(budget),
         }))
@@ -958,7 +958,7 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/runs/start') {
         const body = await this.readJson(request)
         const parsed = StartRunRequestSchema.parse(body)
-        const run = await this.startRun(parsed)
+        const run = await this.startRun(parsed, principal?.actor)
         this.writeJson(response, 202, sanitizeGatewayResponse({ run: consoleRunDispatch(run) }))
         return
       }
@@ -996,7 +996,10 @@ export class LocalGatewayHttpServer {
         }
         const body = await this.readJson(request)
         const parsed = StartRunRequestSchema.parse(body)
-        const result = await this.options.gateway.runLog.runs.start(parsed)
+        const result = await this.options.gateway.runLog.runs.start({
+          ...parsed,
+          ...(principal?.actor ? { actor: principal.actor } : {}),
+        })
         this.writeJson(response, 202, sanitizeGatewayResponse(runLogProjectionResponse(result.projection)))
         return
       }
@@ -1129,7 +1132,7 @@ export class LocalGatewayHttpServer {
 
       if (request.method === 'DELETE' && path.startsWith('/budgets/')) {
         const budgetId = decodeURIComponent(path.slice('/budgets/'.length))
-        this.writeJson(response, 200, sanitizeGatewayResponse(this.deleteBudget(budgetId)))
+        this.writeJson(response, 200, sanitizeGatewayResponse(this.deleteBudget(budgetId, principal?.actor)))
         return
       }
 
@@ -1312,15 +1315,16 @@ export class LocalGatewayHttpServer {
     return method === 'GET' && (path === '/events/stream' || path.startsWith('/artifacts/'))
   }
 
-  private async startRun(input: StartRunRequest) {
+  private async startRun(input: StartRunRequest, actor?: string) {
+    const gatewayInput = { ...input, ...(actor ? { actor } : {}) }
     if (this.options.gateway.runLog?.available()) {
-      const result = await this.options.gateway.runLog.runs.start(input)
+      const result = await this.options.gateway.runLog.runs.start(gatewayInput)
       return result.run
     }
     if (input.providerProfileId) {
-      return this.options.gateway.runs.startFromAppState(input)
+      return this.options.gateway.runs.startFromAppState(gatewayInput)
     }
-    return this.options.gateway.runs.start(input)
+    return this.options.gateway.runs.start(gatewayInput)
   }
 
   private createClient(input: CreateClientRequest) {
@@ -1466,8 +1470,8 @@ export class LocalGatewayHttpServer {
     return this.options.gateway.cron.create({ ...input, ...(actor ? { actor } : {}) })
   }
 
-  private createBudget(input: CreateBudgetRequest) {
-    return this.options.gateway.budgets.create(input)
+  private createBudget(input: CreateBudgetRequest, actor?: string) {
+    return this.options.gateway.budgets.create({ ...input, ...(actor ? { actor } : {}) })
   }
 
   private createDeploymentTarget(input: CreateDeploymentTargetRequest) {
@@ -1487,10 +1491,11 @@ export class LocalGatewayHttpServer {
     })
   }
 
-  private updateBudget(budgetId: string, input: UpdateBudgetRequest) {
+  private updateBudget(budgetId: string, input: UpdateBudgetRequest, actor?: string) {
     return this.options.gateway.budgets.update({
       budgetId,
       ...input,
+      ...(actor ? { actor } : {}),
     })
   }
 
@@ -1509,8 +1514,8 @@ export class LocalGatewayHttpServer {
     return this.options.gateway.cron.delete(scheduleId, actor)
   }
 
-  private deleteBudget(budgetId: string) {
-    return this.options.gateway.budgets.delete(budgetId)
+  private deleteBudget(budgetId: string, actor?: string) {
+    return this.options.gateway.budgets.delete(budgetId, actor)
   }
 
   private runCronNow(scheduleId: string) {

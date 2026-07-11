@@ -4267,7 +4267,7 @@ describe('LocalGatewayHttpServer', () => {
     }
   })
 
-  it('uses hosted identity instead of a browser-supplied cron grant actor', async () => {
+  it('uses hosted identity for cron grants and budget controls', async () => {
     const root = makeTempRoot('mainspring-gateway-hosted-cron-identity-')
     const sessionsRoot = path.join(root, 'sessions')
     const workspaceRoot = path.join(root, 'workspace')
@@ -4284,6 +4284,11 @@ describe('LocalGatewayHttpServer', () => {
       rootPath: path.join(root, 'runlog'),
       provider: new MockProvider([]),
       approvalReceiptKey: 'gateway-hosted-cron-identity-test-key',
+    })
+    const workspace = appState.workspaces.create({
+      workspaceId: 'workspace_hosted_budget_identity',
+      name: 'Hosted Budget Workspace',
+      root: workspaceRoot,
     })
     const session = runtime.sessions.create({
       sessionId: 'session_hosted_cron_identity',
@@ -4359,6 +4364,37 @@ describe('LocalGatewayHttpServer', () => {
       })
       expect(deletedResponse.status).toBe(200)
 
+      const createdBudgetResponse = await fetch(`${started.url}/budgets`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          scopeType: 'workspace',
+          scopeId: workspace.workspaceId,
+          label: 'Hosted budget',
+          maxEstimatedCostUsd: 20,
+          warnAtUsd: 15,
+          actor: 'browser-spoofed-budget-operator',
+        }),
+      })
+      const createdBudget = await createdBudgetResponse.json() as { budget: { budgetId: string } }
+      expect(createdBudgetResponse.status).toBe(201)
+
+      const updatedBudgetResponse = await fetch(
+        `${started.url}/budgets/${encodeURIComponent(createdBudget.budget.budgetId)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ label: 'Hosted budget v2', actor: 'browser-spoofed-budget-operator' }),
+        },
+      )
+      expect(updatedBudgetResponse.status).toBe(200)
+
+      const deletedBudgetResponse = await fetch(
+        `${started.url}/budgets/${encodeURIComponent(createdBudget.budget.budgetId)}`,
+        { method: 'DELETE', headers },
+      )
+      expect(deletedBudgetResponse.status).toBe(200)
+
       const events = appState.auditEvents.list({ category: 'cron' })
       for (const action of [
         'schedule.created.authorized',
@@ -4370,8 +4406,19 @@ describe('LocalGatewayHttpServer', () => {
           event.action === action && event.targetId === created.cronSchedule.scheduleId
         ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
       }
+      const budgetEvents = appState.auditEvents.list({ category: 'billing' })
+      for (const action of [
+        'budget.created.authorized',
+        'budget.updated.authorized',
+        'budget.deleted.authorized',
+      ]) {
+        expect(budgetEvents.find((event) => (
+          event.action === action && event.targetId === workspace.workspaceId
+        ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
+      }
       expect(JSON.stringify(events)).not.toContain('browser-spoofed-cron-operator')
       expect(JSON.stringify(events)).not.toContain('HOSTED_CRON_TEST_SECRET')
+      expect(JSON.stringify(budgetEvents)).not.toContain('browser-spoofed-budget-operator')
     } finally {
       await server.stop()
       runLog.close()

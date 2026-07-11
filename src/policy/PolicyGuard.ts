@@ -21,6 +21,9 @@ export type PolicyOperation =
   | 'provenance.review.apply'
   | 'cron.schedule.write'
   | 'cron.grant.create'
+  | 'budget.write'
+  | 'budget.warning.acknowledge'
+  | 'budget.run.block'
   | 'deployment.target.write'
   | 'deployment.execute'
 

@@ -123,6 +123,11 @@ import {
   type LocalGatewayCronScheduleDraftInput,
   type UpdateLocalGatewayCronScheduleDraftInput,
 } from './GatewayCronControl.js'
+import {
+  GatewayBudgetControl,
+  type LocalGatewayBudgetDraftInput,
+  type UpdateLocalGatewayBudgetDraftInput,
+} from './GatewayBudgetControl.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
@@ -145,6 +150,10 @@ export type {
   LocalGatewayCronScheduleDraftInput,
   UpdateLocalGatewayCronScheduleDraftInput,
 } from './GatewayCronControl.js'
+export type {
+  LocalGatewayBudgetDraftInput,
+  UpdateLocalGatewayBudgetDraftInput,
+} from './GatewayBudgetControl.js'
 export type {
   LocalGatewayDeploymentCommandRunner,
   LocalGatewayDeploymentExecutionResult,
@@ -174,8 +183,6 @@ import type {
   LocalGatewayToolCallRecord,
   UpdateLocalGatewayCronScheduleInput,
   UpdateLocalGatewayProviderProfileInput,
-  CreateLocalGatewayBudgetInput,
-  UpdateLocalGatewayBudgetInput,
   LocalGatewayUsageLedgerEntryRecord,
   LocalGatewayWorkspaceRecord,
 } from './AppStateStore.js'
@@ -357,6 +364,8 @@ export type LocalGatewayStartRunInput = StartRunInput & {
   sessionId: string
   providerProfileId?: string
   allowBudgetWarning?: boolean
+  /** Trusted gateway identity. HTTP callers cannot set this directly. */
+  actor?: string
 }
 
 export interface LocalGatewayEventListInput {
@@ -408,23 +417,6 @@ export interface InstallLocalMarketplaceTemplateResult {
   session?: LocalGatewaySessionProjection
   agent: LocalGatewayAgentRecord
   installedFiles: string[]
-}
-
-export interface LocalGatewayBudgetDraftInput {
-  scopeType: LocalGatewayBudgetScope
-  scopeId: string
-  label: string
-  maxEstimatedCostUsd: number
-  warnAtUsd?: number
-  status?: 'active' | 'archived'
-}
-
-export interface UpdateLocalGatewayBudgetDraftInput {
-  budgetId: string
-  label?: string
-  maxEstimatedCostUsd?: number
-  warnAtUsd?: number
-  status?: 'active' | 'archived'
 }
 
 export interface LocalGatewayBudgetEvaluation {
@@ -1195,13 +1187,13 @@ export class LocalMainspringGateway {
   }
 
   readonly budgets = {
-    list: (): LocalGatewayBudgetRecord[] => this.requireAppState().budgets.list(),
+    list: (): LocalGatewayBudgetRecord[] => this.budgetControl().list(),
     create: (input: LocalGatewayBudgetDraftInput): LocalGatewayBudgetRecord =>
-      this.createBudget(input),
+      this.budgetControl().create(input),
     update: (input: UpdateLocalGatewayBudgetDraftInput): LocalGatewayBudgetRecord =>
-      this.updateBudget(input),
-    delete: (budgetId: string): { budgetId: string; deleted: true } => {
-      this.deleteBudget(budgetId)
+      this.budgetControl().update(input),
+    delete: (budgetId: string, actor?: string): { budgetId: string; deleted: true } => {
+      this.budgetControl().delete(budgetId, actor)
       return { budgetId, deleted: true }
     },
     status: (): LocalGatewayBudgetStatus => this.budgetStatus(),
@@ -1378,7 +1370,7 @@ export class LocalMainspringGateway {
         this.appState?.auditEvents.create({
           category: 'gateway',
           action: 'runlog.run.enqueued',
-          actor: 'local-gateway',
+          actor: resolvedInput.actor?.trim() || 'local-gateway',
           targetType: 'run',
           targetId: handle.record.runId,
           runId: handle.record.runId,
@@ -1870,7 +1862,7 @@ export class LocalMainspringGateway {
     input: LocalGatewayStartRunInput,
     metadata: { providerProfileId?: string } = {},
   ): RunRecord {
-    const { sessionId, allowBudgetWarning: _allowBudgetWarning, ...runInput } = input
+    const { sessionId, allowBudgetWarning: _allowBudgetWarning, actor: _actor, ...runInput } = input
     const session = this.runtime.storage.stateStore.getSession(sessionId)
     if (!session) throw new Error(`Unknown session: ${sessionId}`)
     const runtimeProfile = this.runtimeProfiles.assertRegistered(input.runtimeProfile)
@@ -1901,7 +1893,7 @@ export class LocalMainspringGateway {
     this.appState?.auditEvents.create({
       category: 'gateway',
       action: 'run.enqueued',
-      actor: 'local-gateway',
+      actor: input.actor?.trim() || 'local-gateway',
       targetType: 'run',
       targetId: run.runId,
       runId: run.runId,
@@ -1922,7 +1914,7 @@ export class LocalMainspringGateway {
       this.appState?.auditEvents.create({
         category: 'billing',
         action: 'budget.warn',
-        actor: 'local-gateway',
+        actor: input.actor?.trim() || 'local-gateway',
         targetType: 'run',
         targetId: run.runId,
         runId: run.runId,
@@ -3076,52 +3068,6 @@ export class LocalMainspringGateway {
     }
   }
 
-  private createBudget(input: LocalGatewayBudgetDraftInput): LocalGatewayBudgetRecord {
-    const appState = this.requireAppState()
-    this.validateBudgetScope(appState, input.scopeType, input.scopeId)
-    const budget = appState.budgets.create(input as CreateLocalGatewayBudgetInput)
-    appState.auditEvents.create({
-      category: 'billing',
-      action: 'budget.created',
-      actor: 'local-gateway',
-      targetType: input.scopeType,
-      targetId: input.scopeId,
-      metadata: { budgetId: budget.budgetId },
-    })
-    return budget
-  }
-
-  private updateBudget(input: UpdateLocalGatewayBudgetDraftInput): LocalGatewayBudgetRecord {
-    const appState = this.requireAppState()
-    const existing = appState.budgets.get(input.budgetId)
-    if (!existing) throw new Error(`Unknown budget: ${input.budgetId}`)
-    const budget = appState.budgets.update(input as UpdateLocalGatewayBudgetInput)
-    appState.auditEvents.create({
-      category: 'billing',
-      action: 'budget.updated',
-      actor: 'local-gateway',
-      targetType: existing.scopeType,
-      targetId: existing.scopeId,
-      metadata: { budgetId: budget.budgetId },
-    })
-    return budget
-  }
-
-  private deleteBudget(budgetId: string): void {
-    const appState = this.requireAppState()
-    const existing = appState.budgets.get(budgetId)
-    if (!existing) throw new Error(`Unknown budget: ${budgetId}`)
-    appState.budgets.delete(budgetId)
-    appState.auditEvents.create({
-      category: 'billing',
-      action: 'budget.deleted',
-      actor: 'local-gateway',
-      targetType: existing.scopeType,
-      targetId: existing.scopeId,
-      metadata: { budgetId },
-    })
-  }
-
   private validateBudgetScope(
     appState: LocalGatewayAppStateStore,
     scopeType: LocalGatewayBudgetScope,
@@ -3173,6 +3119,14 @@ export class LocalMainspringGateway {
         })
         return this.cronGrantPreviewFromDecision({ schedule, context, decision })
       },
+    })
+  }
+
+  private budgetControl(): GatewayBudgetControl {
+    return new GatewayBudgetControl({
+      appState: this.requireAppState(),
+      validateScope: (scopeType, scopeId) =>
+        this.validateBudgetScope(this.requireAppState(), scopeType, scopeId),
     })
   }
 
@@ -3297,16 +3251,18 @@ export class LocalMainspringGateway {
     const appState = this.appState
     if (!appState) return []
     const evaluations = this.evaluateBudgetsForRun(appState, input, session)
-    const blocked = evaluations.filter((evaluation) => evaluation.status === 'blocked')
+    const blocked = evaluations.filter(
+      (evaluation): evaluation is LocalGatewayBudgetEvaluation & { status: 'blocked' } => (
+        evaluation.status === 'blocked'
+      ),
+    )
     if (blocked.length > 0) {
-      appState.auditEvents.create({
-        category: 'billing',
-        action: 'budget.blocked',
-        actor: 'local-gateway',
-        targetType: 'session',
-        targetId: input.sessionId,
+      this.budgetControl().recordRunDecision({
         sessionId: input.sessionId,
-        metadata: { budgetIds: blocked.map((evaluation) => evaluation.budgetId) },
+        ...(input.actor ? { actor: input.actor } : {}),
+        runBinding: this.budgetRunBinding(input),
+        evaluations: blocked,
+        acknowledged: false,
       })
       throw new Error(
         `Run blocked by budget: ${blocked
@@ -3314,17 +3270,21 @@ export class LocalMainspringGateway {
           .join(', ')}.`,
       )
     }
-    const warnings = evaluations.filter((evaluation) => evaluation.status === 'warn')
-    if (warnings.length > 0 && !input.allowBudgetWarning) {
-      appState.auditEvents.create({
-        category: 'billing',
-        action: 'budget.warning_ack_required',
-        actor: 'local-gateway',
-        targetType: 'session',
-        targetId: input.sessionId,
+    const warnings = evaluations.filter(
+      (evaluation): evaluation is LocalGatewayBudgetEvaluation & { status: 'warn' } => (
+        evaluation.status === 'warn'
+      ),
+    )
+    if (warnings.length > 0) {
+      this.budgetControl().recordRunDecision({
         sessionId: input.sessionId,
-        metadata: { budgetIds: warnings.map((evaluation) => evaluation.budgetId) },
+        ...(input.actor ? { actor: input.actor } : {}),
+        runBinding: this.budgetRunBinding(input),
+        evaluations: warnings,
+        acknowledged: Boolean(input.allowBudgetWarning),
       })
+    }
+    if (warnings.length > 0 && !input.allowBudgetWarning) {
       throw new Error(
         `Run requires budget warning acknowledgement: ${warnings
           .map((evaluation) => `${evaluation.label} (${evaluation.scopeLabel})`)
@@ -3332,6 +3292,22 @@ export class LocalMainspringGateway {
       )
     }
     return evaluations
+  }
+
+  private budgetRunBinding(input: LocalGatewayStartRunInput): Record<string, unknown> {
+    return {
+      sessionId: input.sessionId,
+      input: input.input,
+      mode: input.mode,
+      allowedTools: [...(input.allowedTools ?? [])],
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.modelId ? { modelId: input.modelId } : {}),
+      ...(input.computerId ? { computerId: input.computerId } : {}),
+      ...(input.runtimeProfile ? { runtimeProfile: input.runtimeProfile } : {}),
+    }
   }
 
   private evaluateBudgets(appState: LocalGatewayAppStateStore): LocalGatewayBudgetEvaluation[] {

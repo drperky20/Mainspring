@@ -19,6 +19,7 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Bounded `GatewayDeploymentControl` ownership for deployment target configuration and driver execution.
 - Bounded `GatewayProvenanceReviewControl` ownership for staged review decisions and durable memory/skill applies.
 - Bounded `GatewayCronControl` ownership for cron schedule configuration and scoped grant issuance.
+- Bounded `GatewayBudgetControl` ownership for budget configuration, warning acknowledgement, and hard-block authority.
 
 ### Changed
 - Verification lane standardized around `pnpm verify`.
@@ -32,3 +33,4 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Deployment target writes and exact-confirmed driver invocations now persist bound host decision records before external execution; browser DTOs omit decision and configuration metadata.
 - Provenance review decisions and applies now persist hash-only host decision evidence before queue or workspace mutation, recover a write interrupted before the review journal update, and use the hosted session actor instead of a browser-supplied reviewer.
 - Gateway cron schedule create/update/delete and grant issuance now persist hash-only pre-mutation host decisions; hosted session identity overrides a browser-supplied grant actor.
+- Gateway budget create/update/delete now persist hash-only `budget.write` authority before app-state mutation; warning acknowledgements and hard blocks record the matching pre-enqueue decision, with hosted identity supplied only by the authenticated gateway principal.

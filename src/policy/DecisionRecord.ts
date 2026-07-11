@@ -21,6 +21,7 @@ export type DecisionRecordSurface =
   | 'provenance'
   | 'skill'
   | 'cron'
+  | 'budget'
   | 'subagent'
   | 'artifact'
   | 'provider_config'
@@ -40,6 +41,9 @@ type HostDecisionSurfaceOperation =
   | { surface: 'provenance'; operation: 'provenance.review.apply' }
   | { surface: 'cron'; operation: 'cron.schedule.write' }
   | { surface: 'cron'; operation: 'cron.grant.create' }
+  | { surface: 'budget'; operation: 'budget.write' }
+  | { surface: 'budget'; operation: 'budget.warning.acknowledge' }
+  | { surface: 'budget'; operation: 'budget.run.block' }
   | { surface: 'deployment'; operation: 'deployment.target.write' }
   | { surface: 'deployment'; operation: 'deployment.execute' }
 

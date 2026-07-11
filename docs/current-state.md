@@ -99,6 +99,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - local gateway provider-profile create/update mutations store a `provider_config.write` decision inside the corresponding audit row; mutation input is represented only by its hash.
   - `GatewayDeploymentControl` persists `deployment.target.write` decisions with target configuration mutations and records a `deployment.execute` decision, bound to resolved target and preflight-plan hashes, in both the pre-driver audit trail and the deployment-run metadata before an exact-confirmed driver invocation.
   - `GatewayCronControl` records hash-only `cron.schedule.write` decisions before schedule create/update/delete and `cron.grant.create` before a scoped grant can change schedule metadata. Hosted gateway routes supply the authenticated principal as the actor, overriding a request-body grant actor.
+  - `GatewayBudgetControl` records hash-only `budget.write` authority before budget create/update/delete, and records `budget.warning.acknowledge` or `budget.run.block` before a warning-band or blocked run can reach an enqueue path. Hosted gateway routes supply the authenticated principal as the actor, never a request body field; run text remains transient and only its binding hash is retained.
   - artifact handling in the gateway is read-only indexing of runtime-created artifacts; the gateway has no artifact-publish mutation surface.
   - channel sends remain explicitly on the legacy mailbox compatibility path and are not presented as RunLog-native authority.
 - RunLog cron rows now fail closed at the schedule-to-run boundary:
@@ -116,7 +117,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
   - the React console exposes dedicated controls to review the current grant decision and create a short-lived scoped grant without showing raw prompt hashes or secret refs.
   - gateways constructed without a RunLog host keep the mailbox compatibility dispatch path for older embedders and migration verifiers.
 - Local-agent security regression coverage now exists in `src/security/agent-security-regression.test.ts` with a companion matrix in `docs/security-redteam-matrix.md`.
-  - The focused corpus covers host shell approval, loader/env-var injection, network-to-shell hard blocks, path traversal, symlink/junction escape, workspace mutation approval, browser/local URL policy, web-fetch SSRF rejection, memory and skill write approval, MCP/tool bridge policy routing, headless cron denial, and cron grant mutation.
+  - The focused corpus covers host shell approval, loader/env-var injection, network-to-shell hard blocks, path traversal, symlink/junction escape, workspace mutation approval, browser/local URL policy, web-fetch SSRF rejection, memory and skill write approval, MCP/tool bridge policy routing, headless cron denial, cron grant mutation, and budget control/acknowledgement authority.
   - The matrix explicitly records partial/deferred classes such as cross-agent spoofing, subagent privilege expansion, remote skill trust, hosted provenance trust, and browser trace/artifact policy.
 - Memory, skill, and local template provenance now has a canonical module:
   - `src/provenance/ProvenanceReview.ts` scans memory mutations, skill manifests, and local template catalog entries with deterministic content hashes.

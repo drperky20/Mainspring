@@ -3243,6 +3243,15 @@ describe('LocalMainspringGateway', () => {
             action: 'budget.blocked',
             targetType: 'session',
             targetId: session.record.sessionId,
+            metadata: expect.objectContaining({
+              budgetIds: [budget.budgetId],
+              decisionRecord: expect.objectContaining({
+                surface: 'budget',
+                operation: 'budget.run.block',
+                state: 'hard_block',
+                hardBlocked: true,
+              }),
+            }),
           }),
         ]),
       )
@@ -3325,6 +3334,7 @@ describe('LocalMainspringGateway', () => {
         workspaceId: workspace.workspaceId,
         agentId: agent.agentId,
         allowBudgetWarning: true,
+        actor: 'hosted:budget-warning-test:admin',
       })
       expect(run.runId).toMatch(/^run_/)
       const pending = MainspringMailbox.fromSessionPath(session.record.sessionPath).readPending(10)
@@ -3352,7 +3362,28 @@ describe('LocalMainspringGateway', () => {
             action: 'budget.warning_ack_required',
             targetType: 'session',
             targetId: session.record.sessionId,
-            metadata: expect.objectContaining({ budgetIds: [budget.budgetId] }),
+            metadata: expect.objectContaining({
+              budgetIds: [budget.budgetId],
+              decisionRecord: expect.objectContaining({
+                surface: 'budget',
+                operation: 'budget.warning.acknowledge',
+                state: 'requires_approval',
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            action: 'budget.warning.acknowledged',
+            actor: 'hosted:budget-warning-test:admin',
+            targetType: 'session',
+            targetId: session.record.sessionId,
+            metadata: expect.objectContaining({
+              budgetIds: [budget.budgetId],
+              decisionRecord: expect.objectContaining({
+                surface: 'budget',
+                operation: 'budget.warning.acknowledge',
+                state: 'allow',
+              }),
+            }),
           }),
           expect.objectContaining({
             action: 'budget.warn',
