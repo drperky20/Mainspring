@@ -1,0 +1,132 @@
+/* Client, setup, settings, chat, and automation feature surfaces. */
+.setup-scene {
+  background-color: #090c0d;
+}
+
+.setup-card,
+.dialog-card,
+.simple-toast,
+.client-detail-panel,
+.workspace-area,
+.settings-section,
+.chat-panel,
+.access-panel,
+.action-rail,
+.agent-list,
+.agent-form,
+.automation-board,
+.automation-side,
+.message-bubble,
+.automation-toolbox .tool-toggle,
+.flow-node,
+.zoom-control,
+.workspace-selector,
+.provider-badge.has-logo {
+  border-color: var(--simple-line);
+  background: #101516;
+  color: var(--simple-ink);
+  box-shadow: none;
+}
+
+.setup-card {
+  border-color: rgba(118, 214, 158, 0.28);
+  box-shadow: 0 36px 100px rgba(0, 0, 0, 0.34);
+}
+
+.setup-steps,
+.message-feed,
+.action-event,
+.workspace-mode,
+.node-canvas {
+  background-color: #0c1112;
+}
+
+.setup-steps {
+  border-color: var(--simple-line);
+}
+
+.setup-steps button.active {
+  background: var(--simple-accent-soft);
+  color: var(--simple-ink);
+}
+
+.setup-steps button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.client-screen.is-automation-tab {
+  background: #0b0f10;
+}
+
+.client-screen.is-automation-tab .screen-header,
+.client-screen.is-automation-tab .client-tabs,
+.client-tabs,
+.automation-toolbar,
+.canvas-head,
+.run-id-footer {
+  border-color: var(--simple-line);
+}
+
+.client-tabs button.active {
+  background: var(--simple-accent);
+  color: #07110b;
+}
+
+.client-screen.is-automation-tab .client-tabs button.active {
+  background: transparent;
+  color: var(--simple-accent-strong);
+}
+
+.message-bubble.user {
+  border-color: rgba(118, 214, 158, 0.28);
+  background: #1b3225;
+}
+
+.automation-toolbox .tool-node-icon,
+.flow-node-icon {
+  background: rgba(118, 214, 158, 0.1);
+  color: var(--simple-accent-strong);
+}
+
+.node-canvas {
+  background-image: radial-gradient(rgba(180, 202, 190, 0.13) 1px, transparent 1px);
+}
+
+.node-canvas:hover {
+  background-color: #0e1413;
+}
+
+.flow-node.prompt,
+.flow-node.strong {
+  border-color: rgba(118, 214, 158, 0.34);
+}
+
+.status-pill {
+  background: var(--simple-accent-soft);
+  color: var(--simple-accent-strong);
+}
+
+.dialog-backdrop {
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(7px);
+}
+
+.simple-toast {
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+}
+
+@keyframes controlEnter {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes controlSkeleton {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@keyframes controlLoad {
+  0% { transform: translateX(-110%); }
+  55%, 100% { transform: translateX(340%); }
+}

@@ -77,6 +77,7 @@ import {
   type OperatorRunRow,
 } from './operatorConsoleViewModel'
 import './controlRoom.css'
+import './controlRoomWorkspace.css'
 import { type ClientWorkspaceTab } from './ConsoleClientWorkspaceFrame'
 import { readConsoleLocation, writeConsoleLocation } from './ConsoleLocation'
 import { useCompatibilityRunEvents } from './useCompatibilityRunEvents'

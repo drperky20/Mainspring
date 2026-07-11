@@ -28,6 +28,9 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - `ConsoleClientWorkspaceViews` now owns client chat, agent editing, automation
   testing, access preview, tool configuration, and their feature-local helpers,
   reducing the connected shell to composition and gateway state orchestration.
+- The console control-room skin now keeps client/setup/chat/automation feature
+  styling in `controlRoomWorkspace.css`, leaving shell, activity, and shared
+  state styling in `controlRoom.css` without changing the rendered design.
 - Console run detail navigation now preserves a validated screen/activity/run
   deep link, and compatibility trace loading is session-bound and abortable so
   fast run changes cannot apply stale event responses to the selected run.
