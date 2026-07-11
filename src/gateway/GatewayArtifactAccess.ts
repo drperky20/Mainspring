@@ -45,11 +45,12 @@ export class GatewayArtifactAccess {
     const artifact = this.options.appState.artifacts.get(normalizedArtifactId)
     if (!artifact) return null
 
-    const rootPath = await fs.promises.realpath(this.options.rootPath).catch(() => null)
+    const configuredRootPath = path.resolve(this.options.rootPath)
+    const rootPath = await fs.promises.realpath(configuredRootPath).catch(() => null)
     if (!rootPath) return null
 
     const candidatePath = path.resolve(artifact.path)
-    if (!pathWithin(rootPath, candidatePath)) return null
+    if (!pathWithin(configuredRootPath, candidatePath)) return null
 
     const resolvedPath = await fs.promises.realpath(candidatePath).catch(() => null)
     if (!resolvedPath || !pathWithin(rootPath, resolvedPath)) return null
@@ -64,7 +65,9 @@ export class GatewayArtifactAccess {
       }
       return {
         artifact,
-        filePath: resolvedPath,
+        // Keep the persisted, user-facing path shape stable while the handle
+        // is opened through the canonical path used for the containment check.
+        filePath: candidatePath,
         sizeBytes: stat.size,
         handle,
       }

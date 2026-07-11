@@ -28,6 +28,14 @@ jobs:
       - run: corepack enable
       - run: corepack prepare pnpm@9.15.4 --activate
       - run: pnpm install --frozen-lockfile
+      - name: Prepare Windows managed-secret verification
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+          Get-Command ConvertTo-SecureString -ErrorAction Stop | Out-Null
+          Get-Command ConvertFrom-SecureString -ErrorAction Stop | Out-Null
+          "MAINSPRING_POWERSHELL_EXECUTABLE=pwsh" >> $env:GITHUB_ENV
       - run: pnpm verify
 
   browser-e2e:

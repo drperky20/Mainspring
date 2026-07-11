@@ -909,7 +909,9 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
              (o.status IN ('pending', 'retryable') AND o.next_attempt_at <= @now)
              OR (o.status = 'claimed' AND o.claim_expires_at IS NOT NULL AND o.claim_expires_at <= @now)
            )
-         ORDER BY o.next_attempt_at ASC, o.created_at ASC, o.outbox_id ASC
+         -- Timestamps are intentionally coarse in several host paths. SQLite's
+         -- rowid preserves enqueue order for ties; random IDs do not.
+         ORDER BY o.next_attempt_at ASC, o.created_at ASC, o.rowid ASC
          LIMIT 1`,
       ).get({ now: input.now }) as Record<string, unknown> | undefined
       if (!row) return null
@@ -1330,7 +1332,7 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     return this.handle().prepare(
-      `SELECT * FROM run_execution_outbox ${where} ORDER BY created_at, outbox_id`,
+      `SELECT * FROM run_execution_outbox ${where} ORDER BY created_at, rowid`,
     ).all(params).map((row) => mapExecutionOutbox(row as Record<string, unknown>))
   }
 

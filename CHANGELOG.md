@@ -9,6 +9,10 @@ The format follows Keep a Changelog and the project uses Semantic Versioning onc
 - Consolidated CI around one cross-platform verification matrix, a retained-artifact
   Chromium console E2E lane, pinned pnpm activation, and the canonical local release
   command so pull requests and release jobs exercise the same gates.
+- Repaired hosted cross-platform verification: artifact containment now handles
+  macOS canonical temp paths, RunLog outbox ties retain enqueue order, and Windows
+  managed-secret checks use an explicit PowerShell Security preflight plus PowerShell
+  Core when the hosted runner provides it.
 
 ### Added
 - `GatewayBudgetEvaluator` now owns read-only budget scope matching, usage rollups,

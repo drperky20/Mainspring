@@ -17,6 +17,9 @@ command on pull requests, pushes to `main`, and manual dispatch. Ordinary CI run
 one cross-platform `pnpm verify` matrix plus a real Chromium console E2E job and
 retains failure traces, screenshots, video, and the Playwright HTML report.
 GitHub workflows should use read-only contents permissions, frozen pnpm installs, explicit job timeouts, and concurrency cancellation for superseded runs.
+The Windows CI verify leg also preflights the PowerShell Security module and sets
+the managed-secret runtime to PowerShell Core (`pwsh`), while local hosts retain a
+Windows PowerShell fallback.
 
 ## Documentation
 

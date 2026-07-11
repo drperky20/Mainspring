@@ -48,6 +48,9 @@ Chromium `pnpm console:e2e` job for every push and pull request. It retains brow
 failure evidence for seven days. The hosted release workflow invokes the canonical
 `pnpm release:check` package script directly, so local and GitHub release gates cannot
 silently diverge; pnpm `9.15.4` is activated explicitly before every frozen install.
+The Windows verify leg preflights `Microsoft.PowerShell.Security` and pins the
+managed-secret integration to `pwsh`; local Windows hosts without PowerShell Core
+fall back to Windows PowerShell 5.1 through the runtime selector.
 It runs `optional-verifiers:check` so optional verifier prerequisite diagnostics stay machine-readable without requiring live external services during `release:check`.
 
 `cells:check:integration` is intentionally not part of `release:check`; it requires a real WSL or Docker backend and rejects host execution. Missing prerequisites are reported with `MAINSPRING_CELLS_INTEGRATION_PREREQUISITES_BLOCKED`.

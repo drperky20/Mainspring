@@ -9,6 +9,26 @@ const BASE64_KEY_PREFIX = 'base64:'
 const DPAPI_KEY_PREFIX = 'dpapi:'
 const CREDENTIAL_MANAGER_KEY_PREFIX = 'credential-manager:'
 
+let cachedPowerShellExecutable: string | undefined
+
+function powerShellExecutable(): string {
+  const configured = process.env.MAINSPRING_POWERSHELL_EXECUTABLE?.trim()
+  if (configured) return configured
+  if (process.platform !== 'win32') return 'powershell'
+  if (cachedPowerShellExecutable) return cachedPowerShellExecutable
+
+  try {
+    execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], {
+      stdio: 'ignore',
+    })
+    cachedPowerShellExecutable = 'pwsh'
+  } catch {
+    // Windows development hosts may only have Windows PowerShell 5.1.
+    cachedPowerShellExecutable = 'powershell'
+  }
+  return cachedPowerShellExecutable
+}
+
 export type ManagedSecretCiphertext = {
   ciphertext: string
   iv: string
@@ -327,12 +347,14 @@ function execPowerShellSecretTransform(input: {
   const command =
     input.mode === 'protect'
       ? [
+          'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
           "$value = [Environment]::GetEnvironmentVariable('MAINSPRING_MANAGED_SECRET_PLAIN')",
           "if ([string]::IsNullOrWhiteSpace($value)) { throw 'Missing managed secret input.' }",
           '$secure = ConvertTo-SecureString -String $value -AsPlainText -Force',
           '$secure | ConvertFrom-SecureString',
         ].join('; ')
       : [
+          'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
           "$value = [Environment]::GetEnvironmentVariable('MAINSPRING_MANAGED_SECRET_PROTECTED')",
           "if ([string]::IsNullOrWhiteSpace($value)) { throw 'Missing managed secret input.' }",
           '$secure = ConvertTo-SecureString -String $value',
@@ -340,7 +362,7 @@ function execPowerShellSecretTransform(input: {
           'try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }',
         ].join('; ')
   return execFileSync(
-    'powershell',
+    powerShellExecutable(),
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command],
     {
       encoding: 'utf8',
@@ -463,7 +485,7 @@ function execPowerShellCredentialManager(input: {
           ].join('; '),
   ].join('; ')
   return execFileSync(
-    'powershell',
+    powerShellExecutable(),
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command],
     {
       encoding: 'utf8',

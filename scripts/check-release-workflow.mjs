@@ -202,6 +202,9 @@ function requireCiWorkflow() {
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: corepack enable')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: corepack prepare pnpm@9.15.4 --activate')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm install --frozen-lockfile')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'name: Prepare Windows managed-secret verification')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, "Import-Module Microsoft.PowerShell.Security -ErrorAction Stop")
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'MAINSPRING_POWERSHELL_EXECUTABLE=pwsh')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm verify')
 
   if (ciWorkflow.includes('  source-matrix:')) {
