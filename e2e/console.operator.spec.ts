@@ -34,6 +34,17 @@ test.describe('operator console', () => {
     await page.getByRole('button', { name: 'Workspaces', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Northline Dental' })).toBeVisible()
 
+    for (const view of [
+      ['agents', 'Agents'],
+      ['automations', 'Workflow test'],
+      ['access', 'Client access preview'],
+      ['chat', 'Chat'],
+    ] as const) {
+      await page.getByRole('button', { name: view[0], exact: true }).click()
+      await expect(page.getByRole('heading', { name: view[1], exact: true })).toBeVisible()
+      if (view[0] === 'automations') await page.screenshot({ path: testInfo.outputPath('client-automation.png') })
+    }
+
     const composer = page.locator('textarea').first()
     await composer.fill('Reply with a short local status update.')
     const started = page.waitForResponse((response) =>
