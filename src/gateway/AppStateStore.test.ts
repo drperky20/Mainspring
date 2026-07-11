@@ -520,6 +520,39 @@ describe('SqliteLocalGatewayAppStateStore', () => {
     }
   })
 
+  it('keeps same-tick audit authority rows in durable insertion order', () => {
+    const root = makeTempRoot('mainspring-gateway-audit-order-')
+    const store = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    try {
+      const authorized = store.auditEvents.create({
+        eventId: 'audit_order_authorized',
+        category: 'gateway',
+        action: 'run.enqueued.authorized',
+        actor: 'local-gateway',
+        targetType: 'run-request',
+        targetId: 'session_audit_order',
+      })
+      const outcome = store.auditEvents.create({
+        eventId: 'audit_order_outcome',
+        category: 'gateway',
+        action: 'run.enqueued',
+        actor: 'local-gateway',
+        targetType: 'run',
+        targetId: 'run_audit_order',
+        runId: 'run_audit_order',
+      })
+      expect(Date.parse(outcome.createdAt)).toBeGreaterThan(Date.parse(authorized.createdAt))
+      expect(store.auditEvents.list({ category: 'gateway' }).map((event) => event.action)).toEqual([
+        'run.enqueued.authorized',
+        'run.enqueued',
+      ])
+    } finally {
+      store.close()
+    }
+  })
+
   it('rejects raw provider secrets in secret refs and provider profile metadata', () => {
     const root = makeTempRoot('mainspring-gateway-app-state-secrets-')
     const store = createSqliteLocalGatewayAppStateStore({

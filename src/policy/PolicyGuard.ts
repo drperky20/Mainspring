@@ -30,6 +30,8 @@ export type PolicyOperation =
   | 'marketplace.install'
   | 'marketplace.catalog.sync'
   | 'cron.trigger'
+  | 'run.enqueue'
+  | 'approval.resolve'
 
 export interface RuntimePolicyDefaults {
   approvalPolicy?: RuntimePolicy['approvalPolicy']

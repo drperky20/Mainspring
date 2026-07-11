@@ -26,6 +26,8 @@ The local dev server created by `pnpm gateway:dev` now configures that RunLog ho
 
 `GatewayProviderProfileControl` owns provider-profile create/update authority. Before the app-state store can write a profile or rotate a managed secret, it persists a hash-only `provider_config.write` decision in the gateway audit trail; the post-mutation audit row retains that decision for compatibility. In hosted mode, the route supplies the authenticated principal as the actor rather than accepting browser-provided attribution. Secret values pass only to host-side managed-secret encryption and are never retained in the decision or browser DTOs.
 
+`GatewayRunControl` owns run ingress and approval responses. It persists hash-only `run.enqueue` authority before either the compatibility mailbox enqueue or a RunLog `RunIntent` reaches its runtime store, and `approval.resolve` authority before a legacy approval response or RunLog receipt can mutate lifecycle state. Outcome and failure rows retain the decision link without storing prompts, approval reasons, or response contents; hosted routes use the authenticated principal instead of browser attribution.
+
 `MAINSPRING_GATEWAY_ENV=production` disables the sample client/workspace bootstrap by default and fails startup unless explicit provider, model, and provider credential configuration is present. The Kubernetes deployment driver sets this mode and also sets `MAINSPRING_GATEWAY_BOOTSTRAP_SAMPLE_STATE=0` explicitly.
 
 `MAINSPRING_RUNLOG_APPROVAL_KEY_MODE=configured` makes RunLog approval receipt signing fail closed unless `MAINSPRING_RUNLOG_APPROVAL_KEY` is set. The default `local-dev` mode keeps no-key source checkout examples ergonomic and should not be used for non-local deployments.

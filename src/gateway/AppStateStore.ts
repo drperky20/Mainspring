@@ -1672,6 +1672,7 @@ function cellSnapshotFromRow(row: unknown): LocalGatewayCellSnapshotRecord {
 export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStore {
   private readonly db: Database.Database
   private readonly managedSecretKey: Buffer
+  private lastAuditCreatedAtMs = 0
   readonly schemaVersion = LOCAL_GATEWAY_APP_STATE_SCHEMA_VERSION
   readonly managedSecretKeyPath: string
   readonly managedSecretKeyStorage: ManagedSecretKeyStorageStatus
@@ -2845,7 +2846,7 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
         targetId: requiredText(input.targetId, 'audit target id'),
         ...(optionalText(input.runId) ? { runId: optionalText(input.runId) } : {}),
         ...(optionalText(input.sessionId) ? { sessionId: optionalText(input.sessionId) } : {}),
-        createdAt: currentIsoTimestamp(),
+        createdAt: this.nextAuditCreatedAt(),
         ...(input.metadata ? { metadata: input.metadata } : {}),
       }
       this.db.prepare(
@@ -2895,6 +2896,26 @@ export class SqliteLocalGatewayAppStateStore implements LocalGatewayAppStateStor
          ORDER BY created_at ${order}, event_id ${order}${limit}`,
       ).all(...params) as unknown[]).map(auditEventFromRow)
     },
+  }
+
+  /**
+   * Audit ordering is part of the control-plane contract. Millisecond clocks
+   * and random event IDs can otherwise make an outcome sort before the
+   * pre-mutation authorization that was inserted immediately before it.
+   * Preserve ISO timestamps while advancing past the latest durable row.
+   */
+  private nextAuditCreatedAt(): string {
+    const row = this.db.prepare(
+      'SELECT created_at AS createdAt FROM gateway_audit_events ORDER BY created_at DESC LIMIT 1',
+    ).get() as { createdAt?: unknown } | undefined
+    const latestMs = typeof row?.createdAt === 'string' ? Date.parse(row.createdAt) : Number.NaN
+    const nextMs = Math.max(
+      Date.now(),
+      this.lastAuditCreatedAtMs + 1,
+      Number.isFinite(latestMs) ? latestMs + 1 : 0,
+    )
+    this.lastAuditCreatedAtMs = nextMs
+    return new Date(nextMs).toISOString()
   }
 
   readonly toolCalls = {

@@ -3808,7 +3808,10 @@ describe('LocalGatewayHttpServer', () => {
       },
       approvalReceiptKey: 'gateway-runlog-route-test-key',
     })
-    const gateway = createLocalMainspringGateway({ runtime, runLog })
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const gateway = createLocalMainspringGateway({ runtime, runLog, appState })
     const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
 
     const started = await server.start()
@@ -3821,6 +3824,7 @@ describe('LocalGatewayHttpServer', () => {
           input: 'Use the reviewed tool from the RunLog route.',
           mode: 'chat',
           allowedTools: ['tool.reviewed'],
+          actor: 'browser-spoofed-run-operator',
         }),
       }).then((response) => response.json())
 
@@ -3866,6 +3870,7 @@ describe('LocalGatewayHttpServer', () => {
             runId,
             decision: 'approved',
             reason: 'gateway runlog approval test',
+            actor: 'browser-spoofed-approval-operator',
           }),
         },
       ).then((response) => response.json())
@@ -3889,9 +3894,21 @@ describe('LocalGatewayHttpServer', () => {
       )
       expect(completed.assistantText).toBe('gateway-approved:true')
       expect(executions.count).toBe(1)
+      const gatewayEvents = appState.auditEvents.list({ category: 'gateway' })
+      expect(gatewayEvents.map((event) => event.action)).toEqual([
+        'run.enqueued.authorized',
+        'runlog.run.enqueued',
+        'approval.approved.authorized',
+        'approval.approved',
+      ])
+      expect(gatewayEvents.every((event) => event.actor === 'local-gateway')).toBe(true)
+      expect(JSON.stringify(gatewayEvents)).not.toContain('browser-spoofed-run-operator')
+      expect(JSON.stringify(gatewayEvents)).not.toContain('browser-spoofed-approval-operator')
+      expect(JSON.stringify(gatewayEvents)).not.toContain('gateway runlog approval test')
     } finally {
       await server.stop()
       runLog.close()
+      appState.close()
     }
   })
 
@@ -4344,6 +4361,18 @@ describe('LocalGatewayHttpServer', () => {
         'content-type': 'application/json',
       }
 
+      const hostedRunResponse = await fetch(`${started.url}/runs/start`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sessionId: session.record.sessionId,
+          input: 'Start a hosted RunLog ingress request.',
+          actor: 'browser-spoofed-run-operator',
+        }),
+      })
+      const hostedRun = await hostedRunResponse.json() as { run: { runId: string } }
+      expect(hostedRunResponse.status).toBe(202)
+
       const topologyRoot = path.join(root, 'topology-workspace')
       const createdTopologyResponse = await fetch(`${started.url}/clients`, {
         method: 'POST',
@@ -4600,6 +4629,23 @@ describe('LocalGatewayHttpServer', () => {
         ))).toMatchObject({ actor: expect.stringMatching(/^hosted:[^:]+:admin$/) })
       }
       const gatewayEvents = appState.auditEvents.list({ category: 'gateway' })
+      const runEvents = gatewayEvents.filter((event) => (
+        event.action === 'run.enqueued.authorized'
+        || event.action === 'runlog.run.enqueued'
+      ))
+      expect(runEvents).toHaveLength(2)
+      expect(runEvents[0]).toMatchObject({
+        action: 'run.enqueued.authorized',
+        actor: expect.stringMatching(/^hosted:[^:]+:admin$/),
+        targetType: 'run-request',
+        targetId: session.record.sessionId,
+      })
+      expect(runEvents[1]).toMatchObject({
+        action: 'runlog.run.enqueued',
+        actor: expect.stringMatching(/^hosted:[^:]+:admin$/),
+        targetId: hostedRun.run.runId,
+      })
+      expect(JSON.stringify(runEvents)).not.toContain('browser-spoofed-run-operator')
       for (const action of [
         'provider-profile.created.authorized',
         'provider-profile.updated.authorized',

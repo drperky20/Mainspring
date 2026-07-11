@@ -1738,7 +1738,8 @@ describe('LocalMainspringGateway', () => {
         }),
       })
       expect(appState.approvals.get(pendingApproval.approvalId)?.resolvedAt).toBeTruthy()
-      expect(appState.auditEvents.list({ runId: run.runId, category: 'gateway' })).toEqual(
+      const gatewayEvents = appState.auditEvents.list({ category: 'gateway' })
+      expect(gatewayEvents.filter((event) => event.runId === run.runId)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             action: 'run.enqueued',
@@ -1753,6 +1754,27 @@ describe('LocalMainspringGateway', () => {
           }),
         ]),
       )
+      const runAuthorizationIndex = gatewayEvents.findIndex((event) => (
+        event.action === 'run.enqueued.authorized'
+        && event.targetType === 'run-request'
+        && event.targetId === session.record.sessionId
+      ))
+      const runOutcomeIndex = gatewayEvents.findIndex((event) => (
+        event.action === 'run.enqueued' && event.targetId === run.runId
+      ))
+      const approvalAuthorizationIndex = gatewayEvents.findIndex((event) => (
+        event.action === 'approval.approved.authorized'
+        && event.targetId === pendingApproval.approvalId
+      ))
+      const approvalOutcomeIndex = gatewayEvents.findIndex((event) => (
+        event.action === 'approval.approved' && event.targetId === pendingApproval.approvalId
+      ))
+      expect(runAuthorizationIndex).toBeGreaterThanOrEqual(0)
+      expect(runAuthorizationIndex).toBeLessThan(runOutcomeIndex)
+      expect(approvalAuthorizationIndex).toBeGreaterThanOrEqual(0)
+      expect(approvalAuthorizationIndex).toBeLessThan(approvalOutcomeIndex)
+      expect(gatewayEvents[approvalAuthorizationIndex]).toMatchObject({ actor: 'test-operator' })
+      expect(JSON.stringify(gatewayEvents)).not.toContain('approved through gateway boundary')
       expect(fs.readFileSync(path.join(workspaceRoot, 'notes', 'output.txt'), 'utf8')).toBe(
         'approved by gateway',
       )

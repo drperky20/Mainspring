@@ -132,6 +132,7 @@ import {
 } from './GatewayProviderProfileControl.js'
 import { GatewayTopologyControl } from './GatewayTopologyControl.js'
 import { GatewayMarketplaceControl } from './GatewayMarketplaceControl.js'
+import { GatewayRunControl } from './GatewayRunControl.js'
 export type {
   LocalGatewayMemoryCorrectionInput,
   LocalGatewayMemoryCorrectionResult,
@@ -794,6 +795,14 @@ function runLogCapabilitiesFromGatewayInput(input: LocalGatewayStartRunInput): R
   return [...capabilities]
 }
 
+function gatewayRunBinding(
+  input: LocalGatewayStartRunInput,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const { actor: _actor, allowBudgetWarning: _allowBudgetWarning, ...binding } = input
+  return { ...binding, ...extra }
+}
+
 function runLogCronCapabilitiesFromGatewayInput(input: LocalGatewayStartRunInput): RunLogCapability[] {
   return [...new Set<RunLogCapability>([...runLogCapabilitiesFromGatewayInput(input), 'cron'])]
 }
@@ -1294,30 +1303,44 @@ export class LocalMainspringGateway {
       return this.runtime.approvals.list()
     },
     approve: (input: LocalGatewayApprovalResponseInput): void => {
-      this.runtime.approvals.approve(input)
-      this.recordGatewayApprovalDecision(input, 'approved')
-      this.appState?.auditEvents.create({
-        category: 'gateway',
-        action: 'approval.approved',
-        actor: input.actor?.trim() || 'local-gateway',
-        targetType: 'approval',
-        targetId: input.approvalId,
+      this.assertCompatibilityApprovalBinding(input)
+      const runControl = this.runControl()
+      const authorization = runControl?.authorizeApproval({
+        approvalId: input.approvalId,
         runId: input.runId,
         sessionId: input.sessionId,
+        decision: 'approved',
+        actor: input.actor,
+        binding: { reason: input.reason, response: input.response },
       })
+      try {
+        this.runtime.approvals.approve(input)
+        this.recordGatewayApprovalDecision(input, 'approved')
+        if (authorization) runControl?.recordApprovalOutcome({ authorization })
+      } catch (error) {
+        if (authorization) runControl?.recordApprovalFailure({ authorization })
+        throw error
+      }
     },
     deny: (input: LocalGatewayApprovalResponseInput): void => {
-      this.runtime.approvals.deny(input)
-      this.recordGatewayApprovalDecision(input, 'denied')
-      this.appState?.auditEvents.create({
-        category: 'gateway',
-        action: 'approval.denied',
-        actor: input.actor?.trim() || 'local-gateway',
-        targetType: 'approval',
-        targetId: input.approvalId,
+      this.assertCompatibilityApprovalBinding(input)
+      const runControl = this.runControl()
+      const authorization = runControl?.authorizeApproval({
+        approvalId: input.approvalId,
         runId: input.runId,
         sessionId: input.sessionId,
+        decision: 'denied',
+        actor: input.actor,
+        binding: { reason: input.reason, response: input.response },
       })
+      try {
+        this.runtime.approvals.deny(input)
+        this.recordGatewayApprovalDecision(input, 'denied')
+        if (authorization) runControl?.recordApprovalOutcome({ authorization })
+      } catch (error) {
+        if (authorization) runControl?.recordApprovalFailure({ authorization })
+        throw error
+      }
     },
   }
 
@@ -1335,45 +1358,60 @@ export class LocalMainspringGateway {
         const runtimeProfile = this.runtimeProfiles.assertRegistered(resolvedInput.runtimeProfile)
         const budgetEvaluations = this.assertRunBudgetAllowed(resolvedInput, session)
         const agentId = resolvedInput.agentId ?? runtime.defaultAgentId
-        this.ensureRunLogAgent(resolvedInput, agentId)
         const workspaceRoot = resolvedInput.workspaceId
           ? this.appState?.workspaces.get(resolvedInput.workspaceId)?.root
           : session.workspaceRoot
-        const handle = runtime.runs.start({
-          agentId,
-          input: resolvedInput.input,
+        const runControl = this.runControl()
+        const authorization = runControl?.authorizeEnqueue({
           sessionId: resolvedInput.sessionId,
+          actor: resolvedInput.actor,
           workspaceId: resolvedInput.workspaceId,
-          ...(workspaceRoot ? { workspaceRoot } : {}),
-          ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
-          providerId: resolvedInput.providerId,
-          modelId: resolvedInput.modelId,
-          credentialRef: resolvedInput.credentialRef,
-          allowedTools: resolvedInput.allowedTools ?? [],
-          requestedCapabilities: runLogCapabilitiesFromGatewayInput(resolvedInput),
-          metadata: {
-            gatewaySurface: 'runlog',
-            ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
-            ...(resolvedInput.runtimeProfile
-              ? { runtimeProfile: this.runtimeProfiles.assertRegistered(resolvedInput.runtimeProfile) }
-              : {}),
-          },
+          binding: gatewayRunBinding(
+            { ...resolvedInput, ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}) },
+            { agentId },
+          ),
         })
-        this.persistRunLogMetadata(
-          handle.record,
-          { ...resolvedInput, ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}) },
-          budgetEvaluations,
-        )
-        this.appState?.auditEvents.create({
-          category: 'gateway',
-          action: 'runlog.run.enqueued',
-          actor: resolvedInput.actor?.trim() || 'local-gateway',
-          targetType: 'run',
-          targetId: handle.record.runId,
-          runId: handle.record.runId,
-          sessionId: resolvedInput.sessionId,
-        })
-        return { run: handle.record, projection: handle.projection() }
+        try {
+          this.ensureRunLogAgent(resolvedInput, agentId)
+          const handle = runtime.runs.start({
+            agentId,
+            input: resolvedInput.input,
+            sessionId: resolvedInput.sessionId,
+            workspaceId: resolvedInput.workspaceId,
+            ...(workspaceRoot ? { workspaceRoot } : {}),
+            ...(resolvedInput.computerId ? { computerId: resolvedInput.computerId } : {}),
+            providerId: resolvedInput.providerId,
+            modelId: resolvedInput.modelId,
+            credentialRef: resolvedInput.credentialRef,
+            allowedTools: resolvedInput.allowedTools ?? [],
+            requestedCapabilities: runLogCapabilitiesFromGatewayInput(resolvedInput),
+            metadata: {
+              gatewaySurface: 'runlog',
+              ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}),
+              ...(resolvedInput.runtimeProfile
+                ? { runtimeProfile: this.runtimeProfiles.assertRegistered(resolvedInput.runtimeProfile) }
+                : {}),
+              ...(authorization ? { gatewayRunDecisionId: authorization.decision.decisionId } : {}),
+            },
+          })
+          this.persistRunLogMetadata(
+            handle.record,
+            { ...resolvedInput, ...(input.providerProfileId ? { providerProfileId: input.providerProfileId } : {}) },
+            budgetEvaluations,
+            authorization ? { gatewayRunDecisionId: authorization.decision.decisionId } : {},
+          )
+          if (authorization) {
+            runControl?.recordEnqueueOutcome({
+              authorization,
+              runId: handle.record.runId,
+              runtime: 'runlog',
+            })
+          }
+          return { run: handle.record, projection: handle.projection() }
+        } catch (error) {
+          if (authorization) runControl?.recordEnqueueFailure({ authorization })
+          throw error
+        }
       },
       list: (input?: Parameters<RunLogMainspring['runs']['list']>[0]): RunLogRunRecord[] =>
         this.requireRunLogRuntime().runs.list(input),
@@ -1416,21 +1454,55 @@ export class LocalMainspringGateway {
         this.requireRunLogRuntime().store.listApprovalRequests(input),
       approve: async (input: LocalGatewayApprovalResponseInput): Promise<RunLogRunProjection> => {
         const runtime = this.requireRunLogRuntime()
-        runtime.approvals.approve({
+        this.assertRunLogApprovalBinding(runtime, input)
+        const runControl = this.runControl()
+        const authorization = runControl?.authorizeApproval({
           approvalId: input.approvalId,
-          actor: input.actor?.trim() || 'local-gateway',
+          runId: input.runId,
+          sessionId: input.sessionId,
+          decision: 'approved',
+          actor: input.actor,
+          binding: { reason: input.reason, response: input.response },
         })
-        this.recordGatewayApprovalDecision(input, 'approved')
-        return runtime.project(input.runId)
+        const actor = authorization?.actor ?? (input.actor?.trim() || 'local-gateway')
+        try {
+          const receipt = runtime.approvals.approve({
+            approvalId: input.approvalId,
+            actor,
+          })
+          this.recordGatewayApprovalDecision(input, 'approved')
+          if (authorization) runControl?.recordApprovalOutcome({ authorization, receiptId: receipt.receiptId })
+          return runtime.project(input.runId)
+        } catch (error) {
+          if (authorization) runControl?.recordApprovalFailure({ authorization })
+          throw error
+        }
       },
       deny: async (input: LocalGatewayApprovalResponseInput): Promise<RunLogRunProjection> => {
         const runtime = this.requireRunLogRuntime()
-        runtime.approvals.deny({
+        this.assertRunLogApprovalBinding(runtime, input)
+        const runControl = this.runControl()
+        const authorization = runControl?.authorizeApproval({
           approvalId: input.approvalId,
-          actor: input.actor?.trim() || 'local-gateway',
+          runId: input.runId,
+          sessionId: input.sessionId,
+          decision: 'denied',
+          actor: input.actor,
+          binding: { reason: input.reason, response: input.response },
         })
-        this.recordGatewayApprovalDecision(input, 'denied')
-        return runtime.project(input.runId)
+        const actor = authorization?.actor ?? (input.actor?.trim() || 'local-gateway')
+        try {
+          const receipt = runtime.approvals.deny({
+            approvalId: input.approvalId,
+            actor,
+          })
+          this.recordGatewayApprovalDecision(input, 'denied')
+          if (authorization) runControl?.recordApprovalOutcome({ authorization, receiptId: receipt.receiptId })
+          return runtime.project(input.runId)
+        } catch (error) {
+          if (authorization) runControl?.recordApprovalFailure({ authorization })
+          throw error
+        }
       },
     },
   }
@@ -1541,6 +1613,27 @@ export class LocalMainspringGateway {
       resolvedAt: new Date().toISOString(),
       ...(existing?.metadata ? { metadata: existing.metadata } : {}),
     })
+  }
+
+  private assertCompatibilityApprovalBinding(input: LocalGatewayApprovalResponseInput): void {
+    const approval = this.runtime.approvals.list().find((candidate) => (
+      candidate.approvalId === input.approvalId
+    ))
+    if (!approval) throw new Error(`Unknown approval: ${input.approvalId}`)
+    if (approval.runId !== input.runId || approval.sessionId !== input.sessionId) {
+      throw new Error(`Approval ${input.approvalId} does not belong to the requested run/session.`)
+    }
+  }
+
+  private assertRunLogApprovalBinding(
+    runtime: RunLogMainspring,
+    input: LocalGatewayApprovalResponseInput,
+  ): void {
+    const request = runtime.store.getApprovalRequest(input.approvalId)
+    if (!request) throw new Error(`Unknown RunLog approval request: ${input.approvalId}`)
+    if (request.runId !== input.runId || request.sessionId !== input.sessionId) {
+      throw new Error(`RunLog approval ${input.approvalId} does not belong to the requested run/session.`)
+    }
   }
 
   snapshot(): LocalGatewaySnapshot {
@@ -1859,7 +1952,7 @@ export class LocalMainspringGateway {
     input: LocalGatewayStartRunInput,
     metadata: { providerProfileId?: string } = {},
   ): RunRecord {
-    const { sessionId, allowBudgetWarning: _allowBudgetWarning, actor: _actor, ...runInput } = input
+    const { sessionId, allowBudgetWarning: _allowBudgetWarning, actor, ...runInput } = input
     const session = this.runtime.storage.stateStore.getSession(sessionId)
     if (!session) throw new Error(`Unknown session: ${sessionId}`)
     const runtimeProfile = this.runtimeProfiles.assertRegistered(input.runtimeProfile)
@@ -1870,66 +1963,99 @@ export class LocalMainspringGateway {
       computerId: input.computerId,
       workspaceId: input.workspaceId,
     })
-    const run = this.runtime.storage.commandStore.enqueueRun(session, {
-      ...runInput,
-            ...(runtimeProfile ? { runtimeProfile } : {}),
-      ...(budgetPolicy ? { budget: budgetPolicy } : {}),
+    const runControl = this.runControl()
+    const authorization = runControl?.authorizeEnqueue({
+      sessionId,
+      actor,
+      workspaceId: input.workspaceId,
+      binding: gatewayRunBinding(input, {
+        budgetIds: budgetEvaluations.map((evaluation) => evaluation.budgetId),
+        ...(cellLeasePlan ? { cellLeasePlan } : {}),
+      }),
     })
-    const cellLease =
-      this.hyperCells && cellLeasePlan
-        ? this.hyperCells.acquirePlannedRunLease({
-            session,
-            run,
-            sessionId: input.sessionId,
-            computerId: input.computerId,
-            workspaceId: input.workspaceId,
-            plan: cellLeasePlan,
-          })
-        : undefined
-    this.persistRunMetadata(run, input, metadata, cellLease)
-    this.appState?.auditEvents.create({
-      category: 'gateway',
-      action: 'run.enqueued',
-      actor: input.actor?.trim() || 'local-gateway',
-      targetType: 'run',
-      targetId: run.runId,
-      runId: run.runId,
-      sessionId: input.sessionId,
-      metadata: {
-        ...(cellLease
-          ? {
-              cellId: cellLease.plan.cellId,
-              cellLeaseId: cellLease.leaseId,
-              backend: cellLease.plan.backend.key,
-              backendUnsafe: cellLease.plan.backend.unsafe,
-            }
-          : {}),
-      },
-    })
-    const warningBudgets = budgetEvaluations.filter((evaluation) => evaluation.status === 'warn')
-    if (warningBudgets.length > 0) {
-      this.appState?.auditEvents.create({
-        category: 'billing',
-        action: 'budget.warn',
-        actor: input.actor?.trim() || 'local-gateway',
-        targetType: 'run',
-        targetId: run.runId,
-        runId: run.runId,
-        sessionId: input.sessionId,
-        metadata: {
-          budgetIds: warningBudgets.map((evaluation) => evaluation.budgetId),
-        },
+    try {
+      const run = this.runtime.storage.commandStore.enqueueRun(session, {
+        ...runInput,
+        ...(runtimeProfile ? { runtimeProfile } : {}),
+        ...(budgetPolicy ? { budget: budgetPolicy } : {}),
       })
+      const cellLease =
+        this.hyperCells && cellLeasePlan
+          ? this.hyperCells.acquirePlannedRunLease({
+              session,
+              run,
+              sessionId: input.sessionId,
+              computerId: input.computerId,
+              workspaceId: input.workspaceId,
+              plan: cellLeasePlan,
+            })
+          : undefined
+      this.persistRunMetadata(
+        run,
+        input,
+        {
+          ...metadata,
+          ...(authorization ? { gatewayRunDecisionId: authorization.decision.decisionId } : {}),
+        },
+        cellLease,
+      )
+      if (authorization) {
+        runControl?.recordEnqueueOutcome({
+          authorization,
+          runId: run.runId,
+          runtime: 'compatibility',
+          ...(cellLease
+            ? {
+                execution: {
+                  cellId: cellLease.plan.cellId,
+                  cellLeaseId: cellLease.leaseId,
+                  backend: cellLease.plan.backend.key,
+                  backendUnsafe: cellLease.plan.backend.unsafe,
+                },
+              }
+            : {}),
+        })
+      }
+      const warningBudgets = budgetEvaluations.filter((evaluation) => evaluation.status === 'warn')
+      if (warningBudgets.length > 0) {
+        this.appState?.auditEvents.create({
+          category: 'billing',
+          action: 'budget.warn',
+          actor: authorization?.actor ?? (actor?.trim() || 'local-gateway'),
+          targetType: 'run',
+          targetId: run.runId,
+          runId: run.runId,
+          sessionId: input.sessionId,
+          metadata: {
+            budgetIds: warningBudgets.map((evaluation) => evaluation.budgetId),
+          },
+        })
+      }
+      return run
+    } catch (error) {
+      if (authorization) runControl?.recordEnqueueFailure({ authorization })
+      throw error
     }
-    return run
   }
 
   private persistRunMetadata(
     run: RunRecord,
     input: LocalGatewayStartRunInput,
-    metadata: { providerProfileId?: string },
+    metadata: { providerProfileId?: string; gatewayRunDecisionId?: string },
     cellLease?: AcquiredHyperCellRunLease,
   ): void {
+    const runMetadata = {
+      ...(metadata.gatewayRunDecisionId ? { gatewayRunDecisionId: metadata.gatewayRunDecisionId } : {}),
+      ...(cellLease
+        ? {
+            cellId: cellLease.plan.cellId,
+            cellLeaseId: cellLease.leaseId,
+            requestedComputerId: cellLease.plan.requestedComputerId,
+            executionBackend: cellLease.plan.backend.key,
+            executionBackendUnsafe: cellLease.plan.backend.unsafe,
+          }
+        : {}),
+    }
     this.appState?.runs.upsert({
       runId: run.runId,
       sessionId: input.sessionId,
@@ -1941,17 +2067,7 @@ export class LocalMainspringGateway {
       ...(input.runtimeProfile
         ? { runtimeProfile: this.runtimeProfiles.assertRegistered(input.runtimeProfile) }
         : {}),
-      ...(cellLease
-        ? {
-            metadata: {
-              cellId: cellLease.plan.cellId,
-              cellLeaseId: cellLease.leaseId,
-              requestedComputerId: cellLease.plan.requestedComputerId,
-              executionBackend: cellLease.plan.backend.key,
-              executionBackendUnsafe: cellLease.plan.backend.unsafe,
-            },
-          }
-        : {}),
+      ...(Object.keys(runMetadata).length > 0 ? { metadata: runMetadata } : {}),
     })
   }
 
@@ -2838,6 +2954,10 @@ export class LocalMainspringGateway {
 
   private provenanceReviewControl(): GatewayProvenanceReviewControl {
     return new GatewayProvenanceReviewControl({ appState: this.requireAppState() })
+  }
+
+  private runControl(): GatewayRunControl | undefined {
+    return this.appState ? new GatewayRunControl(this.appState) : undefined
   }
 
   private requireWorkspace(workspaceId: string): LocalGatewayWorkspaceRecord {
