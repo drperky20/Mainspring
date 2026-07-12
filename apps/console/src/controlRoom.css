@@ -641,6 +641,22 @@ button.control-data-row:hover {
   grid-template-columns: 12px minmax(0, 1fr) auto auto;
 }
 
+.control-artifact-row {
+  grid-template-columns: 12px minmax(0, 1fr) auto auto;
+}
+
+.control-artifact-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.control-artifact-actions .simple-secondary {
+  min-height: 31px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
 .control-data-row > span.control-memory-actions,
 .control-memory-dialog-actions {
   display: flex;
@@ -1604,6 +1620,10 @@ button.control-data-row:hover {
     grid-template-columns: 10px minmax(0, 1fr);
   }
 
+  .control-artifact-row {
+    grid-template-columns: 10px minmax(0, 1fr);
+  }
+
   .control-row-meta {
     grid-column: 2;
     justify-items: start;
@@ -1613,6 +1633,14 @@ button.control-data-row:hover {
   .control-memory-actions {
     grid-column: 2;
     justify-content: flex-start;
+  }
+
+  .control-artifact-row .control-row-meta,
+  .control-artifact-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+    justify-items: start;
+    text-align: left;
   }
 
   .control-activity-list li {

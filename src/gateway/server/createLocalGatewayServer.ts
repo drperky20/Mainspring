@@ -1968,6 +1968,10 @@ export class LocalGatewayHttpServer {
         'content-length': String(sizeBytes),
         'content-disposition': `${download ? 'attachment' : 'inline'}; filename="${safeArtifactFilename(artifact)}"`,
         'cache-control': 'no-store',
+        'content-security-policy': "default-src 'none'; sandbox",
+        'cross-origin-resource-policy': 'same-origin',
+        'referrer-policy': 'no-referrer',
+        'x-content-type-options': 'nosniff',
       })
       await new Promise<void>((resolve, reject) => {
         const stream = handle.createReadStream()
@@ -1986,9 +1990,8 @@ export class LocalGatewayHttpServer {
         })
         void stream.pipe(response)
       })
-    } catch (error) {
+    } finally {
       await handle.close().catch(() => undefined)
-      throw error
     }
   }
 

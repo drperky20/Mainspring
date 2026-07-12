@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
   ConsoleGatewayMemoryEntry,
+  ConsoleGatewayArtifact,
   ConsoleGatewayRunEvent,
   ConsoleGatewaySnapshot,
 } from 'mainspring/gateway'
@@ -19,6 +20,7 @@ import {
   type DraftClient,
 } from './ConsoleClientForms'
 import {
+  deriveLocalGatewayArtifactAccessUrls,
   isAllowedLocalGatewayUrl,
   localGatewayUrlFromEnv,
 } from './localGatewayTransport'
@@ -32,6 +34,7 @@ import { useUsageHistoryPage } from './useUsageHistoryPage'
 import { useArtifactHistoryPage } from './useArtifactHistoryPage'
 import { useAuditHistoryPage } from './useAuditHistoryPage'
 import { useMemoryHistoryPage } from './useMemoryHistoryPage'
+import type { ArtifactOpenMode } from './artifactPresentation'
 import {
   createChatMessage,
   createScopedRunUiState,
@@ -435,6 +438,30 @@ export function ConnectedConsoleApp() {
       await refresh()
       selectRun(result.run.runId)
       setToast({ kind: 'ok', text: `Fresh retry ${shortId(result.run.runId)} queued.` })
+    } catch (error) {
+      setToast({ kind: 'error', text: errorMessage(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function openOperatorArtifact(artifact: ConsoleGatewayArtifact, mode: ArtifactOpenMode) {
+    setBusy(true)
+    try {
+      const access = await gatewayClient.browserAccessUrl({
+        kind: 'artifact',
+        artifactId: artifact.artifactId,
+      })
+      const urls = deriveLocalGatewayArtifactAccessUrls(access.url)
+      if (!urls) throw new Error('Gateway returned an unsafe artifact access URL.')
+      const targetUrl = mode === 'download' ? urls.downloadUrl : urls.previewUrl
+      const opened = typeof window !== 'undefined'
+        ? window.open(targetUrl, '_blank', 'noopener,noreferrer')
+        : null
+      if (!opened) {
+        throw new Error('The browser blocked the artifact window. Allow pop-ups for this console.')
+      }
+      setToast({ kind: 'ok', text: mode === 'download' ? 'Artifact download opened.' : 'Artifact preview opened.' })
     } catch (error) {
       setToast({ kind: 'error', text: errorMessage(error) })
     } finally {
@@ -950,11 +977,13 @@ export function ConnectedConsoleApp() {
               />
             ) : activityTab === 'artifacts' ? (
               <ArtifactsScreen
+                actionBusy={busy}
                 artifacts={artifactHistory.artifacts}
                 error={artifactHistoryEnabled ? artifactHistory.error : undefined}
                 hasMore={artifactHistoryEnabled && Boolean(artifactHistory.nextCursor)}
                 loading={artifactHistoryEnabled && artifactHistory.loading}
                 onLoadMore={() => void artifactHistory.loadMore()}
+                onOpenArtifact={(artifact, mode) => void openOperatorArtifact(artifact, mode)}
               />
             ) : activityTab === 'audit' ? (
               <AuditScreen

@@ -4,6 +4,8 @@ export interface ArtifactPresentation {
   hint: string
 }
 
+export type ArtifactOpenMode = 'preview' | 'download'
+
 export function artifactPresentation(input: {
   mediaType?: string
   kind: string

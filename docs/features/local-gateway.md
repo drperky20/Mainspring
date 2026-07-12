@@ -104,7 +104,9 @@ browser-access route. Artifact and usage rows are read-only through the normal
 app-state interface; `GatewayArtifactProjection` and `GatewayUsageProjection`
 are the runtime-owned materialization seams. Before artifact bytes are served,
 `GatewayArtifactAccess` resolves the persisted path beneath the configured
-runtime artifact root after symlink resolution and opens the file handle. A
+runtime artifact root after symlink resolution and opens the file handle. The
+HTTP stream closes that handle on both success and failure and emits a
+`sandbox` CSP, `nosniff`, `no-referrer`, and same-origin resource policy. A
 row outside that root, a symlink escape, a missing/non-file target, or an
 unsafe media type fails closed rather than turning app-state metadata into an
 arbitrary host-file read.

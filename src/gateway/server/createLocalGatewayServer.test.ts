@@ -1069,6 +1069,15 @@ describe('LocalGatewayHttpServer', () => {
     })
     const gateway = createLocalMainspringGateway({ runtime, appState })
     const server = createLocalGatewayServer({ gateway, host: '127.0.0.1', port: 0 })
+    let openedHandle: (Awaited<ReturnType<typeof gateway.resolveArtifactFile>> extends infer T
+      ? T extends { handle: infer H } ? H : never
+      : never) | undefined
+    const resolveArtifactFile = gateway.resolveArtifactFile.bind(gateway)
+    gateway.resolveArtifactFile = async (artifactId) => {
+      const result = await resolveArtifactFile(artifactId)
+      if (result) openedHandle = result.handle
+      return result
+    }
 
     await runtime.start()
     try {
@@ -1077,7 +1086,14 @@ describe('LocalGatewayHttpServer', () => {
       const outside = await fetch(`${started.url}/artifacts/artifact_outside`)
       expect(inside.status).toBe(200)
       expect(inside.headers.get('content-type')).toBe('application/octet-stream')
+      expect(inside.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox")
+      expect(inside.headers.get('cross-origin-resource-policy')).toBe('same-origin')
+      expect(inside.headers.get('referrer-policy')).toBe('no-referrer')
+      expect(inside.headers.get('x-content-type-options')).toBe('nosniff')
       expect(await inside.text()).toBe('inside artifact')
+      expect(openedHandle).toBeDefined()
+      if (!openedHandle) throw new Error('Expected artifact file handle to be captured.')
+      await expect(openedHandle.readFile('utf8')).rejects.toThrow()
       expect(outside.status).toBe(404)
       await server.stop()
     } finally {

@@ -15,6 +15,7 @@ import type {
 } from './operatorConsoleViewModel'
 import { humanizeStatus } from './operatorConsoleViewModel'
 import { Dialog } from './ConsoleWorkflowPrimitives'
+import { artifactPresentation, type ArtifactOpenMode } from './artifactPresentation'
 
 export type ConsoleConnectionState =
   | 'loading'
@@ -674,17 +675,21 @@ export function UsageScreen({
 }
 
 export function ArtifactsScreen({
+  actionBusy = false,
   artifacts = [],
   error,
   hasMore = false,
   loading = false,
   onLoadMore,
+  onOpenArtifact,
 }: {
+  actionBusy?: boolean
   artifacts?: ConsoleGatewayArtifact[]
   error?: string
   hasMore?: boolean
   loading?: boolean
   onLoadMore?: () => void
+  onOpenArtifact?: (artifact: ConsoleGatewayArtifact, mode: ArtifactOpenMode) => void
 }) {
   return (
     <section className="control-screen artifacts-screen" aria-labelledby="artifacts-title">
@@ -712,7 +717,7 @@ export function ArtifactsScreen({
         ) : (
           <div className="control-row-list">
             {artifacts.map((artifact) => (
-              <div className="control-data-row static" key={artifact.artifactId}>
+              <div className="control-data-row control-artifact-row static" key={artifact.artifactId}>
                 <StatusDot status="completed" />
                 <span>
                   <strong>{artifact.label ?? artifact.kind}</strong>
@@ -724,6 +729,27 @@ export function ArtifactsScreen({
                   <strong>{shortId(artifact.runId)}</strong>
                   <small>{formatDateTime(artifact.createdAt)}</small>
                 </span>
+                {onOpenArtifact ? (
+                  <span className="control-artifact-actions">
+                    <button
+                      className="simple-secondary"
+                      disabled={actionBusy}
+                      title={artifactPresentation(artifact).hint}
+                      type="button"
+                      onClick={() => onOpenArtifact(artifact, 'preview')}
+                    >
+                      {artifactPresentation(artifact).previewLabel}
+                    </button>
+                    <button
+                      className="simple-secondary"
+                      disabled={actionBusy}
+                      type="button"
+                      onClick={() => onOpenArtifact(artifact, 'download')}
+                    >
+                      Download
+                    </button>
+                  </span>
+                ) : null}
               </div>
             ))}
           </div>
