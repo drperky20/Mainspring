@@ -90,12 +90,19 @@ function approvalTool(executions: { count: number }): RuntimeTool {
 
 async function waitFor<T>(predicate: () => T | Promise<T>, label: string): Promise<T> {
   const deadline = Date.now() + 10_000
+  let lastError: unknown
   while (Date.now() < deadline) {
-    const value = await predicate()
-    if (value) return value
+    try {
+      const value = await predicate()
+      if (value) return value
+    } catch (error) {
+      // Windows HTTP polling can briefly reset a keep-alive connection while
+      // the local server and worker exchange state. Treat it as a missed poll.
+      lastError = error
+    }
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
-  throw new Error(`Timed out waiting for ${label}.`)
+  throw new Error(`Timed out waiting for ${label}.`, { cause: lastError })
 }
 
 function fileContains(root: string, needle: string): string | null {
