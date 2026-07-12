@@ -1518,8 +1518,9 @@ button.control-data-row:hover {
   }
 
   .simple-sidebar {
-    height: 72px;
+    height: calc(72px + env(safe-area-inset-bottom, 0px));
     background: rgba(9, 13, 14, 0.97);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   .sidebar-nav {
@@ -1554,7 +1555,7 @@ button.control-data-row:hover {
   .control-screen,
   .client-screen,
   .settings-screen {
-    padding: 20px 14px 92px;
+    padding: 20px 14px calc(104px + env(safe-area-inset-bottom, 0px));
   }
 
   .control-screen-header {
@@ -1641,6 +1642,10 @@ button.control-data-row:hover {
     justify-content: center;
     min-width: 0;
     padding: 0 8px;
+  }
+
+  .message-feed {
+    min-height: 240px;
   }
 }
 

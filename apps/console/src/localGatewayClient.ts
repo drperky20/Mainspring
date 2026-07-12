@@ -5,6 +5,7 @@ import type {
   ConsoleGatewayRunLogToolCall,
   ConsoleGatewaySnapshot,
 } from 'mainspring/gateway'
+import { DefaultChatTransport, type UIMessage, type UIMessageChunk } from 'ai'
 import {
   browserUnsafeGatewayTextMarkers,
   containsBrowserUnsafeGatewayText,
@@ -535,6 +536,17 @@ export interface LocalGatewayClient {
     modelId?: string
     runtimeProfile?: string
   }): Promise<{ run: { runId: string; sessionId: string } }>
+  streamChat(input: {
+    sessionId: string
+    input: string
+    allowedTools: string[]
+    allowBudgetWarning?: boolean
+    workspaceId?: string
+    agentId?: string
+    providerProfileId?: string
+    providerId?: string
+    modelId?: string
+  }, signal?: AbortSignal): Promise<ReadableStream<UIMessageChunk>>
   cancelRun(input: { sessionId: string; runId: string; reason?: string }): Promise<{
     runId: string
     sessionId: string
@@ -930,6 +942,29 @@ export function createLocalGatewayClient(
         headers: { 'content-type': 'application/json', ...authHeaders() },
         body: JSON.stringify(input),
       }),
+    streamChat: (input, signal) => {
+      const transport = new DefaultChatTransport({
+        api: `${normalizedBaseUrl}/chat/stream`,
+        fetch: fetchImpl,
+        prepareSendMessagesRequest: ({ api }) => ({
+          api,
+          headers: authHeaders(),
+          body: { ...input, mode: 'chat' },
+        }),
+      })
+      const message: UIMessage = {
+        id: `user_${Date.now()}`,
+        role: 'user',
+        parts: [{ type: 'text', text: input.input }],
+      }
+      return transport.sendMessages({
+        trigger: 'submit-message',
+        chatId: input.sessionId,
+        messageId: message.id,
+        messages: [message],
+        abortSignal: signal,
+      })
+    },
     cancelRun: ({ runId, ...input }) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/runs/${encodeURIComponent(runId)}/cancel`, {
         method: 'POST',

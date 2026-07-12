@@ -141,6 +141,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - The compatibility runner resolves each mailbox session to its persisted SDK workspace record. Metadata-free legacy/channel sessions receive separate per-session workspace directories beneath `MAINSPRING_WORKSPACE_ROOT`; this path separation is not a sandbox, and the runner no longer shares one workspace root across all sessions.
 - All runnable examples now exercise the RunLog SDK host; the old mailbox/runtime path remains for legacy `createMainspring` SDK/gateway compatibility and tests.
 - The default gateway `/runs/start` route is RunLog-backed in the local dev server and in gateways configured with `CreateLocalMainspringGatewayOptions.runLog`; gateways constructed without a RunLog host remain mailbox-compatible for migration tests and older embedders.
+- Console chat dispatch uses the authenticated `POST /chat/stream` adapter. It starts the same canonical RunLog path and translates only public assistant and terminal events into the AI SDK v1 UI-message stream protocol; automation and compatibility callers retain their existing dispatch contracts.
 - New non-tool mutation surfaces must use `createHostDecisionRecord`; provider-profile, provenance-review, deployment, cron, budget, run-ingress/approval, and operator-memory controls persist this decision shape with hash-only mutation evidence. The existing channel bridge remains compatibility-only until it gains a RunLog-native identity model.
 - `GatewaySnapshotReader` owns the broad read-only gateway aggregate, its RunLog
   worker/outbox summary, and the server-only revision token. `LocalGateway` keeps
@@ -157,7 +158,6 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 
 - Full replacement of `RuntimeKernel` and per-session mailbox execution with RunLog execution.
 - Broader provider-account auth beyond env/local managed refs, such as OAuth provider auth or hosted KMS.
-- AI SDK streaming transport endpoint for the console chat surface; the UI package dependency exists, but gateway chat dispatch still goes through `/runs/start`.
 - Postgres, Redis/BullMQ, S3/R2/MinIO, and managed-cloud control-plane adapters. Docker execution plus local/container/VPS/Kubernetes deployment drivers exist, but the Kubernetes driver has not been certified against a real production cluster and none of these are VM isolation.
 - The package does not implement hosted browser process ownership, browser identity, cross-restart page persistence, or browser process isolation.
 - Browser/page multimodal context and provider-specific content-part adapters.

@@ -134,6 +134,7 @@ export function ConnectedConsoleApp() {
   } = useGatewaySnapshot(gatewayClient)
   const {
     observeRun,
+    startChatStream,
     runUiByScope,
     updateScopedRunUi,
   } = useConsoleRunActivity({ gatewayClient, gatewayUrl, refresh })
@@ -704,10 +705,9 @@ export function ConnectedConsoleApp() {
     setBusy(true)
     try {
       const provider = selectedProviderProfile
-      const result = await gatewayClient.startRun({
+      const runInput = {
         sessionId: session.sessionId,
         input: trimmedPrompt,
-        mode: input.mode,
         allowedTools: input.tools,
         allowBudgetWarning: true,
         workspaceId: selectedWorkspace.workspaceId,
@@ -715,33 +715,29 @@ export function ConnectedConsoleApp() {
         providerProfileId: provider?.profileId,
         providerId: provider?.providerId,
         modelId: selectedAgent.defaultModelId ?? provider?.defaultModelId,
-      })
+      }
+      const run = input.addChatMessage
+        ? await startChatStream(runInput, { runLabel: shortId, scopeKey })
+        : (await gatewayClient.startRun({ ...runInput, mode: input.mode })).run
       updateScopedRunUi(scopeKey, (current) => ({
         ...current,
         lastRun: {
-          runId: result.run.runId,
-          sessionId: result.run.sessionId,
+          runId: run.runId,
+          sessionId: run.sessionId,
           mode: input.mode,
           prompt: trimmedPrompt,
         },
         runEvents: [],
       }))
-      observeRun(result.run, {
-        addChatMessage: Boolean(input.addChatMessage),
-        runLabel: shortId(result.run.runId),
-        scopeKey,
-      })
-      if (input.addChatMessage) {
-        updateScopedRunUi(scopeKey, (current) => ({
-          ...current,
-          chatMessages: [
-            ...current.chatMessages,
-            createChatMessage('assistant', `Run ${shortId(result.run.runId)} started. Live actions will appear on the rail.`),
-          ],
-        }))
+      if (!input.addChatMessage) {
+        observeRun(run, {
+          addChatMessage: false,
+          runLabel: shortId(run.runId),
+          scopeKey,
+        })
       }
       await refresh()
-      setToast({ kind: 'ok', text: `Run ${shortId(result.run.runId)} started.` })
+      setToast({ kind: 'ok', text: `Run ${shortId(run.runId)} started.` })
     } catch (error) {
       if (input.addChatMessage) {
         updateScopedRunUi(scopeKey, (current) => ({

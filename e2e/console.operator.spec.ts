@@ -48,10 +48,14 @@ test.describe('operator console', () => {
     const composer = page.locator('textarea').first()
     await composer.fill('Reply with a short local status update.')
     const started = page.waitForResponse((response) =>
-      response.url().endsWith('/runs/start') && response.status() === 202,
+      response.url().endsWith('/chat/stream') && response.status() === 200,
     )
     await page.getByRole('button', { name: 'Send' }).click()
-    const startedRun = (await (await started).json()).run as { runId: string }
+    const streamBody = await (await started).text()
+    const runId = streamBody.match(/"runId":"([^"]+)"/)?.[1]
+    expect(runId).toBeTruthy()
+    const startedRun = { runId: runId! }
+    await expect(page.locator('.message-bubble.assistant').last()).toBeVisible()
     await expect(page.getByText(/Run [a-z0-9_-]+ started\./i)).toBeVisible()
 
     // The worker publishes state asynchronously. Poll the durable gateway projection rather
@@ -96,6 +100,19 @@ test.describe('operator console', () => {
     await page.setViewportSize({ width: 390, height: 844 })
     await finishFirstRun(page)
 
+    await page.getByRole('button', { name: 'Workspaces', exact: true }).click()
+    await page.getByRole('button', { name: 'chat', exact: true }).click()
+    const sendButton = page.getByRole('button', { name: 'Send', exact: true })
+    const primaryNavigation = page.getByRole('navigation', { name: 'Main' })
+    await expect(sendButton).toBeVisible()
+    const [sendBox, navigationBox] = await Promise.all([
+      sendButton.boundingBox(),
+      primaryNavigation.boundingBox(),
+    ])
+    expect(sendBox).not.toBeNull()
+    expect(navigationBox).not.toBeNull()
+    expect(sendBox!.y + sendBox!.height).toBeLessThanOrEqual(navigationBox!.y)
+
     await page.getByRole('button', { name: 'Activity', exact: true }).click()
     const activityNavigation = page.getByRole('navigation', { name: 'Activity views' })
     for (const name of ['Runs', 'Tools', 'Approvals', 'Usage', 'Artifacts', 'Audit', 'Memory']) {
@@ -117,7 +134,7 @@ test.describe('operator console', () => {
 
     await page.getByRole('button', { name: 'Memory', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Memory', exact: true })).toBeVisible()
-    const setupToast = page.getByRole('status')
+    const setupToast = page.getByRole('status').filter({ hasText: 'Account step complete.' })
     if (await setupToast.isVisible()) await setupToast.click()
 
     const correctMemory = page.getByRole('button', { name: 'Correct', exact: true })

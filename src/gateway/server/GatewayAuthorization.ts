@@ -9,6 +9,7 @@ const ROLE_PERMISSIONS: Record<LocalGatewayAuthUserRecord['role'], ReadonlySet<G
 }
 
 const OPERATOR_MUTATIONS = [
+  /^POST \/chat\/stream$/,
   /^POST \/runs\/start$/,
   /^POST \/runs\/[^/]+\/cancel$/,
   /^POST \/runlog\/runs\/start$/,

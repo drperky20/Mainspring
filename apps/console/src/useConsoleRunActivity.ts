@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 import type { UIMessage } from '@ai-sdk/react'
+import type { UIMessageChunk } from 'ai'
 import type { ConsoleGatewayRunEvent } from 'mainspring/gateway'
 import type { LocalGatewayClient } from './localGatewayClient'
 
@@ -87,6 +88,10 @@ export function useConsoleRunActivity(input: {
     run: { sessionId: string; runId: string },
     options: { addChatMessage: boolean; runLabel: string; scopeKey: string },
   ): void
+  startChatStream(
+    input: Parameters<LocalGatewayClient['streamChat']>[0],
+    options: { runLabel(runId: string): string; scopeKey: string },
+  ): Promise<{ runId: string; sessionId: string }>
 } {
   const [runUiByScope, setRunUiByScope] = useState<Record<string, ScopedRunUiState>>({})
 
@@ -192,7 +197,66 @@ export function useConsoleRunActivity(input: {
     }, 2_500)
   }, [pollRunEvents, streamRunEvents])
 
-  return { runUiByScope, updateScopedRunUi, observeRun }
+  const startChatStream = useCallback(async (
+    chatInput: Parameters<LocalGatewayClient['streamChat']>[0],
+    options: { runLabel(runId: string): string; scopeKey: string },
+  ): Promise<{ runId: string; sessionId: string }> => {
+    const stream = await input.gatewayClient.streamChat(chatInput)
+    const reader = stream.getReader()
+    let startedRun: { runId: string; sessionId: string } | undefined
+    let resolveStarted!: (run: { runId: string; sessionId: string }) => void
+    let rejectStarted!: (error: unknown) => void
+    const started = new Promise<{ runId: string; sessionId: string }>((resolve, reject) => {
+      resolveStarted = resolve
+      rejectStarted = reject
+    })
+
+    void (async () => {
+      try {
+        while (true) {
+          const next = await reader.read()
+          if (next.done) break
+          const chunk: UIMessageChunk = next.value
+          if (chunk.type === 'data-run') {
+            const data = chunk.data as { runId?: unknown; sessionId?: unknown }
+            if (typeof data.runId === 'string' && typeof data.sessionId === 'string' && !startedRun) {
+              startedRun = { runId: data.runId, sessionId: data.sessionId }
+              resolveStarted(startedRun)
+              void streamRunEvents(startedRun, {
+                addChatMessage: false,
+                runLabel: options.runLabel(startedRun.runId),
+                scopeKey: options.scopeKey,
+              })
+            }
+          } else if (chunk.type === 'text-delta' && chunk.delta) {
+            updateScopedRunUi(options.scopeKey, (current) => ({
+              ...current,
+              chatMessages: appendAssistantDelta(current.chatMessages, chunk.delta),
+            }))
+          } else if (chunk.type === 'error') {
+            updateScopedRunUi(options.scopeKey, (current) => ({
+              ...current,
+              chatMessages: [...current.chatMessages, createChatMessage('assistant', chunk.errorText)],
+            }))
+          }
+        }
+        if (!startedRun) rejectStarted(new Error('Chat stream ended before returning a run identifier.'))
+        await input.refresh().catch(() => undefined)
+      } catch (error) {
+        if (!startedRun) rejectStarted(error)
+        updateScopedRunUi(options.scopeKey, (current) => ({
+          ...current,
+          chatMessages: [...current.chatMessages, createChatMessage('assistant', errorMessage(error))],
+        }))
+      } finally {
+        reader.releaseLock()
+      }
+    })()
+
+    return started
+  }, [input.gatewayClient, input.refresh, streamRunEvents, updateScopedRunUi])
+
+  return { runUiByScope, updateScopedRunUi, observeRun, startChatStream }
 }
 
 function safeJsonParse<T>(value: string): T | undefined {
@@ -201,4 +265,8 @@ function safeJsonParse<T>(value: string): T | undefined {
   } catch {
     return undefined
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

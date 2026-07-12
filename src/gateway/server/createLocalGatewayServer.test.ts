@@ -4169,6 +4169,29 @@ describe('LocalGatewayHttpServer', () => {
         }),
       ])
       expect(snapshot.runs).toEqual([])
+
+      const chatResponse = await fetch(`${started.url}/chat/stream`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.record.sessionId,
+          input: 'Stream this chat through RunLog.',
+          mode: 'chat',
+          allowedTools: [],
+        }),
+      })
+      const chatStream = await chatResponse.text()
+      expect(chatResponse.status).toBe(200)
+      expect(chatResponse.headers.get('content-type')).toContain('text/event-stream')
+      expect(chatResponse.headers.get('x-vercel-ai-ui-message-stream')).toBe('v1')
+      expect(chatStream).toContain('"type":"data-run"')
+      expect(chatStream).toContain('"type":"text-start"')
+      expect(chatStream).toContain('"type":"text-delta"')
+      expect(chatStream).toContain('"delta":"default route via runlog"')
+      expect(chatStream).toContain('"type":"text-end"')
+      expect(chatStream).toContain('"type":"finish"')
+      expect(chatStream).toContain('data: [DONE]')
+      expect(chatStream).not.toContain('Stream this chat through RunLog.')
     } finally {
       await server.stop()
       runLog.close()
