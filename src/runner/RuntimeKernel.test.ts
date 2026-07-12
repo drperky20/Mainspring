@@ -1144,6 +1144,17 @@ describe('RuntimeKernel', () => {
     })
     await kernel.runUntilIdle({ waitForActiveQueries: true })
 
+    // SQLite event timestamps have millisecond precision, so a fast provider can
+    // persist the tool call, tool result, and final assistant message together.
+    // Replay must retain durable event sequence rather than platform sort quirks.
+    const eventDb = new Database(mailbox.paths.eventsDbPath)
+    try {
+      eventDb.prepare('UPDATE events_out SET timestamp = ? WHERE session_id = ?')
+        .run('2026-05-16T00:00:01.500Z', 'default')
+    } finally {
+      eventDb.close()
+    }
+
     insertInbound({
       mailbox,
       id: 'in_second',

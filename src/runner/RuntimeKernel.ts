@@ -1152,7 +1152,12 @@ export class RuntimeKernel {
       limit: 64,
     })
 
-    const entries: Array<{ timestamp: string; order: number; message: ProviderMessage }> = []
+    const entries: Array<{
+      timestamp: string
+      order: number
+      eventSeq?: number
+      message: ProviderMessage
+    }> = []
     for (const prompt of prompts) {
       entries.push({
         timestamp: prompt.timestamp,
@@ -1166,6 +1171,7 @@ export class RuntimeKernel {
           entries.push({
             timestamp: row.timestamp,
             order: 1,
+            eventSeq: row.seq,
             message: { role: 'assistant', content: row.event.text },
           })
           break
@@ -1173,6 +1179,7 @@ export class RuntimeKernel {
           entries.push({
             timestamp: row.timestamp,
             order: 1,
+            eventSeq: row.seq,
             message: {
               role: 'assistant',
               content: null,
@@ -1190,6 +1197,7 @@ export class RuntimeKernel {
           entries.push({
             timestamp: row.timestamp,
             order: 2,
+            eventSeq: row.seq,
             message: {
               role: 'tool',
               content: serializeReplayContent(row.event.output),
@@ -1204,7 +1212,11 @@ export class RuntimeKernel {
     return entries
       .sort((left, right) => {
         const timestampOrder = left.timestamp.localeCompare(right.timestamp)
-        return timestampOrder !== 0 ? timestampOrder : left.order - right.order
+        if (timestampOrder !== 0) return timestampOrder
+        if (left.eventSeq !== undefined && right.eventSeq !== undefined) {
+          return left.eventSeq - right.eventSeq
+        }
+        return left.order - right.order
       })
       .map((entry) => entry.message)
   }

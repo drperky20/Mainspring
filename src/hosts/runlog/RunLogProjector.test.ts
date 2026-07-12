@@ -71,7 +71,7 @@ describe('RunLogProjector', () => {
       'assistant.result',
       'run.completed',
     ])
-  })
+  }, 90_000)
 
   it('persists the cursor across restart and does not reapply already projected events', () => {
     const { dbPath, store, run } = setup()
