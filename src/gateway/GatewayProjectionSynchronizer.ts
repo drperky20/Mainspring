@@ -212,26 +212,12 @@ export class GatewayProjectionSynchronizer<
     const projection = this.options.usageProjection
     if (!runtime || !projection) return
 
-    for (const run of runtime.runs.list()) {
-      const runMetadata = this.options.appState.runs.get(run.runId) ?? undefined
-      const providerInit = runtime.store
-        .listEvents({ runId: run.runId, types: ['provider.init'], limit: 500 })
-        .at(-1)
-      const providerInitPayload = recordValue(providerInit?.payload)
-      const usageEvents = runtime.store.listEvents({
-        runId: run.runId,
-        types: ['usage.reported'],
-        limit: 10_000,
+    for (const summary of runtime.usage.list()) {
+      const runMetadata = this.options.appState.runs.get(summary.runId) ?? undefined
+      projection.projectRunLogSummary({
+        summary,
+        ...(runMetadata ? { runMetadata } : {}),
       })
-
-      for (const event of usageEvents) {
-        projection.projectRunLogEvent({
-          event,
-          run,
-          runMetadata,
-          ...(providerInitPayload ? { providerInitPayload } : {}),
-        })
-      }
     }
   }
 

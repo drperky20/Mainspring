@@ -6,6 +6,7 @@ import type {
 import type {
   RunLogEvent,
   RunRecord as RunLogRunRecord,
+  RunLogUsageSummary,
 } from '../core/types.js'
 import { estimateUsageCost } from '../usage/UsageAccounting.js'
 import type { ModelPricing } from '../usage/ModelPricing.js'
@@ -284,6 +285,104 @@ export class GatewayUsageProjection<TEvaluation extends GatewayBudgetEvaluationL
     this.options.recordBudgetTransitions({
       runId: input.run.runId,
       sessionId: input.run.sessionId,
+      entryId,
+      previousStatuses: before,
+    })
+  }
+
+  /**
+   * Projects the canonical durable usage read model. This is the preferred
+   * gateway path because it does not rescan raw RunLog payloads on every sync.
+   */
+  projectRunLogSummary(input: {
+    summary: RunLogUsageSummary
+    runMetadata?: LocalGatewayRunMetadataRecord
+  }): void {
+    const entryId = `usage_runlog_${input.summary.eventId}`
+    if (this.options.appState.usageLedger.get(entryId)) return
+
+    const before = previousStatuses(this.options.evaluateBudgets())
+    const providerId = input.summary.providerId ?? input.runMetadata?.providerId
+    const modelId = input.summary.modelId ?? input.runMetadata?.modelId
+    const usage: ProviderUsage = {
+      ...(providerId ? { provider: providerId } : {}),
+      ...(modelId ? { modelId } : {}),
+      ...(input.summary.modelFamily ? { modelFamily: input.summary.modelFamily } : {}),
+      ...(input.summary.providerTransport
+        ? { providerTransport: input.summary.providerTransport }
+        : {}),
+      ...(input.summary.inputTokens !== undefined
+        ? { inputTokens: input.summary.inputTokens }
+        : {}),
+      ...(input.summary.outputTokens !== undefined
+        ? { outputTokens: input.summary.outputTokens }
+        : {}),
+      ...(input.summary.totalTokens !== undefined
+        ? { totalTokens: input.summary.totalTokens }
+        : {}),
+      ...(input.summary.cacheReadTokens !== undefined
+        ? { cacheReadTokens: input.summary.cacheReadTokens }
+        : {}),
+      ...(input.summary.cacheWriteTokens !== undefined
+        ? { cacheWriteTokens: input.summary.cacheWriteTokens }
+        : {}),
+      ...(input.summary.reasoningTokens !== undefined
+        ? { reasoningTokens: input.summary.reasoningTokens }
+        : {}),
+      ...(input.summary.rateLimit ? { rateLimit: input.summary.rateLimit } : {}),
+    }
+    const costEstimate = estimateUsageCost({
+      usage,
+      catalog: this.options.pricingCatalog,
+    })
+    const workspaceId = input.summary.workspaceId ?? input.runMetadata?.workspaceId
+    this.options.appState.projections.usageLedger.create({
+      entryId,
+      runId: input.summary.runId,
+      sessionId: input.summary.sessionId,
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(providerId ? { providerId } : {}),
+      ...(modelId ? { modelId } : {}),
+      ...(input.summary.inputTokens !== undefined
+        ? { inputTokens: input.summary.inputTokens }
+        : {}),
+      ...(input.summary.outputTokens !== undefined
+        ? { outputTokens: input.summary.outputTokens }
+        : {}),
+      ...(input.summary.totalTokens !== undefined
+        ? { totalTokens: input.summary.totalTokens }
+        : {}),
+      ...(costEstimate.estimatedCostUsd !== undefined
+        ? { estimatedCostUsd: costEstimate.estimatedCostUsd }
+        : {}),
+      metadata: {
+        runtime: 'runlog',
+        sourceEventId: input.summary.eventId,
+        sourceSeq: input.summary.latestSeq,
+        pricingStatus: costEstimate.pricingStatus,
+        ...(costEstimate.pricing ? { pricingModelId: costEstimate.pricing.modelId } : {}),
+        ...(input.summary.modelFamily ? { modelFamily: input.summary.modelFamily } : {}),
+        ...(input.summary.providerTransport
+          ? { providerTransport: input.summary.providerTransport }
+          : {}),
+        ...(input.summary.providerSessionId
+          ? { providerSessionId: input.summary.providerSessionId }
+          : {}),
+        ...(input.summary.cacheReadTokens !== undefined
+          ? { cacheReadTokens: input.summary.cacheReadTokens }
+          : {}),
+        ...(input.summary.cacheWriteTokens !== undefined
+          ? { cacheWriteTokens: input.summary.cacheWriteTokens }
+          : {}),
+        ...(input.summary.reasoningTokens !== undefined
+          ? { reasoningTokens: input.summary.reasoningTokens }
+          : {}),
+        ...(input.summary.rateLimit ? { rateLimit: input.summary.rateLimit } : {}),
+      },
+    })
+    this.options.recordBudgetTransitions({
+      runId: input.summary.runId,
+      sessionId: input.summary.sessionId,
       entryId,
       previousStatuses: before,
     })

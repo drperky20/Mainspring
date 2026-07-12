@@ -16,6 +16,7 @@ import type {
   ExecutionOutboxStatus,
   ListRunLogApprovalRequestsInput,
   ListRunLogToolCallSummariesInput,
+  ListRunLogUsageSummariesInput,
   ListRunEventsInput,
   ListRunsInput,
   RunCheckpoint,
@@ -29,6 +30,7 @@ import type {
   RunLogStore,
   RunLogToolCallStatus,
   RunLogToolCallSummary,
+  RunLogUsageSummary,
   RunRecord,
   RunStatus,
   PauseRunForApprovalInput,
@@ -156,6 +158,137 @@ function mapRunToolCallSummary(row: Record<string, unknown>): RunLogToolCallSumm
   if (row.workspace_id) summary.workspaceId = String(row.workspace_id)
   if (row.tool_name) summary.toolName = String(row.tool_name)
   return summary
+}
+
+function mapRunUsageSummary(row: Record<string, unknown>): RunLogUsageSummary {
+  const summary: RunLogUsageSummary = {
+    eventId: String(row.event_id),
+    runId: String(row.run_id),
+    sessionId: String(row.session_id),
+    agentId: String(row.agent_id),
+    createdAt: String(row.created_at),
+    latestSeq: Number(row.latest_seq),
+  }
+  if (row.workspace_id) summary.workspaceId = String(row.workspace_id)
+  if (row.provider_id) summary.providerId = String(row.provider_id)
+  if (row.model_id) summary.modelId = String(row.model_id)
+  if (row.model_family) summary.modelFamily = String(row.model_family)
+  if (row.provider_transport) summary.providerTransport = String(row.provider_transport)
+  if (row.provider_session_id) summary.providerSessionId = String(row.provider_session_id)
+  for (const [column, key] of [
+    ['input_tokens', 'inputTokens'],
+    ['output_tokens', 'outputTokens'],
+    ['total_tokens', 'totalTokens'],
+    ['cache_read_tokens', 'cacheReadTokens'],
+    ['cache_write_tokens', 'cacheWriteTokens'],
+    ['reasoning_tokens', 'reasoningTokens'],
+  ] as const) {
+    if (row[column] !== null && row[column] !== undefined) {
+      summary[key] = Number(row[column])
+    }
+  }
+  const rateLimit = parseJson<RunLogUsageSummary['rateLimit']>(
+    String(row.rate_limit_json ?? ''),
+    undefined,
+  )
+  if (rateLimit) summary.rateLimit = rateLimit
+  return summary
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function textValue(value: unknown, maxLength = 512): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const text = value.trim()
+  return text ? text.slice(0, maxLength) : undefined
+}
+
+function nonNegativeSafeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined
+}
+
+function nonNegativeSafeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined
+}
+
+function rateLimitBucket(value: unknown): Record<string, number> | undefined {
+  const source = recordValue(value)
+  if (!source) return undefined
+  const bucket: Record<string, number> = {}
+  const limit = nonNegativeSafeInteger(source.limit)
+  const remaining = nonNegativeSafeInteger(source.remaining)
+  const resetSeconds = nonNegativeSafeNumber(source.resetSeconds)
+  if (limit !== undefined) bucket.limit = limit
+  if (remaining !== undefined) bucket.remaining = remaining
+  if (resetSeconds !== undefined) bucket.resetSeconds = resetSeconds
+  return Object.keys(bucket).length > 0 ? bucket : undefined
+}
+
+function rateLimitState(value: unknown): RunLogUsageSummary['rateLimit'] {
+  const source = recordValue(value)
+  if (!source) return undefined
+  const result: NonNullable<RunLogUsageSummary['rateLimit']> = {}
+  const provider = textValue(source.provider)
+  const capturedAt = textValue(source.capturedAt, 128)
+  if (provider) result.provider = provider
+  if (capturedAt) result.capturedAt = capturedAt
+  for (const key of ['requestsMinute', 'requestsHour', 'tokensMinute', 'tokensHour'] as const) {
+    const bucket = rateLimitBucket(source[key])
+    if (bucket) result[key] = bucket
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
+
+function usageSummaryFieldsForEvent(
+  event: RunLogEvent,
+  run: RunRecord,
+  providerInitPayload?: Record<string, unknown>,
+): Omit<RunLogUsageSummary, 'eventId' | 'runId' | 'sessionId' | 'agentId' | 'createdAt' | 'latestSeq'> | undefined {
+  if (event.type !== 'usage.reported') return undefined
+  const payload = recordValue(event.payload)
+  const usage = recordValue(payload?.usage)
+  if (!usage) return undefined
+  const providerId = textValue(usage.provider)
+    ?? textValue(providerInitPayload?.provider)
+    ?? run.providerId
+  const modelId = textValue(usage.modelId)
+    ?? textValue(providerInitPayload?.modelId)
+    ?? run.modelId
+  const modelFamily = textValue(usage.modelFamily, 256)
+    ?? textValue(providerInitPayload?.modelFamily, 256)
+  const providerTransport = textValue(usage.providerTransport, 256)
+    ?? textValue(providerInitPayload?.providerTransport, 256)
+  const providerSessionId = textValue(payload?.providerSessionId)
+  const inputTokens = nonNegativeSafeInteger(usage.inputTokens)
+  const outputTokens = nonNegativeSafeInteger(usage.outputTokens)
+  const totalTokens = nonNegativeSafeInteger(usage.totalTokens)
+  const cacheReadTokens = nonNegativeSafeInteger(usage.cacheReadTokens)
+  const cacheWriteTokens = nonNegativeSafeInteger(usage.cacheWriteTokens)
+  const reasoningTokens = nonNegativeSafeInteger(usage.reasoningTokens)
+  const normalizedRateLimit = rateLimitState(usage.rateLimit)
+  return {
+    ...(run.workspaceId ? { workspaceId: run.workspaceId } : {}),
+    ...(providerId ? { providerId } : {}),
+    ...(modelId ? { modelId } : {}),
+    ...(modelFamily ? { modelFamily } : {}),
+    ...(providerTransport ? { providerTransport } : {}),
+    ...(providerSessionId ? { providerSessionId } : {}),
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+    ...(normalizedRateLimit ? { rateLimit: normalizedRateLimit } : {}),
+  }
 }
 
 function toolCallSummaryFieldsForEvent(event: RunLogEvent): {
@@ -597,6 +730,45 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
           ON runlog_tool_call_summaries(status, latest_seq DESC);
       `)
       db.pragma('user_version = 3')
+      currentVersion = 3
+    }
+    if (currentVersion < 4) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS runlog_usage_summaries (
+          event_id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          workspace_id TEXT,
+          provider_id TEXT,
+          model_id TEXT,
+          model_family TEXT,
+          provider_transport TEXT,
+          provider_session_id TEXT,
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          total_tokens INTEGER,
+          cache_read_tokens INTEGER,
+          cache_write_tokens INTEGER,
+          reasoning_tokens INTEGER,
+          rate_limit_json TEXT,
+          created_at TEXT NOT NULL,
+          latest_seq INTEGER NOT NULL,
+          FOREIGN KEY(run_id) REFERENCES runs(run_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runlog_usage_summaries_activity
+          ON runlog_usage_summaries(latest_seq DESC);
+        CREATE INDEX IF NOT EXISTS idx_runlog_usage_summaries_run_activity
+          ON runlog_usage_summaries(run_id, latest_seq DESC);
+        CREATE INDEX IF NOT EXISTS idx_runlog_usage_summaries_session_activity
+          ON runlog_usage_summaries(session_id, latest_seq DESC);
+        CREATE INDEX IF NOT EXISTS idx_runlog_usage_summaries_provider_activity
+          ON runlog_usage_summaries(provider_id, latest_seq DESC);
+        CREATE INDEX IF NOT EXISTS idx_runlog_usage_summaries_model_activity
+          ON runlog_usage_summaries(model_id, latest_seq DESC);
+      `)
+      db.pragma('user_version = 4')
     }
     // Existing databases can have a missing cursor after manual recovery.
     db.prepare(`
@@ -606,6 +778,10 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
     db.prepare(`
       INSERT OR IGNORE INTO runlog_projection_cursors (projection_name, last_seq, updated_at)
       VALUES ('tool-call-summary-v1', 0, @updatedAt)
+    `).run({ updatedAt: this.nowIso() })
+    db.prepare(`
+      INSERT OR IGNORE INTO runlog_projection_cursors (projection_name, last_seq, updated_at)
+      VALUES ('usage-summary-v1', 0, @updatedAt)
     `).run({ updatedAt: this.nowIso() })
   }
 
@@ -1702,6 +1878,135 @@ export class SqliteRunLogStore implements RunLogStore, RunLogCronStore {
       `)
       .all(params)
       .map((row) => mapRunToolCallSummary(row as Record<string, unknown>))
+  }
+
+  /**
+   * Projects normalized usage facts without copying the provider payload.
+   * Event reads, summary writes, and cursor movement share one transaction so
+   * a restart can replay a batch safely without losing a usage row.
+   */
+  catchUpRunUsageProjection(input: { limit?: number } = {}): RunLogProjectionCatchupResult {
+    const db = this.handle()
+    const limit = Math.min(Math.max(Math.floor(input.limit ?? 1_000), 1), 10_000)
+    return db.transaction(() => {
+      const cursor = db.prepare(`
+        SELECT last_seq FROM runlog_projection_cursors WHERE projection_name = 'usage-summary-v1'
+      `).get() as { last_seq: number } | undefined
+      const lastSeq = Number(cursor?.last_seq ?? 0)
+      const rows = db.prepare(`
+        SELECT * FROM run_events WHERE seq > @lastSeq ORDER BY seq ASC LIMIT @limit
+      `).all({ lastSeq, limit }) as Array<Record<string, unknown>>
+      if (rows.length === 0) {
+        return { projectionName: 'usage-summary-v1' as const, processedEvents: 0, lastSeq }
+      }
+
+      const latestProviderInit = db.prepare(`
+        SELECT payload_json FROM run_events
+        WHERE run_id = @runId AND type = 'provider.init' AND seq < @seq
+        ORDER BY seq DESC
+        LIMIT 1
+      `)
+      const insert = db.prepare(`
+        INSERT OR IGNORE INTO runlog_usage_summaries (
+          event_id, run_id, session_id, agent_id, workspace_id,
+          provider_id, model_id, model_family, provider_transport,
+          provider_session_id, input_tokens, output_tokens, total_tokens,
+          cache_read_tokens, cache_write_tokens, reasoning_tokens,
+          rate_limit_json, created_at, latest_seq
+        ) VALUES (
+          @eventId, @runId, @sessionId, @agentId, @workspaceId,
+          @providerId, @modelId, @modelFamily, @providerTransport,
+          @providerSessionId, @inputTokens, @outputTokens, @totalTokens,
+          @cacheReadTokens, @cacheWriteTokens, @reasoningTokens,
+          @rateLimitJson, @createdAt, @latestSeq
+        )
+      `)
+      for (const row of rows) {
+        const event = mapEvent(row)
+        if (event.type !== 'usage.reported') continue
+        const run = this.getRun(event.runId)
+        if (!run) continue
+        const providerInitRow = latestProviderInit.get({ runId: event.runId, seq: event.seq }) as
+          { payload_json?: string } | undefined
+        const providerInitPayload = providerInitRow
+          ? parseJson<Record<string, unknown>>(String(providerInitRow.payload_json ?? ''), {})
+          : undefined
+        const fields = usageSummaryFieldsForEvent(event, run, providerInitPayload)
+        if (!fields) continue
+        insert.run({
+          eventId: event.eventId,
+          runId: event.runId,
+          sessionId: event.sessionId,
+          agentId: event.agentId,
+          workspaceId: fields.workspaceId ?? null,
+          providerId: fields.providerId ?? null,
+          modelId: fields.modelId ?? null,
+          modelFamily: fields.modelFamily ?? null,
+          providerTransport: fields.providerTransport ?? null,
+          providerSessionId: fields.providerSessionId ?? null,
+          inputTokens: fields.inputTokens ?? null,
+          outputTokens: fields.outputTokens ?? null,
+          totalTokens: fields.totalTokens ?? null,
+          cacheReadTokens: fields.cacheReadTokens ?? null,
+          cacheWriteTokens: fields.cacheWriteTokens ?? null,
+          reasoningTokens: fields.reasoningTokens ?? null,
+          rateLimitJson: optionalJson(fields.rateLimit),
+          createdAt: event.timestamp,
+          latestSeq: event.seq,
+        })
+      }
+
+      const nextSeq = Number(rows.at(-1)?.seq ?? lastSeq)
+      db.prepare(`
+        UPDATE runlog_projection_cursors
+        SET last_seq = @nextSeq, updated_at = @updatedAt
+        WHERE projection_name = 'usage-summary-v1'
+      `).run({ nextSeq, updatedAt: this.nowIso() })
+      return {
+        projectionName: 'usage-summary-v1' as const,
+        processedEvents: rows.length,
+        lastSeq: nextSeq,
+      }
+    })()
+  }
+
+  listRunUsageSummaries(input: ListRunLogUsageSummariesInput = {}): RunLogUsageSummary[] {
+    const clauses: string[] = []
+    const params: Record<string, unknown> = {}
+    for (const [key, column] of [
+      ['runId', 'run_id'],
+      ['sessionId', 'session_id'],
+      ['workspaceId', 'workspace_id'],
+      ['providerId', 'provider_id'],
+      ['modelId', 'model_id'],
+    ] as const) {
+      const value = input[key]
+      if (value) {
+        clauses.push(`${column} = @${key}`)
+        params[key] = value
+      }
+    }
+    if (input.before) {
+      const latestSeq = input.before.latestSeq
+      if (!Number.isSafeInteger(latestSeq) || latestSeq < 1) {
+        throw new Error('Usage summary cursor requires a positive latestSeq value.')
+      }
+      clauses.push('latest_seq < @beforeLatestSeq')
+      params.beforeLatestSeq = latestSeq
+    }
+    const limit = Math.floor(input.limit ?? 500)
+    if (!Number.isFinite(limit) || limit <= 0) return []
+    params.limit = Math.min(limit, 10_000)
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    return this.handle()
+      .prepare(`
+        SELECT * FROM runlog_usage_summaries
+        ${where}
+        ORDER BY latest_seq DESC
+        LIMIT @limit
+      `)
+      .all(params)
+      .map((row) => mapRunUsageSummary(row as Record<string, unknown>))
   }
 
   appendCheckpoint(input: Omit<RunCheckpoint, 'checkpointId' | 'timestamp'>): RunCheckpoint {

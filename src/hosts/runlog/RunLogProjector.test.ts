@@ -195,6 +195,99 @@ describe('RunLogProjector', () => {
     })).toHaveLength(1)
   })
 
+  it('projects normalized usage facts with provider attribution and restart-safe paging', () => {
+    const { dbPath, store, run } = setup()
+    store.appendEvent({
+      runId: run.runId,
+      type: 'provider.init',
+      payload: {
+        provider: 'provider_from_init',
+        modelId: 'model_from_init',
+        modelFamily: 'family_from_init',
+        providerTransport: 'transport_from_init',
+        providerSessionId: 'init_session_not_projected',
+      },
+    })
+    const usageEvent = store.appendEvent({
+      runId: run.runId,
+      type: 'usage.reported',
+      payload: {
+        usage: {
+          inputTokens: 7,
+          outputTokens: 4,
+          totalTokens: 11,
+          cacheReadTokens: 2,
+          cacheWriteTokens: 1,
+          reasoningTokens: 3,
+          rateLimit: {
+            provider: 'provider_from_init',
+            capturedAt: '2026-07-11T00:00:01.000Z',
+            requestsMinute: { limit: 10, remaining: 9, resetSeconds: 42.5 },
+          },
+        },
+        providerSessionId: 'usage_session_1',
+        privatePayload: 'must remain only in the event stream',
+      },
+    })
+    store.appendEvent({
+      runId: run.runId,
+      type: 'runtime.warning',
+      payload: { message: 'not a usage row' },
+    })
+
+    const projector = new RunLogProjector(store)
+    expect(projector.catchUpUsage(100)).toMatchObject({
+      projectionName: 'usage-summary-v1',
+      processedEvents: 6,
+    })
+    const summaries = store.listRunUsageSummaries()
+    expect(summaries).toEqual([
+      expect.objectContaining({
+        eventId: usageEvent.eventId,
+        runId: run.runId,
+        sessionId: run.sessionId,
+        agentId: run.agentId,
+        providerId: 'provider_from_init',
+        modelId: 'model_from_init',
+        modelFamily: 'family_from_init',
+        providerTransport: 'transport_from_init',
+        providerSessionId: 'usage_session_1',
+        inputTokens: 7,
+        outputTokens: 4,
+        totalTokens: 11,
+        cacheReadTokens: 2,
+        cacheWriteTokens: 1,
+        reasoningTokens: 3,
+        rateLimit: {
+          provider: 'provider_from_init',
+          capturedAt: '2026-07-11T00:00:01.000Z',
+          requestsMinute: { limit: 10, remaining: 9, resetSeconds: 42.5 },
+        },
+      }),
+    ])
+    expect(JSON.stringify(summaries)).not.toContain('privatePayload')
+    expect(store.listRunUsageSummaries({ providerId: 'provider_from_init', limit: 1 })).toHaveLength(1)
+    expect(store.listRunUsageSummaries({ before: { latestSeq: usageEvent.seq } })).toEqual([])
+
+    store.close()
+    stores.splice(stores.indexOf(store), 1)
+    const reopened = new SqliteRunLogStore({ dbPath })
+    stores.push(reopened)
+    reopened.initialize()
+    const resumed = new RunLogProjector(reopened)
+    expect(resumed.catchUpUsage()).toMatchObject({
+      projectionName: 'usage-summary-v1',
+      processedEvents: 0,
+    })
+    reopened.appendEvent({
+      runId: run.runId,
+      type: 'usage.reported',
+      payload: { usage: { provider: 'provider_next', modelId: 'model_next', totalTokens: 2 } },
+    })
+    expect(resumed.catchUpUsage()).toMatchObject({ processedEvents: 1 })
+    expect(reopened.listRunUsageSummaries({ providerId: 'provider_next' })).toHaveLength(1)
+  })
+
   it('migrates the v2 projection schema with a durable tool-call cursor', () => {
     const { dbPath, store } = setup()
     store.close()
@@ -211,13 +304,19 @@ describe('RunLogProjector', () => {
     reopened.initialize()
     const verify = new Database(dbPath, { readonly: true })
     try {
-      expect(Number(verify.pragma('user_version', { simple: true }))).toBe(3)
+      expect(Number(verify.pragma('user_version', { simple: true }))).toBe(4)
       expect(verify.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runlog_tool_call_summaries'",
       ).get()).toBeTruthy()
       expect(verify.prepare(
         "SELECT projection_name FROM runlog_projection_cursors WHERE projection_name = 'tool-call-summary-v1'",
       ).get()).toMatchObject({ projection_name: 'tool-call-summary-v1' })
+      expect(verify.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runlog_usage_summaries'",
+      ).get()).toBeTruthy()
+      expect(verify.prepare(
+        "SELECT projection_name FROM runlog_projection_cursors WHERE projection_name = 'usage-summary-v1'",
+      ).get()).toMatchObject({ projection_name: 'usage-summary-v1' })
     } finally {
       verify.close()
     }

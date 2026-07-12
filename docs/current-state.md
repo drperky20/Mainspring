@@ -161,7 +161,7 @@ This is the repo-grounded current state. `docs/goal-digest.md` remains the repo-
 - Postgres, Redis/BullMQ, S3/R2/MinIO, and managed-cloud control-plane adapters. Docker execution plus local/container/VPS/Kubernetes deployment drivers exist, but the Kubernetes driver has not been certified against a real production cluster and none of these are VM isolation.
 - The package does not implement hosted browser process ownership, browser identity, cross-restart page persistence, or browser process isolation.
 - Browser/page multimodal context and provider-specific content-part adapters.
-- Per-provider and richer usage projections beyond the persisted run-summary and tool-call cursors.
+- Hosted pricing and budget evaluation remain gateway-owned, but canonical RunLog now exposes a durable, cursor-paginated normalized usage projection. Provider-account commercial metering, reservation, and cross-tenant accounting remain unimplemented.
 - Remote skill marketplace trust, hosted key revocation/discovery, payments, and third-party reputation. Signed remote template catalog distribution is implemented separately with explicit publisher/key pins.
 - General checkpoint replay/retry controls beyond the implemented approval-resume continuation.
 - Remote child-run/subagent dispatch, identity, and trust boundaries beyond the local attenuating child-run SDK helper.

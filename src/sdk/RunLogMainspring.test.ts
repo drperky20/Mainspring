@@ -50,6 +50,20 @@ describe('RunLogMainspring SDK host', () => {
       rootPath: root,
       provider: new MockProvider([
         { type: 'event', event: { type: 'delta', text: 'hello ' } },
+        {
+          type: 'event',
+          event: {
+            type: 'usage',
+            providerSessionId: 'provider_sdk_usage',
+            usage: {
+              provider: 'mock',
+              modelId: 'mock-model',
+              inputTokens: 2,
+              outputTokens: 3,
+              totalTokens: 5,
+            },
+          },
+        },
         { type: 'event', event: { type: 'result', text: 'runlog sdk' } },
       ]),
       agent: {
@@ -68,6 +82,16 @@ describe('RunLogMainspring SDK host', () => {
     expect(run.result()).toBe('runlog sdk')
     expect(projection.run.agentId).toBe('agent_sdk')
     expect(projection.run.sessionId).toBe('session_sdk')
+    expect(app.usage.list({ runId: run.record.runId })).toEqual([
+      expect.objectContaining({
+        providerId: 'mock',
+        modelId: 'mock-model',
+        inputTokens: 2,
+        outputTokens: 3,
+        totalTokens: 5,
+        providerSessionId: 'provider_sdk_usage',
+      }),
+    ])
     expect(projection.events.map((event) => event.type)).toEqual(
       expect.arrayContaining(['run.created', 'input.received', 'provider.init', 'run.completed']),
     )

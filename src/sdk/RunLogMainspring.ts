@@ -10,6 +10,7 @@ import {
   type DecideRunLogApprovalInput,
   type ListRunsInput,
   type ListRunLogToolCallSummariesInput,
+  type ListRunLogUsageSummariesInput,
   type ProviderRouter,
   type RunExecutionSummary,
   type RunIntent,
@@ -17,6 +18,7 @@ import {
   type RunLogEvent,
   type RunLogStore,
   type RunLogToolCallSummary,
+  type RunLogUsageSummary,
   type RunRecord,
   type RuntimeToolSessionFactory,
 } from '../core/index.js'
@@ -264,6 +266,11 @@ export class RunLogMainspring {
       new RunLogProjector(this.store).catchUpToolCallsUntilIdle()
       return this.store.listRunToolCallSummaries(input)
     },
+  }
+
+  readonly usage = {
+    list: (input?: ListRunLogUsageSummariesInput): RunLogUsageSummary[] =>
+      new RunLogProjector(this.store).usage(input),
   }
 
   putAgent(spec: AgentSpec): void {

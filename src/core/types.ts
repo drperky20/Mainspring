@@ -287,8 +287,50 @@ export interface ListRunLogToolCallSummariesInput {
   limit?: number
 }
 
+/**
+ * Durable, payload-free usage facts projected from canonical RunLog events.
+ * Pricing stays host-owned because the same event stream can be evaluated
+ * against different model catalogs without rewriting runtime history.
+ */
+export interface RunLogUsageSummary {
+  eventId: string
+  runId: string
+  sessionId: string
+  agentId: string
+  workspaceId?: string
+  providerId?: string
+  modelId?: string
+  modelFamily?: string
+  providerTransport?: string
+  providerSessionId?: string
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+  rateLimit?: ProviderUsage['rateLimit']
+  createdAt: string
+  latestSeq: number
+}
+
+/** Stable reverse-chronological cursor for durable usage summaries. */
+export interface RunLogUsageListCursor {
+  latestSeq: number
+}
+
+export interface ListRunLogUsageSummariesInput {
+  runId?: string
+  sessionId?: string
+  workspaceId?: string
+  providerId?: string
+  modelId?: string
+  before?: RunLogUsageListCursor
+  limit?: number
+}
+
 export interface RunLogProjectionCatchupResult {
-  projectionName: 'run-summary-v1' | 'tool-call-summary-v1'
+  projectionName: 'run-summary-v1' | 'tool-call-summary-v1' | 'usage-summary-v1'
   processedEvents: number
   lastSeq: number
 }
@@ -439,6 +481,8 @@ export interface RunLogStore {
   getRunProjectionSummary(runId: string): RunLogRunSummary | null
   catchUpRunToolCallProjection(input?: { limit?: number }): RunLogProjectionCatchupResult
   listRunToolCallSummaries(input?: ListRunLogToolCallSummariesInput): RunLogToolCallSummary[]
+  catchUpRunUsageProjection(input?: { limit?: number }): RunLogProjectionCatchupResult
+  listRunUsageSummaries(input?: ListRunLogUsageSummariesInput): RunLogUsageSummary[]
   appendCheckpoint(input: Omit<RunCheckpoint, 'checkpointId' | 'timestamp'>): RunCheckpoint
   appendCheckpointWithEvent(
     input: Omit<RunCheckpoint, 'checkpointId' | 'timestamp' | 'seq'>,

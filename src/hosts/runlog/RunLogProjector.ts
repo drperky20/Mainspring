@@ -2,6 +2,8 @@ import type {
   RunLogProjectionCatchupResult,
   RunLogRunSummary,
   RunLogStore,
+  RunLogUsageSummary,
+  ListRunLogUsageSummariesInput,
 } from '../../core/types.js'
 
 /**
@@ -47,5 +49,28 @@ export class RunLogProjector {
 
   summary(runId: string): RunLogRunSummary | null {
     return this.store.getRunProjectionSummary(runId)
+  }
+
+  /** Catch up the independent durable usage read model. */
+  catchUpUsage(limit?: number): RunLogProjectionCatchupResult {
+    return this.store.catchUpRunUsageProjection(limit === undefined ? undefined : { limit })
+  }
+
+  catchUpUsageUntilIdle(
+    input: { limit?: number; maxBatches?: number } = {},
+  ): RunLogProjectionCatchupResult {
+    const maxBatches = Math.min(Math.max(Math.floor(input.maxBatches ?? 10_000), 1), 100_000)
+    let latest = this.catchUpUsage(input.limit)
+    for (let batch = 1; latest.processedEvents > 0 && batch < maxBatches; batch += 1) {
+      const next = this.catchUpUsage(input.limit)
+      if (next.processedEvents === 0) return next
+      latest = next
+    }
+    return latest
+  }
+
+  usage(input?: ListRunLogUsageSummariesInput): RunLogUsageSummary[] {
+    this.catchUpUsageUntilIdle()
+    return this.store.listRunUsageSummaries(input)
   }
 }
