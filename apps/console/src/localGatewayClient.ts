@@ -552,6 +552,9 @@ export interface LocalGatewayClient {
     sessionId: string
     cancelled: true
   }>
+  retryRun(input: { runId: string; allowBudgetWarning?: boolean }): Promise<{
+    run: { runId: string; sessionId: string }
+  }>
   compatibilityRuns(input?: {
     sessionId?: string
     cursor?: string
@@ -968,6 +971,12 @@ export function createLocalGatewayClient(
     },
     cancelRun: ({ runId, ...input }) =>
       requestJson(fetchImpl, `${normalizedBaseUrl}/runs/${encodeURIComponent(runId)}/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(input),
+      }),
+    retryRun: ({ runId, ...input }) =>
+      requestJson(fetchImpl, `${normalizedBaseUrl}/runlog/runs/${encodeURIComponent(runId)}/retry`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...authHeaders() },
         body: JSON.stringify(input),

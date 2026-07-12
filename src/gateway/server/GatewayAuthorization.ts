@@ -13,6 +13,7 @@ const OPERATOR_MUTATIONS = [
   /^POST \/runs\/start$/,
   /^POST \/runs\/[^/]+\/cancel$/,
   /^POST \/runlog\/runs\/start$/,
+  /^POST \/runlog\/runs\/[^/]+\/retry$/,
   /^POST \/approvals\/[^/]+\/resolve$/,
   /^POST \/runlog\/approvals\/[^/]+\/resolve$/,
   /^POST \/cron\/[^/]+\/run-now$/,

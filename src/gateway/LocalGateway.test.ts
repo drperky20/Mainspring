@@ -2454,6 +2454,97 @@ describe('LocalMainspringGateway', () => {
     }
   }, 30_000)
 
+  it('retries a failed canonical run as an authorized fresh child without replaying events', async () => {
+    const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
+      'mainspring-gateway-runlog-fresh-retry-',
+    )
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+    const mainspring = createMainspring({
+      sessionsRoot,
+      workspaceRoot,
+      provider: new EchoProvider(),
+      pollIntervalMs: 10,
+    })
+    let attempt = 0
+    const runLog = createRunLogMainspring({
+      rootPath: path.join(root, 'runlog'),
+      provider: new MockProvider(() => {
+        attempt += 1
+        return attempt === 1
+          ? [{
+              type: 'event',
+              event: {
+                type: 'error',
+                message: 'non-retryable provider failure',
+                retryable: false,
+                classification: 'provider_request_failed',
+              },
+            }]
+          : [{ type: 'event', event: { type: 'result', text: 'fresh retry completed' } }]
+      }),
+    })
+    const gateway = createLocalMainspringGateway({ runtime: mainspring, runLog, appState })
+
+    try {
+      const session = mainspring.sessions.create({
+        sessionId: 'gateway-runlog-retry-session',
+        workspace: { root: workspaceRoot },
+      })
+      const original = await gateway.runLog.runs.start({
+        sessionId: session.record.sessionId,
+        input: 'Retry this canonical work.',
+        mode: 'task',
+        allowedTools: [],
+        actor: 'hosted:retry:operator',
+      })
+      await runLog.drainUntilIdle()
+      expect(runLog.store.getRun(original.run.runId)?.status).toBe('failed')
+      const originalEventIds = new Set(
+        runLog.store.listEvents({ runId: original.run.runId }).map((event) => event.eventId),
+      )
+
+      const retried = await gateway.runLog.runs.retry({
+        runId: original.run.runId,
+        actor: 'hosted:retry:operator',
+      })
+      await runLog.drainUntilIdle()
+
+      expect(retried.run.runId).not.toBe(original.run.runId)
+      expect(runLog.store.getRun(original.run.runId)?.status).toBe('failed')
+      expect(runLog.store.getRun(retried.run.runId)).toMatchObject({
+        status: 'completed',
+        parentRunId: original.run.runId,
+        input: 'Retry this canonical work.',
+      })
+      const retryEvents = runLog.store.listEvents({ runId: retried.run.runId })
+      expect(retryEvents.map((event) => event.type)).toContain('run.completed')
+      expect(retryEvents.every((event) => !originalEventIds.has(event.eventId))).toBe(true)
+
+      const audit = appState.auditEvents.list({ category: 'gateway' })
+      const authorizedIndex = audit.findIndex((event) => event.action === 'run.retry.authorized')
+      const retryEnqueueOffset = audit
+        .slice(authorizedIndex + 1)
+        .findIndex((event) => event.action === 'run.enqueued.authorized')
+      const enqueueIndex = retryEnqueueOffset < 0 ? -1 : authorizedIndex + 1 + retryEnqueueOffset
+      const outcomeIndex = audit.findIndex((event) => (
+        event.action === 'run.retried' && event.runId === retried.run.runId
+      ))
+      expect(authorizedIndex).toBeGreaterThanOrEqual(0)
+      expect(enqueueIndex).toBeGreaterThan(authorizedIndex)
+      expect(outcomeIndex).toBeGreaterThan(authorizedIndex)
+      expect(outcomeIndex).toBeGreaterThan(enqueueIndex)
+      expect(audit[outcomeIndex]).toMatchObject({
+        actor: 'hosted:retry:operator',
+        metadata: expect.objectContaining({ retryOfRunId: original.run.runId }),
+      })
+    } finally {
+      runLog.close()
+      appState.close()
+    }
+  }, 30_000)
+
   it('projects canonical RunLog artifact events into gateway artifact history', () => {
     const { root, sessionsRoot, workspaceRoot } = makeTempGatewayPaths(
       'mainspring-gateway-runlog-artifacts-',

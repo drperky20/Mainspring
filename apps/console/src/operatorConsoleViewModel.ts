@@ -43,6 +43,7 @@ export interface OperatorRunRow {
   status: string
   active: boolean
   cancellable: boolean
+  retryable: boolean
   needsApproval: boolean
   clientId?: string
   clientName?: string
@@ -318,6 +319,7 @@ export function buildOperatorCompatibilityRunRows(
       status: String(run.status),
       active,
       cancellable: active,
+      retryable: false,
       needsApproval: run.status === 'waiting_approval' || pendingApprovalRunIds.has(run.runId),
       ...(client ? { clientId: client.clientId, clientName: client.name } : {}),
       ...(workspace ? { workspaceId: workspace.workspaceId, workspaceName: workspace.name } : {}),
@@ -392,6 +394,7 @@ function operatorRunLogRow(input: {
     status: String(run.status),
     active,
     cancellable: active,
+    retryable: run.status === 'failed' || run.status === 'cancelled',
     needsApproval: run.pendingApprovalCount > 0,
     ...(client ? { clientId: client.clientId, clientName: client.name } : {}),
     ...(workspace ? { workspaceId: workspace.workspaceId, workspaceName: workspace.name } : {}),

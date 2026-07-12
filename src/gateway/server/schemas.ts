@@ -43,6 +43,10 @@ export const StartRunRequestSchema = z.object({
   runtimeProfile: MainspringRuntimeProfileIdSchema.optional(),
 })
 
+export const RetryRunRequestSchema = z.object({
+  allowBudgetWarning: z.boolean().optional(),
+}).strict()
+
 export const ResolveApprovalRequestSchema = z.object({
   sessionId: z.string().min(1),
   runId: z.string().min(1),
@@ -322,6 +326,7 @@ export const UpdateBudgetRequestSchema = z
   )
 
 export type StartRunRequest = z.infer<typeof StartRunRequestSchema>
+export type RetryRunRequest = z.infer<typeof RetryRunRequestSchema>
 export type CreateHostedAuthUserRequest = z.infer<typeof CreateHostedAuthUserRequestSchema>
 export type UpdateHostedAuthUserRequest = z.infer<typeof UpdateHostedAuthUserRequestSchema>
 export type ResolveApprovalRequest = z.infer<typeof ResolveApprovalRequestSchema>

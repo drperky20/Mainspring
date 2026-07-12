@@ -892,6 +892,12 @@ button.control-data-row:hover {
   gap: 8px;
 }
 
+.control-run-detail-head .control-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .control-run-detail-head h2 {
   font-size: 24px;
 }

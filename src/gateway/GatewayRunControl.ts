@@ -27,6 +27,14 @@ export interface LocalGatewayRunCancellationAuthorization {
   decision: DecisionRecord
 }
 
+export interface LocalGatewayRunRetryAuthorization {
+  runId: string
+  sessionId: string
+  actor: string
+  retryBindingHash: string
+  decision: DecisionRecord
+}
+
 export interface LocalGatewayRunExecutionEvidence {
   cellId?: string
   cellLeaseId?: string
@@ -221,6 +229,81 @@ export class GatewayRunControl {
       metadata: {
         decisionId: input.authorization.decision.decisionId,
         cancellationBindingHash: input.authorization.cancellationBindingHash,
+      },
+    })
+  }
+
+  authorizeRetry(input: {
+    runId: string
+    sessionId: string
+    actor?: string
+    binding: unknown
+  }): LocalGatewayRunRetryAuthorization {
+    const runId = requiredText(input.runId, 'retry run id')
+    const sessionId = requiredText(input.sessionId, 'retry session id')
+    const retryBindingHash = hashApprovalInput(input.binding)
+    const decision = createHostDecisionRecord({
+      runId,
+      sessionId,
+      surface: 'run',
+      operation: 'run.retry',
+      targetKey: runId,
+      state: 'allow',
+      reasons: ['Trusted gateway operator authorized a fresh linked run before enqueue.'],
+      permissionCategories: ['run', 'retry', 'operator-control-plane'],
+      input: { runId, sessionId, retryBindingHash },
+      metadata: { runId, sessionId, retryBindingHash, retryMode: 'fresh-run' },
+    })
+    const actor = actorFor(input.actor)
+    this.appState.auditEvents.create({
+      category: 'gateway',
+      action: 'run.retry.authorized',
+      actor,
+      targetType: 'run',
+      targetId: runId,
+      runId,
+      sessionId,
+      metadata: { decisionRecord: decision },
+    })
+    return { runId, sessionId, actor, retryBindingHash, decision }
+  }
+
+  recordRetryOutcome(input: {
+    authorization: LocalGatewayRunRetryAuthorization
+    retryRunId: string
+  }): void {
+    const retryRunId = requiredText(input.retryRunId, 'retry child run id')
+    this.appState.auditEvents.create({
+      category: 'gateway',
+      action: 'run.retried',
+      actor: input.authorization.actor,
+      targetType: 'run',
+      targetId: retryRunId,
+      runId: retryRunId,
+      sessionId: input.authorization.sessionId,
+      metadata: {
+        decisionId: input.authorization.decision.decisionId,
+        retryBindingHash: input.authorization.retryBindingHash,
+        retryOfRunId: input.authorization.runId,
+        retryMode: 'fresh-run',
+      },
+    })
+  }
+
+  recordRetryFailure(input: {
+    authorization: LocalGatewayRunRetryAuthorization
+  }): void {
+    this.appState.auditEvents.create({
+      category: 'gateway',
+      action: 'run.retry.failed',
+      actor: input.authorization.actor,
+      targetType: 'run',
+      targetId: input.authorization.runId,
+      runId: input.authorization.runId,
+      sessionId: input.authorization.sessionId,
+      metadata: {
+        decisionId: input.authorization.decision.decisionId,
+        retryBindingHash: input.authorization.retryBindingHash,
       },
     })
   }

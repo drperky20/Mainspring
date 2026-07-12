@@ -90,6 +90,7 @@ import {
   ExecuteDeploymentRequestSchema,
   InstallMarketplaceTemplateRequestSchema,
   ResolveApprovalRequestSchema,
+  RetryRunRequestSchema,
   StartRunRequestSchema,
   UpdateClientRequestSchema,
   ProvenanceReviewDecisionRequestSchema,
@@ -1014,6 +1015,21 @@ export class LocalGatewayHttpServer {
         const parsed = StartRunRequestSchema.parse(body)
         const result = await this.options.gateway.runLog.runs.start({
           ...parsed,
+          ...(principal?.actor ? { actor: principal.actor } : {}),
+        })
+        this.writeJson(response, 202, sanitizeGatewayResponse(runLogProjectionResponse(result.projection)))
+        return
+      }
+
+      if (request.method === 'POST' && path.startsWith('/runlog/runs/') && path.endsWith('/retry')) {
+        if (!this.options.gateway.runLog.available()) {
+          throw new GatewayHttpError(501, 'RunLog gateway runtime is not configured.')
+        }
+        const runId = decodeURIComponent(path.slice('/runlog/runs/'.length, -'/retry'.length))
+        const parsed = RetryRunRequestSchema.parse(await this.readJson(request))
+        const result = await this.options.gateway.runLog.runs.retry({
+          runId,
+          ...(parsed.allowBudgetWarning ? { allowBudgetWarning: true } : {}),
           ...(principal?.actor ? { actor: principal.actor } : {}),
         })
         this.writeJson(response, 202, sanitizeGatewayResponse(runLogProjectionResponse(result.projection)))

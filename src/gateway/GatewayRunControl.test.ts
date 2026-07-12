@@ -139,6 +139,58 @@ describe('GatewayRunControl', () => {
     }
   })
 
+  it('records hash-only fresh retry authority before linking the child run', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-gateway-retry-control-'))
+    tempRoots.push(root)
+    const appState = createSqliteLocalGatewayAppStateStore({
+      dbPath: path.join(root, 'gateway-app.sqlite'),
+    })
+
+    try {
+      const control = new GatewayRunControl(appState)
+      const authorization = control.authorizeRetry({
+        runId: 'run_failed',
+        sessionId: 'session_retry',
+        actor: 'hosted:retry:operator',
+        binding: { input: 'do not persist this prompt', credentialRef: 'env:RETRY_SECRET' },
+      })
+      const beforeMutation = appState.auditEvents.list({ category: 'gateway' })
+      expect(beforeMutation).toEqual([
+        expect.objectContaining({
+          action: 'run.retry.authorized',
+          actor: 'hosted:retry:operator',
+          targetId: 'run_failed',
+          metadata: expect.objectContaining({
+            decisionRecord: expect.objectContaining({
+              operation: 'run.retry',
+              state: 'allow',
+            }),
+          }),
+        }),
+      ])
+      expect(JSON.stringify(beforeMutation)).not.toContain('do not persist this prompt')
+      expect(JSON.stringify(beforeMutation)).not.toContain('RETRY_SECRET')
+
+      control.recordRetryOutcome({ authorization, retryRunId: 'run_retry_child' })
+      const events = appState.auditEvents.list({ category: 'gateway' })
+      expect(events.map((event) => event.action)).toEqual([
+        'run.retry.authorized',
+        'run.retried',
+      ])
+      expect(events[1]).toMatchObject({
+        runId: 'run_retry_child',
+        targetId: 'run_retry_child',
+        metadata: expect.objectContaining({
+          retryOfRunId: 'run_failed',
+          retryMode: 'fresh-run',
+          decisionId: authorization.decision.decisionId,
+        }),
+      })
+    } finally {
+      appState.close()
+    }
+  })
+
   it('rejects missing authority identifiers before creating audit evidence', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mainspring-gateway-run-control-invalid-'))
     tempRoots.push(root)

@@ -243,6 +243,7 @@ export function RunsScreen({
   hasMoreEvents = false,
   actionBusy,
   onCancel,
+  onRetry,
   onLoadMoreEvents,
   onLoadMoreRuns,
   onReloadEvents,
@@ -259,6 +260,7 @@ export function RunsScreen({
   hasMoreEvents?: boolean
   actionBusy: boolean
   onCancel: (run: OperatorRunRow) => void
+  onRetry: (run: OperatorRunRow) => void
   onLoadMoreEvents?: () => void
   onLoadMoreRuns?: () => void
   onReloadEvents: () => void
@@ -341,16 +343,29 @@ export function RunsScreen({
                   <h2>{selectedRun.agentName ?? 'Agent run'}</h2>
                   <code>{selectedRun.runId}</code>
                 </div>
-                {selectedRun.cancellable ? (
-                  <button
-                    className="control-danger-button"
-                    disabled={actionBusy}
-                    type="button"
-                    onClick={() => onCancel(selectedRun)}
-                  >
-                    Cancel run
-                  </button>
-                ) : null}
+                <div className="control-run-actions">
+                  {selectedRun.retryable ? (
+                    <button
+                      className="simple-secondary"
+                      disabled={actionBusy}
+                      title="Creates a fresh linked run. Previous checkpoints and tool results are not replayed."
+                      type="button"
+                      onClick={() => onRetry(selectedRun)}
+                    >
+                      Retry as new run
+                    </button>
+                  ) : null}
+                  {selectedRun.cancellable ? (
+                    <button
+                      className="control-danger-button"
+                      disabled={actionBusy}
+                      type="button"
+                      onClick={() => onCancel(selectedRun)}
+                    >
+                      Cancel run
+                    </button>
+                  ) : null}
+                </div>
               </header>
 
               <dl className="control-run-facts">

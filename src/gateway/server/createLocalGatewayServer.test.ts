@@ -4069,16 +4069,49 @@ describe('LocalGatewayHttpServer', () => {
           }),
         ]),
       )
+      const retryResponse = await fetch(
+        `${started.url}/runlog/runs/${encodeURIComponent(runId)}/retry`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ allowBudgetWarning: true, actor: 'browser-spoofed-retry-operator' }),
+        },
+      )
+      expect(retryResponse.status).toBe(400)
+
+      const retriedResponse = await fetch(
+        `${started.url}/runlog/runs/${encodeURIComponent(runId)}/retry`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ allowBudgetWarning: true }),
+        },
+      )
+      expect(retriedResponse.status).toBe(202)
+      const retried = await retriedResponse.json()
+      expect(retried).toMatchObject({
+        run: {
+          sessionId: session.record.sessionId,
+          parentRunId: runId,
+          status: 'queued',
+        },
+      })
+      expect(retried.run.runId).not.toBe(runId)
       const gatewayEvents = appState.auditEvents.list({ category: 'gateway' })
       expect(gatewayEvents.map((event) => event.action)).toEqual([
         'run.enqueued.authorized',
         'runlog.run.enqueued',
         'run.cancel.authorized',
         'run.cancelled',
+        'run.retry.authorized',
+        'run.enqueued.authorized',
+        'runlog.run.enqueued',
+        'run.retried',
       ])
       expect(gatewayEvents.every((event) => event.actor === 'local-gateway')).toBe(true)
       expect(JSON.stringify(gatewayEvents)).not.toContain('browser-spoofed-run-operator')
       expect(JSON.stringify(gatewayEvents)).not.toContain('browser-spoofed-cancel-operator')
+      expect(JSON.stringify(gatewayEvents)).not.toContain('browser-spoofed-retry-operator')
       expect(JSON.stringify(gatewayEvents)).not.toContain('operator stopped the run')
     } finally {
       await server.stop()

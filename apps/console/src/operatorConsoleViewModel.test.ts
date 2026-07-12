@@ -88,6 +88,7 @@ describe('buildOperatorConsoleViewModel', () => {
       policyDecisions: [{ targetKey: 'tool:shell.exec' }],
       toolCalls: [{ name: 'shell.exec', status: 'requested' }],
       cancellable: true,
+      retryable: false,
     })
     expect(model.pendingApprovals).toEqual(
       expect.arrayContaining([

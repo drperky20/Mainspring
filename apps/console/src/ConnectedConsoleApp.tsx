@@ -424,6 +424,24 @@ export function ConnectedConsoleApp() {
     }
   }
 
+  async function retryOperatorRun(run: OperatorRunRow) {
+    if (!run.retryable || run.source !== 'runlog') {
+      setToast({ kind: 'info', text: 'Only failed or cancelled RunLog work can be retried.' })
+      return
+    }
+    setBusy(true)
+    try {
+      const result = await gatewayClient.retryRun({ runId: run.runId, allowBudgetWarning: true })
+      await refresh()
+      selectRun(result.run.runId)
+      setToast({ kind: 'ok', text: `Fresh retry ${shortId(result.run.runId)} queued.` })
+    } catch (error) {
+      setToast({ kind: 'error', text: errorMessage(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function resolveOperatorApproval(
     approval: OperatorApprovalRow,
     decision: 'approved' | 'denied',
@@ -890,6 +908,7 @@ export function ConnectedConsoleApp() {
                 hasMoreRuns={Boolean(runLogActivity.nextCursor || compatibilityRunActivity.nextCursor)}
                 selectedRun={selectedRun}
                 onCancel={(run) => void cancelOperatorRun(run)}
+                onRetry={(run) => void retryOperatorRun(run)}
                 onLoadMoreEvents={() => void runLogTrace.loadMore()}
                 onLoadMoreRuns={() => {
                   void Promise.all([

@@ -1275,6 +1275,15 @@ describe('createLocalGatewayClient', () => {
           status: 200,
         })
       }
+      if (url.includes('/runlog/runs/run_failed/retry')) {
+        expect(init?.method).toBe('POST')
+        expect(init?.headers).toMatchObject({ authorization: 'Bearer hosted_token_1' })
+        expect(JSON.parse(String(init?.body))).toEqual({ allowBudgetWarning: true })
+        return new Response(
+          JSON.stringify({ run: { runId: 'run_retry', sessionId: 'session_1' } }),
+          { status: 202 },
+        )
+      }
       if (url.endsWith('/health')) {
         return new Response(
           JSON.stringify({
@@ -1657,6 +1666,9 @@ describe('createLocalGatewayClient', () => {
         computerId: 'computer_wsl',
       }),
     ).resolves.toMatchObject({ run: { runId: 'run_1' } })
+    await expect(
+      client.retryRun({ runId: 'run_failed', allowBudgetWarning: true }),
+    ).resolves.toMatchObject({ run: { runId: 'run_retry' } })
     await expect(client.runEvents({ sessionId: 'session_1', runId: 'run_1' })).resolves.toEqual({
       events: [{ type: 'run.started', runId: 'run_1' }],
     })

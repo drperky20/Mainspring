@@ -362,6 +362,10 @@ export interface LocalGatewayCompatibilityRunPage
 
 export type LocalGatewayStartRunInput = StartRunInput & {
   sessionId: string
+  /** Host-only lineage for a fresh retry; HTTP start bodies cannot set this field. */
+  parentRunId?: string
+  /** Host-only decision linkage for a fresh retry. */
+  retryDecisionId?: string
   providerProfileId?: string
   allowBudgetWarning?: boolean
   /** Trusted gateway identity. HTTP callers cannot set this directly. */
@@ -1327,6 +1331,7 @@ export class LocalMainspringGateway {
         try {
           this.ensureRunLogAgent(resolvedInput, agentId)
           const handle = runtime.runs.start({
+            ...(resolvedInput.parentRunId ? { parentRunId: resolvedInput.parentRunId } : {}),
             agentId,
             input: resolvedInput.input,
             sessionId: resolvedInput.sessionId,
@@ -1345,6 +1350,8 @@ export class LocalMainspringGateway {
                 ? { runtimeProfile: this.runtimeProfiles.assertRegistered(resolvedInput.runtimeProfile) }
                 : {}),
               ...(authorization ? { gatewayRunDecisionId: authorization.decision.decisionId } : {}),
+              ...(resolvedInput.parentRunId ? { retryOfRunId: resolvedInput.parentRunId } : {}),
+              ...(resolvedInput.retryDecisionId ? { retryDecisionId: resolvedInput.retryDecisionId } : {}),
             },
           })
           this.persistRunLogMetadata(
@@ -1398,6 +1405,68 @@ export class LocalMainspringGateway {
           return cancelled
         } catch (error) {
           if (authorization) runControl?.recordCancelFailure({ authorization })
+          throw error
+        }
+      },
+      retry: async (input: {
+        runId: string
+        actor?: string
+        allowBudgetWarning?: boolean
+      }): Promise<LocalGatewayRunLogStartResult> => {
+        const runtime = this.requireRunLogRuntime()
+        const existing = runtime.store.getRun(input.runId)
+        if (!existing) throw new Error(`Unknown RunLog run: ${input.runId}`)
+        if (existing.status !== 'failed' && existing.status !== 'cancelled') {
+          throw new Error(`Only failed or cancelled RunLog runs can be retried: ${input.runId}`)
+        }
+        const persisted = this.appState?.runs.get(existing.runId)
+        const persistedMetadata = recordValue(persisted?.metadata)
+        if (this.appState && persistedMetadata?.runtime !== 'runlog') {
+          throw new Error(`Run is not registered as canonical RunLog work: ${input.runId}`)
+        }
+        if (persistedMetadata?.headless === true || persistedMetadata?.trigger === 'scheduler') {
+          throw new Error(`Headless scheduler runs must be started through the cron grant path: ${input.runId}`)
+        }
+        const runControl = this.runControl()
+        const authorization = runControl?.authorizeRetry({
+          runId: existing.runId,
+          sessionId: existing.sessionId,
+          actor: input.actor,
+          binding: {
+            retryMode: 'fresh-run',
+            status: existing.status,
+            workspaceId: existing.workspaceId,
+            ...(this.appState?.agents.get(existing.agentId) ? { agentId: existing.agentId } : {}),
+            providerId: existing.providerId,
+            modelId: existing.modelId,
+            allowedTools: existing.allowedTools,
+          },
+        })
+        try {
+          const retried = await this.runLog.runs.start({
+            sessionId: existing.sessionId,
+            input: existing.input,
+            mode: 'task',
+            parentRunId: existing.runId,
+            retryDecisionId: authorization?.decision.decisionId,
+            workspaceId: existing.workspaceId,
+            ...(this.appState?.agents.get(existing.agentId) ? { agentId: existing.agentId } : {}),
+            providerId: existing.providerId,
+            modelId: existing.modelId,
+            allowedTools: existing.allowedTools ?? [],
+            ...(persisted?.providerProfileId ? { providerProfileId: persisted.providerProfileId } : {}),
+            ...(persisted?.runtimeProfile
+              ? { runtimeProfile: this.runtimeProfiles.assertRegistered(persisted.runtimeProfile) }
+              : {}),
+            ...(input.allowBudgetWarning ? { allowBudgetWarning: true } : {}),
+            ...(input.actor ? { actor: input.actor } : {}),
+          })
+          if (authorization) {
+            runControl?.recordRetryOutcome({ authorization, retryRunId: retried.run.runId })
+          }
+          return retried
+        } catch (error) {
+          if (authorization) runControl?.recordRetryFailure({ authorization })
           throw error
         }
       },
