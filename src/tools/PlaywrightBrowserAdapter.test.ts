@@ -18,7 +18,10 @@ async function makeTempRoot(): Promise<string> {
   return root
 }
 
-function fakeBrowser(): {
+function fakeBrowser(options: {
+  redirectAfterGoto?: string
+  redirectAfterClick?: string
+} = {}): {
   page: PlaywrightBrowserPageLike
   context: PlaywrightBrowserContextLike
   calls: {
@@ -49,7 +52,7 @@ function fakeBrowser(): {
   }
   const page: PlaywrightBrowserPageLike = {
     goto: async (url) => {
-      currentUrl = url
+      currentUrl = options.redirectAfterGoto ?? url
       calls.goto.push(url)
     },
     url: () => currentUrl,
@@ -68,6 +71,7 @@ function fakeBrowser(): {
       return {
         click: async () => {
           calls.clicks.push(selector)
+          if (options.redirectAfterClick) currentUrl = options.redirectAfterClick
         },
         fill: async (value) => {
           calls.fills.push(value)
@@ -228,5 +232,118 @@ describe('Playwright browser runtime adapter', () => {
       'browser.screenshot',
     ])
     await session.close?.()
+  })
+
+  it('sanitizes browser URLs and closes the lease on unsafe redirects', async () => {
+    const root = await makeTempRoot()
+    const redirected = fakeBrowser({ redirectAfterGoto: 'http://127.0.0.1:8787/private' })
+    const redirectedAdapter = await createPlaywrightBrowserRuntimeAdapter({
+      page: redirected.page,
+      artifactRoot: root,
+      runId: 'run_browser_redirect',
+      sessionId: 'session_browser_redirect',
+    })
+
+    await expect(
+      redirectedAdapter.open({ url: 'https://192.0.2.1/start' }),
+    ).rejects.toThrow(/private or local network/i)
+    expect(redirected.calls.pageClosed).toBe(1)
+
+    const actionBrowser = fakeBrowser({ redirectAfterClick: 'http://127.0.0.1:8787/private' })
+    const actionAdapter = await createPlaywrightBrowserRuntimeAdapter({
+      page: actionBrowser.page,
+      artifactRoot: root,
+      runId: 'run_browser_action_redirect',
+      sessionId: 'session_browser_action_redirect',
+    })
+    const opened = await actionAdapter.open({
+      url: 'https://192.0.2.1/start?access_token=sk-browser-secret123#fragment-secret',
+    })
+    expect(opened.url).not.toContain('sk-browser-secret123')
+    expect(opened.url).not.toContain('fragment-secret')
+    const snapshot = await actionAdapter.snapshot({ format: 'text' })
+    expect(snapshot.url).not.toContain('sk-browser-secret123')
+    await expect(actionAdapter.click({ ref: '@e1' })).rejects.toThrow(
+      /private or local network/i,
+    )
+    expect(actionBrowser.calls.pageClosed).toBe(1)
+  })
+
+  it('closes a run-scoped browser lease when the execution signal aborts', async () => {
+    const root = await makeTempRoot()
+    const browser = fakeBrowser()
+    const controller = new AbortController()
+    const sessionFactory = createPlaywrightBrowserToolSessionFactory({
+      createLease: async ({ run, emitEvent }) =>
+        await createPlaywrightBrowserRuntimeAdapter({
+          page: browser.page,
+          artifactRoot: root,
+          runId: run.runId,
+          sessionId: run.sessionId,
+          eventSink: emitEvent,
+        }),
+    })
+    const session = await sessionFactory({
+      run: {
+        runId: 'run_browser_abort',
+        agentId: 'agent_browser_abort',
+        sessionId: 'session_browser_abort',
+        status: 'running',
+        input: 'browse',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      workspaceRoot: root,
+      signal: controller.signal,
+      emitEvent: (event) => {
+        return {
+          ...event,
+          eventId: 'event_browser_abort',
+          seq: 1,
+          runId: 'run_browser_abort',
+          agentId: 'agent_browser_abort',
+          sessionId: 'session_browser_abort',
+          timestamp: new Date().toISOString(),
+        } as RunLogEvent
+      },
+    })
+
+    controller.abort()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(browser.calls.pageClosed).toBe(1)
+    await session.close?.()
+    expect(browser.calls.pageClosed).toBe(1)
+
+    const alreadyAborted = new AbortController()
+    alreadyAborted.abort()
+    let createCalls = 0
+    const abortedFactory = createPlaywrightBrowserToolSessionFactory({
+      createLease: async () => {
+        createCalls += 1
+        return await createPlaywrightBrowserRuntimeAdapter({
+          page: fakeBrowser().page,
+          artifactRoot: root,
+          runId: 'run_browser_pre_abort',
+          sessionId: 'session_browser_pre_abort',
+        })
+      },
+    })
+    await expect(
+      abortedFactory({
+        run: {
+          runId: 'run_browser_pre_abort',
+          agentId: 'agent_browser_pre_abort',
+          sessionId: 'session_browser_pre_abort',
+          status: 'running',
+          input: 'browse',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        workspaceRoot: root,
+        signal: alreadyAborted.signal,
+        emitEvent: () => ({}) as RunLogEvent,
+      }),
+    ).rejects.toThrow(/aborted|cancelled/i)
+    expect(createCalls).toBe(0)
   })
 })

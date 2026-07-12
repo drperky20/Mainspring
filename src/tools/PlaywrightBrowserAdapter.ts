@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { redactRuntimeSensitiveText } from '#protocol'
+import { redactRuntimeSensitiveText, sanitizeRuntimeUrl } from '#protocol'
 import { assertPublicNetworkTarget, parsePublicHttpUrl } from '../containment/UrlPolicy.js'
 import type {
   RunRecord,
@@ -136,6 +136,28 @@ function isBytes(value: unknown): value is Uint8Array {
   return value instanceof Uint8Array
 }
 
+function sanitizeBrowserUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    url.username = ''
+    url.password = ''
+    url.hash = ''
+    return sanitizeRuntimeUrl(url.toString())
+  } catch {
+    return redactRuntimeSensitiveText(value)
+  }
+}
+
+function browserCancellationError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error('Browser lease creation was cancelled.')
+}
+
+function assertBrowserSignalActive(signal: AbortSignal): void {
+  if (signal.aborted) throw browserCancellationError(signal)
+}
+
 /**
  * A host-owned Playwright lease for the existing BrowserTool contract.
  *
@@ -217,13 +239,14 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
       waitUntil: 'domcontentloaded',
       timeout: this.navigationTimeoutMs,
     })
-    return { url: this.currentUrl() ?? url.toString() }
+    const currentUrl = await this.assertCurrentUrlPublic('Browser lease current URL after open')
+    return { url: currentUrl ?? sanitizeBrowserUrl(url.toString()) }
   }
 
   currentUrl(): string | undefined {
     if (this.closed) return undefined
     const url = this.options.page.url().trim()
-    return url || undefined
+    return url ? sanitizeBrowserUrl(url) : undefined
   }
 
   async snapshot(input: {
@@ -239,6 +262,7 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
     taskProvided: boolean
   }> {
     this.assertOpen()
+    await this.assertCurrentUrlPublic('Browser lease current URL before snapshot')
     const raw = await this.options.page.evaluate<{
       text?: unknown
       refs?: unknown
@@ -273,6 +297,7 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
             : {}),
         }))
       : []
+    const currentUrl = await this.assertCurrentUrlPublic('Browser lease current URL after snapshot')
     this.refs.clear()
     for (const ref of refs) this.refs.add(ref.ref)
 
@@ -283,7 +308,7 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
       .join('\n')
     return {
       format,
-      ...(this.currentUrl() ? { url: this.currentUrl() } : {}),
+      ...(currentUrl ? { url: currentUrl } : {}),
       text: text.value,
       ...(format === 'aria' ? { aria: boundedText(aria, this.maxSnapshotChars).value } : {}),
       refs,
@@ -294,6 +319,7 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
 
   async click(input: { ref: string; task?: string }): Promise<{ ref: string; taskProvided: boolean }> {
     this.assertOpen()
+    await this.assertCurrentUrlPublic('Browser lease current URL before click')
     const ref = normalizedRef(input.ref)
     const locator = this.locatorFor(ref)
     try {
@@ -301,6 +327,7 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
     } finally {
       this.refs.clear()
     }
+    await this.assertCurrentUrlPublic('Browser lease current URL after click')
     return {
       ref,
       taskProvided: typeof input.task === 'string' && input.task.trim().length > 0,
@@ -314,6 +341,7 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
     task?: string
   }): Promise<{ ref: string; textLength: number; submitted: boolean; taskProvided: boolean }> {
     this.assertOpen()
+    await this.assertCurrentUrlPublic('Browser lease current URL before type')
     const ref = normalizedRef(input.ref)
     const locator = this.locatorFor(ref)
     const text = input.text.slice(0, 20_000)
@@ -326,6 +354,7 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
     } finally {
       this.refs.clear()
     }
+    await this.assertCurrentUrlPublic('Browser lease current URL after type')
     return {
       ref,
       textLength: text.length,
@@ -339,34 +368,41 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
     artifactLabel?: string
   }): Promise<PlaywrightBrowserArtifact> {
     this.assertOpen()
+    await this.assertCurrentUrlPublic('Browser lease current URL before screenshot')
     const artifactId = this.createArtifactId('browser_screenshot')
     const filePath = path.join(this.artifactRoot, `${artifactId}.png`)
-    const returned = await this.options.page.screenshot({
-      path: filePath,
-      ...(typeof input.fullPage === 'boolean' ? { fullPage: input.fullPage } : {}),
-    })
-    if (!(await this.fileExists(filePath)) && isBytes(returned)) {
-      await fs.writeFile(filePath, returned)
-    }
-    const byteLength = await this.assertArtifactSize(filePath)
-    const artifactLabel = safeLabel(input.artifactLabel, 'Browser screenshot')
-    this.emit({
-      type: 'artifact.created',
-      visibility: 'public',
-      payload: {
+    try {
+      const returned = await this.options.page.screenshot({
+        path: filePath,
+        ...(typeof input.fullPage === 'boolean' ? { fullPage: input.fullPage } : {}),
+      })
+      if (!(await this.fileExists(filePath)) && isBytes(returned)) {
+        await fs.writeFile(filePath, returned)
+      }
+      const byteLength = await this.assertArtifactSize(filePath)
+      await this.assertCurrentUrlPublic('Browser lease current URL after screenshot')
+      const artifactLabel = safeLabel(input.artifactLabel, 'Browser screenshot')
+      this.emit({
+        type: 'artifact.created',
+        visibility: 'public',
+        payload: {
+          artifactId,
+          kind: 'image',
+          mediaType: 'image/png',
+          artifactLabel,
+          byteLength,
+        },
+      })
+      return {
         artifactId,
-        kind: 'image',
-        mediaType: 'image/png',
         artifactLabel,
+        mediaType: 'image/png',
         byteLength,
-      },
-    })
-    return {
-      artifactId,
-      artifactLabel,
-      mediaType: 'image/png',
-      byteLength,
-      url: `artifact://${artifactId}`,
+        url: `artifact://${artifactId}`,
+      }
+    } catch (error) {
+      await fs.rm(filePath, { force: true }).catch(() => undefined)
+      throw error
     }
   }
 
@@ -443,6 +479,19 @@ export class PlaywrightBrowserRuntimeAdapter implements BrowserRuntimeAdapter {
     if (this.closed) throw new Error('Browser lease is already closed.')
   }
 
+  private async assertCurrentUrlPublic(label: string): Promise<string | undefined> {
+    const currentUrl = this.currentUrl()
+    if (!currentUrl) return undefined
+    try {
+      const url = parsePublicHttpUrl(currentUrl, label)
+      await assertPublicNetworkTarget(url)
+      return sanitizeBrowserUrl(url.toString())
+    } catch (error) {
+      await this.close().catch(() => undefined)
+      throw error
+    }
+  }
+
   private locatorFor(ref: string): PlaywrightBrowserLocatorLike {
     if (!this.refs.has(ref)) {
       throw new Error(`Unknown browser element ref ${ref}; capture a fresh browser snapshot.`)
@@ -501,12 +550,37 @@ export function createPlaywrightBrowserToolSessionFactory(
   options: CreatePlaywrightBrowserToolSessionFactoryOptions,
 ): RuntimeToolSessionFactory {
   return async ({ run, workspaceRoot, signal, emitEvent }) => {
-    const adapter = await options.createLease({ run, workspaceRoot, signal, emitEvent })
+    assertBrowserSignalActive(signal)
+    let adapter: PlaywrightBrowserRuntimeAdapter | undefined
+    try {
+      adapter = await options.createLease({ run, workspaceRoot, signal, emitEvent })
+      assertBrowserSignalActive(signal)
+    } catch (error) {
+      await adapter?.close().catch(() => undefined)
+      throw error
+    }
+    if (!adapter) throw new Error('Browser lease factory did not return an adapter.')
+    const activeAdapter = adapter
+
+    let closePromise: Promise<void> | undefined
+    let onAbort: () => void = () => {}
+    const close = async (): Promise<void> => {
+      if (closePromise) return closePromise
+      signal.removeEventListener('abort', onAbort)
+      closePromise = activeAdapter.close().then(() => undefined)
+      return closePromise
+    }
+    onAbort = () => {
+      void close().catch(() => undefined)
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) {
+      await close()
+      throw browserCancellationError(signal)
+    }
     return {
-      tools: createBrowserTools({ adapter }),
-      close: async () => {
-        await adapter.close()
-      },
+      tools: createBrowserTools({ adapter: activeAdapter }),
+      close,
     }
   }
 }
