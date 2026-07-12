@@ -5,7 +5,7 @@ import type {
   ConsoleGatewayRunLogToolCall,
   ConsoleGatewaySnapshot,
 } from 'mainspring/gateway'
-import { DefaultChatTransport, type UIMessage, type UIMessageChunk } from 'ai'
+import type { UIMessage, UIMessageChunk } from 'ai'
 import {
   browserUnsafeGatewayTextMarkers,
   containsBrowserUnsafeGatewayText,
@@ -942,7 +942,8 @@ export function createLocalGatewayClient(
         headers: { 'content-type': 'application/json', ...authHeaders() },
         body: JSON.stringify(input),
       }),
-    streamChat: (input, signal) => {
+    streamChat: async (input, signal) => {
+      const { DefaultChatTransport } = await import('ai')
       const transport = new DefaultChatTransport({
         api: `${normalizedBaseUrl}/chat/stream`,
         fetch: fetchImpl,

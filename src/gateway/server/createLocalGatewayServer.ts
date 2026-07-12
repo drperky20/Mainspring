@@ -64,6 +64,7 @@ import type {
 } from '../../core/types.js'
 import type { RunLogRunProjection } from '../../hosts/runlog/RunLogProjection.js'
 import { GatewayHttpError, asGatewayHttpError } from './errors.js'
+import { streamGatewayChat } from './GatewayChatStream.js'
 import {
   HostedGatewayAuthManager,
   HostedGatewayAuthUserConflictError,
@@ -956,7 +957,25 @@ export class LocalGatewayHttpServer {
       if (request.method === 'POST' && path === '/chat/stream') {
         const body = await this.readJson(request)
         const parsed = StartRunRequestSchema.parse(body)
-        await this.handleChatStream(request, response, parsed, principal?.actor)
+        const run = await this.startRun(parsed, principal?.actor)
+        streamGatewayChat({
+          request,
+          response,
+          run,
+          readEvents: (afterSeq) => this.options.gateway.runLog.available()
+            ? this.options.gateway.runLog.runs.events({
+                runId: run.runId,
+                ...(afterSeq > 0 ? { afterSeq } : {}),
+                visibility: 'public',
+                limit: 200,
+              })
+            : this.options.gateway.events.list({
+                sessionId: run.sessionId,
+                runId: run.runId,
+                ...(afterSeq > 0 ? { afterSeq } : {}),
+                limit: 200,
+              }),
+        })
         return
       }
 
@@ -2068,116 +2087,6 @@ export class LocalGatewayHttpServer {
     timer = globalThis.setInterval(tick, 1000)
   }
 
-  private async handleChatStream(
-    request: IncomingMessage,
-    response: ServerResponse,
-    input: StartRunRequest,
-    actor?: string,
-  ): Promise<void> {
-    const run = await this.startRun(input, actor)
-    const textPartId = `text_${run.runId}`
-    let afterSeq = 0
-    let closed = false
-    let textStarted = false
-    let timer: ReturnType<typeof globalThis.setInterval> | null = null
-
-    response.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',
-      'x-vercel-ai-ui-message-stream': 'v1',
-    })
-
-    const writeChunk = (chunk: unknown): void => {
-      if (!closed) response.write(`data: ${JSON.stringify(sanitizeGatewayResponse(chunk))}\n\n`)
-    }
-    const writeDone = (): void => {
-      if (!closed) response.write('data: [DONE]\n\n')
-    }
-    const close = (): void => {
-      if (closed) return
-      closed = true
-      if (timer) globalThis.clearInterval(timer)
-      response.end()
-    }
-    const finishText = (): void => {
-      if (textStarted) writeChunk({ type: 'text-end', id: textPartId })
-    }
-    const tick = (): void => {
-      if (closed) return
-      const events = this.options.gateway.runLog.available()
-        ? this.options.gateway.runLog.runs.events({
-            runId: run.runId,
-            ...(afterSeq > 0 ? { afterSeq } : {}),
-            visibility: 'public',
-            limit: 200,
-          })
-        : this.options.gateway.events.list({
-            sessionId: run.sessionId,
-            runId: run.runId,
-            ...(afterSeq > 0 ? { afterSeq } : {}),
-            limit: 200,
-          })
-      for (const event of events) {
-        afterSeq = Math.max(afterSeq, numericSeq(event))
-        const eventType = String(event.type)
-        if (
-          eventType === 'assistant.delta'
-          || eventType === 'assistant.text.delta'
-          || (eventType === 'assistant.result' && !textStarted)
-        ) {
-          const payload = event.payload && typeof event.payload === 'object'
-            ? event.payload as { text?: unknown }
-            : {}
-          const delta = typeof payload.text === 'string' ? payload.text : ''
-          if (delta) {
-            if (!textStarted) {
-              textStarted = true
-              writeChunk({ type: 'text-start', id: textPartId })
-            }
-            writeChunk({ type: 'text-delta', id: textPartId, delta })
-          }
-        }
-        if (eventType === 'run.completed') {
-          finishText()
-          writeChunk({ type: 'finish', finishReason: 'stop' })
-          writeDone()
-          close()
-          return
-        }
-        if (eventType === 'run.failed' || eventType === 'run.cancelled') {
-          finishText()
-          writeChunk({
-            type: 'error',
-            errorText: eventType === 'run.cancelled' ? 'Run cancelled.' : 'Run failed. Review Activity for details.',
-          })
-          writeChunk({ type: 'finish', finishReason: eventType === 'run.cancelled' ? 'other' : 'error' })
-          writeDone()
-          close()
-          return
-        }
-        if (eventType === 'run.awaiting_approval') {
-          finishText()
-          writeChunk({ type: 'finish', finishReason: 'tool-calls' })
-          writeDone()
-          close()
-          return
-        }
-      }
-    }
-
-    request.once('aborted', close)
-    response.once('close', close)
-    writeChunk({ type: 'start', messageId: `assistant_${run.runId}` })
-    writeChunk({
-      type: 'data-run',
-      data: { runId: run.runId, sessionId: run.sessionId },
-      transient: true,
-    })
-    tick()
-    if (!closed) timer = globalThis.setInterval(tick, 100)
-  }
 }
 
 interface OpenRouterCatalogModel {

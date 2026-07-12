@@ -32,7 +32,7 @@ When the local gateway is configured with a RunLog host, the gateway snapshot ca
 Run, approval, usage, artifact, and session trace views use that sanitized projection;
 they do not expose private receipt payloads, raw host paths, or provider credentials.
 
-The console depends on Vercel AI SDK packages for the chat UI boundary and uses AI SDK UI message roles in the client surface. Chat dispatch uses the gateway's authenticated `POST /chat/stream` adapter, which queues canonical RunLog work and emits the AI SDK v1 UI-message stream protocol from public RunLog assistant and terminal events. Automation tests and compatibility callers continue to use their existing dispatch contracts.
+The console depends on Vercel AI SDK packages for the chat UI boundary and uses AI SDK UI message roles in the client surface. Chat dispatch lazy-loads the AI SDK transport and uses the gateway's authenticated `POST /chat/stream` adapter, which queues canonical RunLog work and emits the AI SDK v1 UI-message stream protocol from public RunLog assistant and terminal events. Automation tests and compatibility callers continue to use their existing dispatch contracts.
 
 Provider support is intentionally honest:
 
