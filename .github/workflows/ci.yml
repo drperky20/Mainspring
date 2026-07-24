@@ -35,7 +35,7 @@ jobs:
         id: source_tests
         run: node scripts/run-command-with-log.mjs .ci-logs/source-tests-${{ runner.os }}.log pnpm test
       - name: Upload failed test log
-        if: steps.source_tests.outcome == 'failure'
+        if: failure() && steps.source_tests.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: source-test-log-${{ runner.os }}
@@ -62,7 +62,7 @@ jobs:
         id: verify
         run: node scripts/run-command-with-log.mjs .ci-logs/verify-${{ runner.os }}.log pnpm verify
       - name: Upload failed verification log
-        if: steps.verify.outcome == 'failure'
+        if: failure() && steps.verify.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: verify-log-${{ runner.os }}

@@ -29,7 +29,7 @@ jobs:
         id: release_verify
         run: node scripts/run-command-with-log.mjs .ci-logs/release-verify.log pnpm verify
       - name: Upload failed verification log
-        if: steps.release_verify.outcome == 'failure'
+        if: failure() && steps.release_verify.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: release-verify-log
@@ -81,7 +81,7 @@ jobs:
         id: desktop_macos_verify
         run: node scripts/run-command-with-log.mjs .ci-logs/desktop-macos-verify.log pnpm verify
       - name: Upload failed verification log
-        if: steps.desktop_macos_verify.outcome == 'failure'
+        if: failure() && steps.desktop_macos_verify.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: desktop-macos-verify-log
