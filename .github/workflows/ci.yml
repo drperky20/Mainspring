@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   source-snapshot:
-    if: github.ref == 'refs/heads/agent/source-snapshot-20260724'
+    if: github.ref == 'refs/heads/agent/source-snapshot-20260724' || github.head_ref == 'agent/source-snapshot-20260724'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -29,7 +29,7 @@ jobs:
           retention-days: 1
 
   source-matrix:
-    if: github.ref != 'refs/heads/agent/source-snapshot-20260724'
+    if: github.ref != 'refs/heads/agent/source-snapshot-20260724' && github.head_ref != 'agent/source-snapshot-20260724'
     name: Source Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -62,7 +62,7 @@ jobs:
       - run: pnpm build
 
   verify:
-    if: github.ref != 'refs/heads/agent/source-snapshot-20260724'
+    if: github.ref != 'refs/heads/agent/source-snapshot-20260724' && github.head_ref != 'agent/source-snapshot-20260724'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
