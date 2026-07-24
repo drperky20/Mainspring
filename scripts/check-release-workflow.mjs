@@ -4,13 +4,16 @@ import { readFileSync } from 'node:fs'
 const workflowPath = '.github/workflows/release-check.yml'
 const ciWorkflowPath = '.github/workflows/ci.yml'
 const gatewaySystemsPath = 'scripts/check-gateway-systems.mjs'
+const commandLogRunnerPath = 'scripts/run-command-with-log.mjs'
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
 const workflow = readFileSync(workflowPath, 'utf8')
 const ciWorkflow = readFileSync(ciWorkflowPath, 'utf8')
 const gatewaySystems = readFileSync(gatewaySystemsPath, 'utf8')
+const commandLogRunner = readFileSync(commandLogRunnerPath, 'utf8')
 
 const failures = []
 
+requirePackageManager('pnpm@9.15.4')
 requirePackageScript('verify')
 requirePackageScript('gateway:systems:check')
 requirePackageScript('execution-backends:check')
@@ -65,19 +68,29 @@ requireWorkflowText(workflowPath, workflow, 'contents: read')
 requireWorkflowText(workflowPath, workflow, 'concurrency:')
 requireWorkflowText(workflowPath, workflow, 'group: release-check-${{ github.workflow }}-${{ github.ref }}')
 requireWorkflowText(workflowPath, workflow, 'cancel-in-progress: true')
+requireWorkflowTextAbsent(workflowPath, workflow, 'corepack enable')
+requireWorkflowTextAbsent(ciWorkflowPath, ciWorkflow, 'corepack enable')
+requireCommandLogRunner()
 
 for (const [jobName, job] of Object.entries(jobs)) {
   if (!job) continue
   requireJobCommand(jobName, job, 'uses: actions/checkout@v4')
   requireJobCommand(jobName, job, 'uses: actions/setup-node@v4')
   requireJobCommand(jobName, job, 'node-version: 22.12.0')
-  requireJobCommand(jobName, job, 'run: corepack enable')
+  requireJobCommand(jobName, job, 'uses: pnpm/action-setup@v6')
   requireJobCommand(jobName, job, 'run: pnpm install --frozen-lockfile')
 }
 
 requireJobCommand('release-check', jobs['release-check'], 'runs-on: ubuntu-latest')
 requireJobCommand('release-check', jobs['release-check'], 'timeout-minutes: 35')
-requireJobCommand('release-check', jobs['release-check'], 'run: pnpm verify')
+requireJobCommand(
+  'release-check',
+  jobs['release-check'],
+  'run: node scripts/run-command-with-log.mjs .ci-logs/release-verify.log pnpm verify',
+)
+requireJobCommand('release-check', jobs['release-check'], 'uses: actions/upload-artifact@v4')
+requireJobCommand('release-check', jobs['release-check'], 'name: release-verify-log')
+requireJobCommand('release-check', jobs['release-check'], 'retention-days: 7')
 requireJobCommand('release-check', jobs['release-check'], 'run: pnpm gateway:systems:check')
 requireJobCommand('release-check', jobs['release-check'], 'run: pnpm gateway:dev:help')
 requireJobCommand('release-check', jobs['release-check'], 'run: pnpm run desktop:typecheck')
@@ -103,7 +116,13 @@ requireJobCommand('desktop-windows', jobs['desktop-windows'], 'apps/desktop/rele
 
 requireJobCommand('desktop-macos', jobs['desktop-macos'], 'runs-on: macos-latest')
 requireJobCommand('desktop-macos', jobs['desktop-macos'], 'timeout-minutes: 35')
-requireJobCommand('desktop-macos', jobs['desktop-macos'], 'run: pnpm verify')
+requireJobCommand(
+  'desktop-macos',
+  jobs['desktop-macos'],
+  'run: node scripts/run-command-with-log.mjs .ci-logs/desktop-macos-verify.log pnpm verify',
+)
+requireJobCommand('desktop-macos', jobs['desktop-macos'], 'uses: actions/upload-artifact@v4')
+requireJobCommand('desktop-macos', jobs['desktop-macos'], 'name: desktop-macos-verify-log')
 requireJobCommand('desktop-macos', jobs['desktop-macos'], 'run: pnpm run desktop:typecheck')
 requireJobCommand('desktop-macos', jobs['desktop-macos'], 'run: pnpm run desktop:build')
 
@@ -130,6 +149,12 @@ if (failures.length > 0) {
 }
 
 console.log('MAINSPRING_RELEASE_WORKFLOW_CHECK_OK')
+
+function requirePackageManager(expected) {
+  if (packageJson.packageManager !== expected) {
+    failures.push(`package.json packageManager must be "${expected}", got "${packageJson.packageManager ?? ''}"`)
+  }
+}
 
 function requirePackageScript(name) {
   if (!packageJson.scripts?.[name]) failures.push(`package.json is missing script "${name}"`)
@@ -182,6 +207,10 @@ function requireWorkflowText(path, text, expected) {
   if (!text.includes(expected)) failures.push(`${path} does not include "${expected}"`)
 }
 
+function requireWorkflowTextAbsent(path, text, prohibited) {
+  if (text.includes(prohibited)) failures.push(`${path} must not include "${prohibited}"`)
+}
+
 function requireJobCommand(jobName, job, command) {
   if (!job) return
   if (!job.includes(command)) failures.push(`${workflowPath} job "${jobName}" does not include "${command}"`)
@@ -190,6 +219,14 @@ function requireJobCommand(jobName, job, command) {
 function requireGatewaySystemsCheck(scriptPath) {
   if (!gatewaySystems.includes(scriptPath)) {
     failures.push(`${gatewaySystemsPath} does not include "${scriptPath}"`)
+  }
+}
+
+function requireCommandLogRunner() {
+  for (const expected of ['createWriteStream', 'spawn(command, args', 'process.exitCode = exitCode']) {
+    if (!commandLogRunner.includes(expected)) {
+      failures.push(`${commandLogRunnerPath} does not include "${expected}"`)
+    }
   }
 }
 
@@ -202,6 +239,16 @@ function requireCiWorkflow() {
   requireWorkflowText(ciWorkflowPath, ciWorkflow, 'group: ci-${{ github.workflow }}-${{ github.ref }}')
   requireWorkflowText(ciWorkflowPath, ciWorkflow, 'cancel-in-progress: true')
 
+  const sourceJob = requireWorkflowJob(ciWorkflowPath, ciWorkflow, 'source-matrix')
+  requireWorkflowJobCommand(ciWorkflowPath, 'source-matrix', sourceJob, 'uses: pnpm/action-setup@v6')
+  requireWorkflowJobCommand(
+    ciWorkflowPath,
+    'source-matrix',
+    sourceJob,
+    'run: node scripts/run-command-with-log.mjs .ci-logs/source-tests-${{ runner.os }}.log pnpm test',
+  )
+  requireWorkflowJobCommand(ciWorkflowPath, 'source-matrix', sourceJob, 'uses: actions/upload-artifact@v4')
+
   const ciJob = requireWorkflowJob(ciWorkflowPath, ciWorkflow, 'verify')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'runs-on: ${{ matrix.os }}')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'timeout-minutes: 30')
@@ -210,9 +257,15 @@ function requireCiWorkflow() {
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/checkout@v4')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/setup-node@v4')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'node-version: 22.12.0')
-  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: corepack enable')
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: pnpm/action-setup@v6')
   requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm install --frozen-lockfile')
-  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'run: pnpm verify')
+  requireWorkflowJobCommand(
+    ciWorkflowPath,
+    'verify',
+    ciJob,
+    'run: node scripts/run-command-with-log.mjs .ci-logs/verify-${{ runner.os }}.log pnpm verify',
+  )
+  requireWorkflowJobCommand(ciWorkflowPath, 'verify', ciJob, 'uses: actions/upload-artifact@v4')
 }
 
 function requireNoLinuxDesktopPackaging() {

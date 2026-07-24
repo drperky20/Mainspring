@@ -3,15 +3,58 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#090c0d" />
     <meta
       name="description"
       content="Mainspring local console for creating and operating AI agents."
     />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>Mainspring Console</title>
+    <style>
+      html {
+        color-scheme: dark;
+        background: #090c0d;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      .console-preboot,
+      .console-no-script {
+        box-sizing: border-box;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 78% -18%, rgba(76, 150, 108, 0.14), transparent 31rem),
+          #090c0d;
+        color: #edf3ef;
+        padding: 24px;
+        font: 600 14px/1.5 "Segoe UI Variable", "Segoe UI", sans-serif;
+        letter-spacing: 0.02em;
+        text-align: center;
+      }
+
+      .console-preboot span,
+      .console-no-script span {
+        max-width: 42ch;
+        color: #9aa7a1;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="console-preboot" role="status">
+        <span>Starting the Mainspring operator console…</span>
+      </main>
+    </div>
+    <noscript>
+      <main class="console-no-script">
+        <span>Mainspring Console needs JavaScript enabled to connect to the local gateway.</span>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
