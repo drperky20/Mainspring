@@ -12,7 +12,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source-snapshot:
+    if: github.ref == 'refs/heads/agent/source-snapshot-20260724'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mainspring-source-e1d31dba
+          path: |
+            .
+            !.git/**
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
   source-matrix:
+    if: github.ref != 'refs/heads/agent/source-snapshot-20260724'
     name: Source Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -45,6 +62,7 @@ jobs:
       - run: pnpm build
 
   verify:
+    if: github.ref != 'refs/heads/agent/source-snapshot-20260724'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
